@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from bridge.clients.codex.remote import AppHosts
 
 
@@ -62,6 +63,38 @@ class SidebarSyncTests(unittest.TestCase):
         row = hosts.decorate([{'id': 'thread', 'cwd': '/project', 'project_id': None,
                                'origin': 'desktop'}], 'local', 'Local')[0]
         self.assertEqual(row['projectKey'], 'local|independent')
+
+    def test_windows_extended_cwd_matches_project_after_moving_chat(self):
+        hosts = self.hosts({'local-projects': {
+            'p': {'id': 'p', 'name': 'Project', 'rootPaths': [r'D:\AI\project']}}})
+        for cwd, root in ((r'\\?\D:\AI\project', r'D:\AI\project'),
+                          (r'd:\ai\project\child', r'\\?\D:\AI\project'),
+                          (r'\\?\UNC\server\share\project\child', r'\\server\share\project')):
+            hosts.state()['local-projects']['p']['rootPaths'] = [root]
+            with self.subTest(cwd=cwd), patch('bridge.clients.codex.remote.os.name', 'nt'):
+                row = hosts.decorate([{'id': 'thread', 'cwd': cwd, 'project_id': None,
+                                       'origin': 'desktop'}], 'local', 'Local')[0]
+                self.assertEqual(row['projectKey'], 'local|p')
+                self.assertEqual(row['cwd'], cwd)
+
+    def test_windows_extended_prefix_keeps_project_boundary_and_explicit_projectless(self):
+        hosts = self.hosts({'local-projects': {
+            'p': {'id': 'p', 'name': 'Project', 'rootPaths': [r'D:\AI\project']}},
+            'projectless-thread-ids': ['independent']})
+        with patch('bridge.clients.codex.remote.os.name', 'nt'):
+            rows = hosts.decorate([
+                {'id': 'thread', 'cwd': r'\\?\D:\AI\project-other', 'project_id': None, 'origin': 'desktop'},
+                {'id': 'independent', 'cwd': r'\\?\D:\AI\project', 'project_id': None, 'origin': 'desktop'},
+            ], 'local', 'Local')
+        self.assertTrue(all(row['projectKey'] == 'local|independent' for row in rows))
+
+    def test_windows_gateway_does_not_normalize_ssh_paths(self):
+        hosts = self.hosts({'remote-projects': [
+            {'id': 'p', 'hostId': 'remote', 'label': 'Project', 'remotePath': '/work/project'}]})
+        with patch('bridge.clients.codex.remote.os.name', 'nt'):
+            row = hosts.decorate([{'id': 'thread', 'cwd': '//?/work/project', 'project_id': None,
+                                   'origin': 'desktop'}], 'remote', 'Server')[0]
+        self.assertNotEqual(row['projectKey'], 'remote|p')
 
 
 if __name__ == '__main__':

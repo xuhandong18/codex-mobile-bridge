@@ -292,7 +292,15 @@ class AppHosts:
         assignments = state.get('thread-project-assignments', {})
         def normalized(path):
             if host == 'local' and os.name == 'nt':
-                return path.replace('\\', '/').rstrip('/').casefold()
+                path = path.replace('\\', '/').casefold()
+                # Desktop rollouts can use Windows extended-length paths while
+                # saved projects use drive/UNC paths. This is display matching
+                # only: retain the original cwd for execution and file checks.
+                if path.startswith('//?/unc/'):
+                    path = '//' + path[8:]
+                elif path.startswith('//?/'):
+                    path = path[4:]
+                return path.rstrip('/')
             return path.rstrip('/')
         for row in rows:
             raw_cwd = row.get('cwd', '')
