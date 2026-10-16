@@ -2175,6 +2175,7 @@ const en={
   "输入你的回复": "Enter your reply",
   "输入当前 API 服务支持的模型 ID": "Enter a model ID supported by your API service",
   "运行中": "Running",
+  "子代理运行中": "Subagents running",
   "运行日志": "Runtime logs",
   "运行配置": "Runtime settings",
   "返回聊天列表": "Back to chats",

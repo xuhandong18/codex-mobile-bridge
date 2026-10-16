@@ -26,6 +26,24 @@ test('temporarily missing turn history does not resurrect a read completion',()=
  a.update([{id:'a',host:'local',connected:true,status:'idle',turnId:null,turnStatus:null}]);
  a.update([status('a','local','idle')]);assert.equal(a.indicator('local|a'),null);
 });
+
+test('a parent completion stays running while descendants work and finishes only after the subtree settles',()=>{
+ const a=new SessionActivity({storage:storage()});
+ const row={...status('a','local','idle'),parentStatus:'idle',status:'active',runningSubagents:2,subagentsKnown:true,activityConnected:true};
+ a.update([row]);assert.deepEqual(a.indicator('local|a'),{kind:'running',label:'子代理运行中'});
+ a.read('local|a');a.update([{...row,runningSubagents:1}]);assert.equal(a.indicator('local|a').kind,'running');
+ a.update([{...row,status:'unknown',subagentsKnown:false,runningSubagents:0}]);assert.equal(a.indicator('local|a').kind,'unknown');
+ a.update([{...row,status:'idle',runningSubagents:0}]);assert.equal(a.indicator('local|a').kind,'completed');
+ a.read('local|a');a.update([{...row,status:'idle',runningSubagents:0}]);assert.equal(a.indicator('local|a'),null);
+});
+
+test('verified running subagents remain visible when the parent owner is disconnected',()=>{
+ const a=new SessionActivity({storage:storage()});
+ a.update([{...status('a','local','active'),connected:false,activityConnected:true,runningSubagents:1}]);
+ assert.equal(a.indicator('local|a').kind,'running');
+ a.update([{...status('a','local','idle'),status:'unknown',subagentsKnown:false}]);
+ assert.equal(a.indicator('local|a').kind,'unknown');
+});
 function fixture(){
  let count=0,thumbCalls=[],upload=async(key,id,file)=>({id,name:file.name,size:file.size,image:null});
  const calls=[],saved=storage(),events=new Map();

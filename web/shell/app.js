@@ -85,7 +85,7 @@ function visibleChat(){return currentId&&!workbench.isFileVisible&&!document.hid
 function renderActivity(){for(const button of $('sessions').querySelectorAll('.session')){
   button.querySelector('.session-indicator')?.remove();const indicator=sessionActivity.indicator(chatKey(button.dataset.id,button.dataset.host));
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
-}}
+}if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));}
 async function refreshActivity(){
   if(activityBusy||$('app').hidden||document.hidden||!listRows.length)return;activityBusy=true;
   const hosts={};for(const row of listRows)(hosts[row.host]??=[]).push(row.id);
@@ -191,6 +191,13 @@ function sessionAccess(access){
 }
 function currentAccess(){return sessionAccess(state?.access||listRows.find(row=>row.id===currentId&&row.host===currentHost)?.access);}
 function sourceLabel(access){return access?.source==='cli'?'CLI':access?.source==='ide'?'IDE':access?.source==='unknown'?t('其他来源'):'';}
+function chatStatusText(view,access){
+  if(view.connected&&view.requests?.length)return t('等待回应');
+  if(view.connected&&view.status==='active')return t('运行中');
+  const indicator=sessionActivity.indicator(chatKey());
+  if(indicator?.kind==='running'||indicator?.kind==='unknown')return t(indicator.label);
+  return !view.connected?(view.loadingHistory?t('读取历史中'):access.source==='cli'?t('历史记录'):view.activating?t('正在加载桌面聊天…'):view.connecting?t('连接桌面中'):t('历史记录')):t('已连接');
+}
 function renderList(){
   const stamp=JSON.stringify([$('list-mode').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity();return;}
@@ -525,7 +532,7 @@ function renderState(view){
   $('model-name').textContent=view.model||t('模型');$('model-current').textContent=view.model?t('当前模型：')+view.model:'';$('model-current').hidden=!view.model;
   $('model-effort').textContent=view.effort?'· '+view.effort:'';$('model-effort').hidden=!view.effort;
   $('model-button').title=[view.model||t('模型'),view.effort].filter(Boolean).join(' · ');$('provider').textContent=[view.model,view.provider].filter(Boolean).join(' · ');
-  $('status').textContent=!view.connected?(view.loadingHistory?t('读取历史中'):access.source==='cli'?t('历史记录'):view.activating?t('正在加载桌面聊天…'):view.connecting?t('连接桌面中'):t('历史记录')):view.requests.length?t('等待回应'):view.status==='active'?t('运行中'):t('已连接');
+  $('status').textContent=chatStatusText(view,access);
   $('status').classList.toggle('offline',!view.connected);
   $('notice').hidden=view.connected;
   $('notice-text').textContent=access.source==='cli'?(t(reconnectFailure||view.connectionError)||t(access.canReconnect?'可先阅读聊天历史；继续时将连接或恢复原 CLI 会话。':access.reason||'CLI 聊天历史可阅读；当前无法继续此会话。')):limited&&!access.canReconnect?(t(access.reason)||t('已保存的历史可阅读；当前来源未提供远程控制。')):view.activating?t('正在自动连接；必要时会在电脑 Codex 中打开此聊天。'):view.connecting?t('正在连接桌面，可先阅读已保存的历史。'):t(view.connectionError)||t('暂未连接，可先阅读历史或点击重新连接。');

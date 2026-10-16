@@ -314,6 +314,38 @@ class SessionStore:
                     if len(result) >= 128: break
         return {'agents': result, 'limited': len(result) >= 128}
 
+    def activity_tree(self, identifiers):
+        """Authorize roots and discover descendants in one metadata-only read."""
+        if not identifiers:
+            return {}
+        with self._connect() as conn:
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(threads)')}
+            fields = [name for name in ('id', 'source', 'originator', 'thread_source') if name in columns]
+            where = 'id IN (' + ','.join('?' for _ in identifiers) + ')'
+            if 'source' in columns:
+                where += ' OR source LIKE \'%"subagent"%\''
+            rows = [dict(row) for row in conn.execute('SELECT ' + ','.join(fields) + ' FROM threads WHERE ' + where, identifiers)]
+        by_id = {row['id']: row for row in rows}
+        children = {}
+        for row in rows:
+            parent = self._agent_source(row).get('parent_thread_id')
+            if isinstance(parent, str):
+                children.setdefault(parent, []).append(row['id'])
+        result = {}
+        for root in identifiers:
+            if root not in by_id or self._origin(by_id[root]) not in ('desktop', 'cli'):
+                continue
+            seen, pending, agents = {root}, [root], []
+            while pending and len(agents) < 128:
+                for child in children.get(pending.pop(), []):
+                    if child in seen:
+                        continue
+                    seen.add(child);pending.append(child);agents.append(child)
+                    if len(agents) == 128:
+                        break
+            result[root] = {'agents': agents, 'limited': len(agents) == 128}
+        return result
+
     def subagent_history(self, thread_id, agent_id):
         self.get(thread_id)
         with self._connect() as conn:

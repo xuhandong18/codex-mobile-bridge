@@ -125,6 +125,9 @@ class RemoteStore:
     def subagent_history(self, thread_id, agent_id):
         return self.call('subagent_history', {'thread_id': thread_id, 'agent_id': agent_id})
 
+    def activity_tree(self, identifiers):
+        return self.call('activity_tree', {'identifiers': identifiers})
+
     def recencies(self, identifiers):
         return self.call('recencies', {'identifiers': identifiers})
 

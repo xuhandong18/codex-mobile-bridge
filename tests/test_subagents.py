@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import test_bridge as support
 from bridge.app.service import Bridge
+from test_subagent_activity import AgentIPC, agent_state
 from bridge.clients.codex.remote import RemoteStore
 
 
@@ -53,6 +54,32 @@ class SubagentTests(unittest.TestCase):
             self.assertEqual(Bridge.subagents(bridge,support.THREAD)['agents'][0]['id'],child)
             self.assertTrue(Bridge.subagents(bridge,support.THREAD,child)['saved'])
             self.assertEqual(call.call_args.args[1],{'thread_id':support.THREAD,'agent_id':child})
+            self.assertEqual(remote.activity_tree([support.THREAD])[support.THREAD]['agents'],[child])
+            self.assertEqual(call.call_args.args[1],{'identifiers':[support.THREAD]})
+
+    def test_activity_parent_stays_running_until_its_subagent_finishes(self):
+        parent=self.bridge.session(support.THREAD)
+        child_id=self.child(support.THREAD)
+        AgentIPC.states={child_id:agent_state(child_id)}
+        self.bridge.list()
+        with patch('bridge.features.sessions.activity.DesktopIPC',AgentIPC), patch.object(self.bridge,'activate',side_effect=AssertionError('No activation')), patch.object(self.bridge.store,'history',side_effect=AssertionError('No rollout reads')):
+            self.bridge.activity([support.THREAD]);self.bridge.subagent_activity.worker.join(2)
+            row=self.bridge.activity([support.THREAD])[0]
+            self.assertEqual(row['status'],'active')
+            self.assertEqual(row['runningSubagents'],1)
+            self.assertNotIn(child_id,self.bridge.live)
+            with self.assertRaises(KeyError):self.bridge.session(child_id)
+        self.assertEqual(parent.state['threadRuntimeStatus']['type'],'idle')
+
+    def test_activity_tree_batches_nested_children_and_rejects_unrelated_roots(self):
+        child=self.child(support.THREAD);nested=self.child(child,'Nested')
+        unrelated=self.child(str(uuid.uuid4()),'Unrelated')
+        value=self.bridge.store.activity_tree([support.THREAD,child,'unknown'])
+        self.assertEqual(set(value),{support.THREAD})
+        self.assertEqual(set(value[support.THREAD]['agents']),{child,nested})
+        self.assertNotIn(unrelated,value[support.THREAD]['agents'])
+        self.assertFalse(value[support.THREAD]['limited'])
+        self.assertEqual(self.case.fixture.requests,[])
 
 
 class SubagentHttpTests(unittest.TestCase):

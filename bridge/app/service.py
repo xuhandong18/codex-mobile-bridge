@@ -17,6 +17,7 @@ from bridge.resources import source_text
 
 from bridge.features.terminals.manager import TerminalManager
 from bridge.features.sessions.side_chat import SideChats
+from bridge.features.sessions.activity import SubagentActivity
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
@@ -158,6 +159,7 @@ class Bridge:
         self.cli_sessions = cli_sessions or CliSessions(self.codex_home, self._cli_state, self._cli_disconnected, alias=alias)
         self.lock = threading.RLock()
         self.ipc = DesktopIPC(ipc_path or ipc_endpoint(codex_home), self._event, self._disconnected)
+        self.subagent_activity = SubagentActivity(self.store, lambda: self.ipc.path, host)
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
                                    executable_getter=executable_getter)
         self.closed = threading.Event()
@@ -1024,13 +1026,20 @@ class Bridge:
         except (OSError, ValueError, StoreUnavailable, RemoteUnavailable):
             recencies = {}
         rows = []
+        descendants = self.subagent_activity.read([session.id for session in sessions])
         for session in sessions:
             with session.condition:
                 state = session.state or {}
                 turns = ordered_turns(state)
                 last = next((t for t in reversed(turns) if t.get('turnId')), {})
+                parent_status = state.get('threadRuntimeStatus', {}).get('type') if session.connected else 'unknown'
+                activity = descendants[session.id]
+                status = 'active' if activity['runningSubagents'] else parent_status
+                if status != 'active' and not activity['subagentsKnown']:
+                    status = 'unknown'
                 rows.append({'id': session.id, 'host': self.host, 'recency': recencies.get(session.id, 0), 'connected': session.connected,
-                             'status': state.get('threadRuntimeStatus', {}).get('type') if session.connected else 'unknown',
+                             'status': status, 'parentStatus': parent_status,
+                             'activityConnected': session.connected or bool(activity['runningSubagents']), **activity,
                              'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
         return rows
 
@@ -1513,6 +1522,7 @@ class Bridge:
                     self.accounts.check_ready()
                 except ValueError:
                     continue
+            self.subagent_activity.prune()
             with self.lock:
                 sessions = list(self.live.values())
             for session in sessions:
@@ -2536,6 +2546,7 @@ class Bridge:
         return self._call(session, mapping[method], payload)
 
     def close(self):
+        self.subagent_activity.close()
         self.terminals.close()
         self.side_chats.close()
         self.closed.set()
