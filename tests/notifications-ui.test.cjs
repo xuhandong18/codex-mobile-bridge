@@ -11,7 +11,7 @@ async function fixture({sessionStore=new Map(),skipStartup=false}={}){
   const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
   for(const match of html.matchAll(/\bid="([^"]+)"/g))nodes.set(match[1],node());
   const channelButtons=['bark','ntfy','pushplus'].map(channel=>Object.assign(node('button'),{dataset:{notificationChannel:channel}}));
-  const storage=()=>({getItem(){return null;},setItem(){},removeItem(){}});
+  const storage=()=>({getItem(key){return key==='list-mode'?'recent':null;},setItem(){},removeItem(){}});
   const scopedStorage={get length(){return sessionStore.size;},key(index){return [...sessionStore.keys()][index]??null;},getItem(key){return sessionStore.get(key)??null;},setItem(key,value){sessionStore.set(key,String(value));},removeItem(key){sessionStore.delete(key);},clear(){sessionStore.clear();}};
   const archiveToggles=[];
   const archiveFilter={classList:{toggle:(name,enabled)=>archiveToggles.push([name,enabled])}};

@@ -249,6 +249,38 @@ class AppHosts:
                              'cwd': project['remotePath']})
         return rows
 
+    def sidebar(self):
+        """Read desktop sidebar preferences without changing the desktop's state."""
+        state = self.state()
+        atoms = state.get('electron-persisted-atom-state', {})
+        scopes = atoms.get('sidebar-custom-sections-v3', {})
+        # Sections belong to an account. Never combine different accounts.
+        try:
+            auth = json.loads((self.home / 'auth.json').read_text(encoding='utf-8'))
+            account_id = (auth.get('tokens') or {}).get('account_id')
+        except (OSError, ValueError, AttributeError):
+            account_id = None
+        config = scopes.get(account_id, {}) if account_id and isinstance(scopes, dict) else next(iter(scopes.values()), {}) if isinstance(scopes, dict) and len(scopes) == 1 else {}
+        if not isinstance(config, dict):
+            config = {}
+        sections = []
+        for section in config.get('sections', []):
+            if not isinstance(section, dict) or not isinstance(section.get('id'), str) or not isinstance(section.get('name'), str):
+                continue
+            sections.append({'id': section['id'], 'name': section['name'],
+                             'hostSectionIds': section.get('hostSectionIds', {}),
+                             'itemKeys': [key for key in section.get('itemKeys', []) if isinstance(key, str)],
+                             'collapsed': section['id'] in config.get('collapsedSectionIds', [])})
+        order = config.get('sectionOrder', [])
+        sections.sort(key=lambda section: order.index('custom:' + section['id']) if 'custom:' + section['id'] in order else len(order))
+        return {'sections': sections, 'projects': self.projects(),
+                'sectionOrder': order,
+                'collapsedSections': atoms.get('sidebar-collapsed-sections-v1', {}),
+                'threadOrders': state.get('sidebar-project-thread-orders') or {},
+                'pinnedThreadIds': state.get('pinned-thread-ids') or [],
+                'pinnedProjectIds': state.get('pinned-project-ids') or [],
+                'projectOrder': state.get('project-order') or []}
+
     def decorate(self, rows, host, label):
         state = self.state()
         if host == 'local':
@@ -266,13 +298,20 @@ class AppHosts:
             raw_cwd = row.get('cwd', '')
             cwd = normalized(raw_cwd)
             assigned = assignments.get(row['id'], {})
-            project = next((p for p in projects if p['id'] == assigned.get('projectId') and assigned.get('hostId', host) == host), None)
+            project = next((p for p in projects if p['id'] == row.get('project_id')), None)
             if project is None:
+                project = next((p for p in projects if p['id'] == assigned.get('projectId') and assigned.get('hostId', host) == host), None)
+            independent = project is None and row['id'] in state.get('projectless-thread-ids', [])
+            if project is None and not independent:
                 matches = [(len(normalized(root)), p) for p in projects for root in p['roots'] if cwd == normalized(root) or cwd.startswith(normalized(root) + '/')]
                 project = max(matches, key=lambda v: v[0])[1] if matches else None
+            # Empty native fields also occur on older desktop chats whose
+            # membership still lives in global state. Only treat them as
+            # projectless after resolving explicit membership and cwd fallback.
+            independent = independent or (project is None and 'project_id' in row and row['project_id'] is None and row.get('origin') == 'desktop')
             row.update(host=host, hostLabel=label,
-                       projectKey=host + '|' + (project['id'] if project else cwd or 'unassigned'),
-                       projectName=project['name'] if project else (raw_cwd.replace('\\', '/') if host == 'local' and os.name == 'nt' else raw_cwd).rstrip('/').rsplit('/', 1)[-1] or '未归类',
+                       projectKey=host + '|' + ('independent' if independent else project['id'] if project else cwd or 'unassigned'),
+                       projectName='独立聊天' if independent else project['name'] if project else (raw_cwd.replace('\\', '/') if host == 'local' and os.name == 'nt' else raw_cwd).rstrip('/').rsplit('/', 1)[-1] or '未归类',
                        recency=row.get('recency_at_ms') or (row.get('recency_at') or 0) * 1000 or row.get('updated_at_ms') or (row.get('updated_at') or 0) * 1000)
         return rows
 

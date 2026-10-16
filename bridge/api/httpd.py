@@ -608,6 +608,7 @@ class Handler(BaseHTTPRequestHandler):
                                                   source=source, include_sources=True, local_only=True,
                                                   host_label=host_info.get('displayName') or host_info.get('alias'))
                     return self.output(200, {'sessions': rows, 'availableSources': available,
+                                             'sidebar': self.server.bridge.hosts.sidebar() if host == 'local' else None,
                                              'unavailableHosts': target.host_errors,
                                              'remoteHosts': list(host_infos) if host == 'local' else [],
                                              'complete': not target.host_errors,

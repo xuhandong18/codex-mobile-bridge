@@ -45,7 +45,7 @@ test('source selector uses full inventory and preserves its open options across 
   assert.equal($('source-filter-label').hidden,true);assert.equal(ctx.listSource,'all');assert.deepEqual(saved.at(-1),['codex-source-filter','all']);
 });
 test('every Codex row identifies its source even with a single-source inventory',()=>{
-  const {ctx,$}=fixture();$('list-mode').value='recent';
+  const {ctx,$}=fixture();ctx.sidebarData={sections:[],projects:[]};$('list-mode').value='recent';
   for(const source of ['desktop','cli','ide','unknown',undefined]){
     ctx.availableSources=source?[source]:[];ctx.listRenderStamp='';
     ctx.listRows=[{id:'a',host:'local',title:'Saved thread',projectName:'Project',projectKey:'p',recency:1,...(source?{access:{source}}:{})}];ctx.renderList();

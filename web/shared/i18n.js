@@ -2,6 +2,9 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"Codex 分区":"Codex sections",
+"置顶":"Pinned",
+"项目":"Projects",
 "全部会话":"All chats",
 "会话类型":"Chat type",
 "同时应用到本机 CLI":"Also apply to local CLI",

@@ -756,7 +756,7 @@ class HttpTests(unittest.TestCase):
     def setUp(self):
         class EmptyBridge:
             host_errors = []
-            hosts = type('Hosts', (), {'hosts': lambda self: {}})()
+            hosts = type('Hosts', (), {'hosts': lambda self: {}, 'sidebar': lambda self: {'sections': [], 'projects': []}})()
             def for_host(self, host):
                 if host != "local":
                     raise KeyError(host)
