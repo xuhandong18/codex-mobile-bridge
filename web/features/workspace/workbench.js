@@ -44,6 +44,7 @@ class Workbench {
     this.fileQuotes=new FileQuoteDrafts({input,onChange:()=>input.dispatchEvent(new Event('input',{bubbles:true}))});
     this.selectionTargets=new ChatSelectionTargets(this);
     this.fileSelection=new FileSelectionAction(this);
+    document.addEventListener('visibilitychange',()=>this.refreshSideChats());
   }
   canSplit(){return BridgeLayout.canSplit(this.chat.clientWidth);}
   get splitMode(){return this.canSplit()&&!!this.current?.splitTab;}
@@ -142,16 +143,20 @@ class Workbench {
     this.closeReferences();
     this.rememberScroll();
     const key = (this.provider&&this.provider!=='codex'?this.provider+'|':'')+host + '|' + id;
+    if(this.current?.key!==key)this.current?.sideChatRead?.abort();
+    clearTimeout(this.sideChatTimer);
     if (this.previewFullscreen && this.previewFullscreen.session.key !== key) this.closePreviewFullscreen();
     if (!this.sessions.has(key)) this.sessions.set(key, {id, host, key, provider:this.provider, active: 'chat', files: [], directory: '', search: '', hidden: false, scroll: 0});
     this.current = this.sessions.get(key); this.fileQuotes.open(key); this.paint();
+    // The caller sets the current access capabilities immediately after open().
+    const session=this.current;Promise.resolve().then(()=>{if(this.current===session)this.refreshSideChats();});
   }
   reset(provider=null) {
     this.fileSelection?.close();this.fileQuotes.close();
     if (this.previewFullscreen && (!provider || this.previewFullscreen.session.provider === provider)) this.closePreviewFullscreen();
     const visible=!provider||this.current?.provider===provider;
-    if(visible){this.stopThumbnails();this.uploadController?.abort();}
-    for(const [key,session] of this.sessions)if(!provider||session.provider===provider){for(const tab of session.files){tab.controller?.abort();tab.pdf?.dispose();tab.html?.dispose();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
+    if(visible){this.stopThumbnails();this.uploadController?.abort();clearTimeout(this.sideChatTimer);}
+    for(const [key,session] of this.sessions)if(!provider||session.provider===provider){session.sideChatRead?.abort();for(const tab of session.files){tab.controller?.abort();tab.pdf?.dispose();tab.html?.dispose();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
     if(visible){this.current=null;this.chat.classList.remove('workbench-active','wb-split');this.endDrag();this.panel.replaceChildren();this.panel.hidden=true;this.tabs.replaceChildren();}
   }
   get isFileVisible() { return !!this.current && !this.splitMode && this.current.active !== 'chat'; }
@@ -282,6 +287,25 @@ class Workbench {
     this.select('agents');
   }
   closeReferences(){for(const tab of this.current?.files||[])tab.sideChat?.references.close();}
+  async refreshSideChats(){
+    clearTimeout(this.sideChatTimer);
+    const session=this.current;
+    if(!session||document.hidden||session.host!=='local'||session.provider&&session.provider!=='codex'||session.access?.canUseSideChat===false||this.sessions.get(session.key)!==session)return;
+    if(session.sideChatRead&&!session.sideChatRead.signal.aborted)return;
+    const controller=session.sideChatRead=new AbortController();
+    try{
+      const state=await this.request('/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host),undefined,controller.signal);
+      if(!controller.signal.aborted&&this.current===session&&!document.hidden&&session.access?.canUseSideChat!==false)this.syncSideChats(session,state.slots);
+    }catch(error){
+      if(!controller.signal.aborted&&error.status===401)this.onUnauthorized();
+      // Keep existing tabs and drafts; the next read can recover a lost connection.
+    }finally{
+      if(session.sideChatRead===controller){
+        session.sideChatRead=null;
+        if(this.current===session&&this.sessions.get(session.key)===session&&!document.hidden)this.sideChatTimer=setTimeout(()=>this.refreshSideChats(),3000);
+      }
+    }
+  }
   createSideChat(session,slot='') {
     if(!session||session.access?.canUseSideChat===false||session.provider&&session.provider!=='codex')return;
     const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;
