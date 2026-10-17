@@ -64,6 +64,29 @@ class SidebarSyncTests(unittest.TestCase):
                                'origin': 'desktop'}], 'local', 'Local')[0]
         self.assertEqual(row['projectKey'], 'local|independent')
 
+    def test_gateway_projectless_choice_prevents_only_directory_fallback(self):
+        hosts = self.hosts({'local-projects': {
+            'p': {'id': 'p', 'name': 'Project', 'rootPaths': ['/project']}}})
+        for metadata in ({}, {'project_id': None}):
+            with self.subTest(metadata=metadata):
+                rows = hosts.decorate([
+                    {'id': 'independent', 'cwd': '/project/data/independent-chats/request', 'origin': 'desktop', **metadata},
+                    {'id': 'older-chat', 'cwd': '/project', 'origin': 'desktop', **metadata},
+                ], 'local', 'Local', projectless_thread_ids={'independent'})
+                self.assertEqual(rows[0]['projectKey'], 'local|independent')
+                self.assertEqual(rows[1]['projectKey'], 'local|p')
+
+    def test_explicit_desktop_project_move_overrides_gateway_projectless_creation(self):
+        for metadata, assignments in (({'project_id': 'p'}, {}),
+                                      ({'project_id': None}, {'thread': {'projectId': 'p', 'hostId': 'local'}})):
+            with self.subTest(metadata=metadata, assignments=assignments):
+                hosts = self.hosts({'local-projects': {
+                    'p': {'id': 'p', 'name': 'Project', 'rootPaths': ['/project']}},
+                    'thread-project-assignments': assignments})
+                row = hosts.decorate([{'id': 'thread', 'cwd': '/other', 'origin': 'desktop', **metadata}],
+                                     'local', 'Local', projectless_thread_ids={'thread'})[0]
+                self.assertEqual(row['projectKey'], 'local|p')
+
     def test_windows_extended_cwd_matches_project_after_moving_chat(self):
         hosts = self.hosts({'local-projects': {
             'p': {'id': 'p', 'name': 'Project', 'rootPaths': [r'D:\AI\project']}}})

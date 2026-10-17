@@ -23,6 +23,18 @@ test('a confirmed new chat appears before its background list refresh returns',a
   assert.equal(ui.context.listRows.filter(row=>row.id===ui.id).length,1);
   assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/']);
 });
+
+test('choosing no project submits an independent chat even when another project was selected before',async()=>{
+  const ui=fixture();
+  ui.context.listRows=[{id:'previous',host:'local',projectKey:'local|p',title:'Previous'}];
+  ui.$('new-chat-project').value='local|independent';
+  await ui.submit();
+  assert.equal(ui.calls[0].body.project,'local|independent');
+  const row=ui.context.listRows.find(row=>row.id===ui.id);
+  assert.equal(row.projectKey,'local|independent');
+  assert.equal(row.projectName,'独立聊天');
+  assert.equal(row.cwd,'');
+});
 for(const failure of ['unconfirmed','failed'])test(failure+' model settings do not skip explicitly selected full access',async()=>{
   const ui=fixture({preferences:selected,settings:async url=>{
     if(url==='/permissions')return {confirmed:true};

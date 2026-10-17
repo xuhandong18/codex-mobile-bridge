@@ -1001,7 +1001,14 @@ class Bridge:
             try:
                 available = bridge.store.available_sources() if include_sources else []
                 rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source)
-                rows = self.hosts.decorate(rows, bridge.host, label)
+                # Gateway data may live inside a saved project. Preserve the
+                # explicit projectless choice before inferring membership by cwd;
+                # native project IDs and assignments still take precedence.
+                projectless_ids = {entry['id'] for entry in self.creations.copy().values()
+                                   if entry.get('id') and entry.get('project') == 'local|independent'
+                                   and entry.get('kind', 'desktop') == 'desktop'
+                                   and entry.get('host') == bridge.host == 'local'}
+                rows = self.hosts.decorate(rows, bridge.host, label, projectless_thread_ids=projectless_ids)
                 with bridge.lock:
                     bridge.listed.update(row['id'] for row in rows)
                     for row in rows:

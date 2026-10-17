@@ -287,7 +287,7 @@ class AppHosts:
                 'pinnedProjectIds': state.get('pinned-project-ids') or [],
                 'projectOrder': state.get('project-order') or []}
 
-    def decorate(self, rows, host, label):
+    def decorate(self, rows, host, label, *, projectless_thread_ids=()):
         state = self.state()
         if host == 'local':
             projects = [{'id': p['id'], 'name': p['name'], 'roots': p.get('rootPaths', [])}
@@ -296,6 +296,7 @@ class AppHosts:
             projects = [{'id': p['id'], 'name': p.get('label') or p['remotePath'].rsplit('/', 1)[-1], 'roots': [p['remotePath']]}
                         for p in state.get('remote-projects', []) if p['hostId'] == host]
         assignments = state.get('thread-project-assignments', {})
+        projectless_ids = set(state.get('projectless-thread-ids', [])) | set(projectless_thread_ids)
         def normalized(path):
             if host == 'local' and os.name == 'nt':
                 path = path.replace('\\', '/').casefold()
@@ -315,7 +316,7 @@ class AppHosts:
             project = next((p for p in projects if p['id'] == row.get('project_id')), None)
             if project is None:
                 project = next((p for p in projects if p['id'] == assigned.get('projectId') and assigned.get('hostId', host) == host), None)
-            independent = project is None and row['id'] in state.get('projectless-thread-ids', [])
+            independent = project is None and row['id'] in projectless_ids
             if project is None and not independent:
                 matches = [(len(normalized(root)), p) for p in projects for root in p['roots'] if cwd == normalized(root) or cwd.startswith(normalized(root) + '/')]
                 project = max(matches, key=lambda v: v[0])[1] if matches else None

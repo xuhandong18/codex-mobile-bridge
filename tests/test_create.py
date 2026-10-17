@@ -144,6 +144,33 @@ class CreationTests(unittest.TestCase):
                 with self.assertRaises(CreationError): self.bridge.create_chat('local|independent', 'Unknown', request)
             self.assertEqual(create.call_count, 1)
 
+    def test_independent_chat_does_not_inherit_project_containing_gateway_data(self):
+        request = str(uuid.uuid4())
+        rows = []
+        saved_state = self.bridge.hosts.state()
+
+        def create(executable, home, cwd, title):
+            rows.append({'id': self.tid, 'cwd': cwd, 'project_id': None, 'origin': 'desktop'})
+            return self.tid
+
+        with patch('bridge.app.service.create_empty', side_effect=create) as created, \
+             patch('bridge.app.service.open_in_desktop'):
+            result = self.bridge.create_chat('local|independent', 'No project', request)
+            for restarted in (False, True):
+                if restarted:
+                    self.bridge.close()
+                    self.bridge = Bridge(self.root, self.root/'data')
+                    self.bridge.hosts.state = lambda: saved_state
+                with self.subTest(restarted=restarted), \
+                     patch.object(self.bridge.store, 'list', side_effect=lambda **kwargs: [dict(row) for row in rows]), \
+                     patch.object(self.bridge, '_save_creations') as saved:
+                    row = next(row for row in self.bridge.list() if row['id'] == result['id'])
+                    self.assertEqual(row['projectKey'], 'local|independent')
+                    self.assertEqual(row['projectName'], '独立聊天')
+                    self.assertEqual(row['cwd'], rows[0]['cwd'])
+                    saved.assert_not_called()
+            created.assert_called_once()
+
     def test_independent_directory_failure_is_safe_to_retry(self):
         request = str(uuid.uuid4())
         with patch('bridge.features.sessions.create.Path.mkdir', side_effect=PermissionError('read only')):
