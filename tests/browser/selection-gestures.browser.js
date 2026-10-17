@@ -18,9 +18,19 @@ async function runSelectionGestureBrowserTests(){
     check(!menu()?.open,label+': changing the selection cancels a pending long press');pointer(node,'pointerup',rect);
     getSelection().removeAllRanges();getSelection().addRange(range);const full=getSelection().toString(),fullRect=[...range.getClientRects()].find(box=>box.width>0&&box.height>0);
     pointer(node,'pointerdown',fullRect);await wait(650);
-    check(!!menu()?.open,label+': a second long press on selected text opens actions');pointer(node,'pointerup',fullRect);
-    getSelection().removeAllRanges();document.dispatchEvent(new Event('selectionchange'));await wait(220);
-    const buttons=[...menu().querySelectorAll('button')];buttons.find(button=>button.textContent===action).click();await wait(80);
+    check(!menu()?.open,label+': repeated long presses never open a web menu');
+    check(pointer(node,'contextmenu',fullRect),label+': the repeated native Copy/Share menu remains available');pointer(node,'pointerup',fullRect);
+    check(node.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'mouse',button:-1,clientX:fullRect.left+2,clientY:fullRect.top+2})),label+': Android selection-handle mouse events remain native');
+    check(!menu()?.open,label+': adjusting a native handle cannot open a web dialog');
+    const trigger=label==='File'?workbench.current.files.find(tab=>tab.filePath==='src/demo.js').quoteButton:$('selection-button');
+    check(!trigger.disabled,label+': explicit selection action is available outside the selected text');
+    trigger.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true,pointerId:43}));trigger.click();
+    if(label!=='File'){
+      check(!!menu()?.open,label+': only an explicit action opens the quote menu');
+      getSelection().removeAllRanges();document.dispatchEvent(new Event('selectionchange'));await wait(220);
+      const buttons=[...menu().querySelectorAll('button')];buttons.find(button=>button.textContent===action).click();
+    }
+    await wait(80);
     return full;
   };
   await workbench.preview(workbench.current,{name:'demo.js',path:'src/demo.js'});

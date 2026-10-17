@@ -481,7 +481,7 @@ class Workbench {
       }
       if (copyAction) actions.append(copyAction);
       tab.body.replaceChildren(...(modes ? [head, modes, content] : [head, content]));
-      if(result.kind==='text'||result.kind==='pdf')tab.filePath=entry.path;
+      if(result.kind==='text'||result.kind==='pdf'){tab.filePath=entry.path;this.fileSelection?.bindPreview(session,tab,actions);}
       if(this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===tab)this.syncPreviewFullscreen(tab);
       this.scrollMarkdown(tab);
       if (tab.pdf) tab.pdf.load();

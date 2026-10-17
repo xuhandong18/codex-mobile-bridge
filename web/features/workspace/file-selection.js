@@ -3,19 +3,26 @@
 class FileSelectionAction {
   constructor(workbench){
     this.workbench=workbench;
+    this.touchSelecting=window.matchMedia?.('(any-pointer: coarse)').matches===true;
     this.bar=document.createElement('div');this.bar.className='selection-actions file-selection-actions';this.bar.hidden=true;this.bar.setAttribute('role','toolbar');
     this.button=document.createElement('button');this.button.type='button';this.button.className='selection-more';this.button.dataset.i18n='引用到聊天';this.button.textContent=BridgeI18n.t('引用到聊天');
     this.bar.append(this.button);workbench.chat.append(this.bar);
     this.bar.onpointerdown=event=>event.preventDefault();this.button.onclick=()=>this.add(this.capture());
     const update=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),160);};
     document.addEventListener('selectionchange',update);document.addEventListener('scroll',update,true);window.addEventListener('resize',update);
-    document.addEventListener('pointerdown',event=>{if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;else if(event.pointerType==='mouse')this.touchSelecting=false;if(this.touchSelecting)this.bar.hidden=true;},{passive:true,capture:true});
+    document.addEventListener('pointerdown',event=>{if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;else if(event.pointerType==='mouse'&&(!window.matchMedia?.('(any-pointer: coarse)').matches||event.button===2))this.touchSelecting=false;if(this.touchSelecting)this.bar.hidden=true;},{passive:true,capture:true});
     window.visualViewport?.addEventListener('resize',update);window.visualViewport?.addEventListener('scroll',update);
     this.menu=new ChatContextMenu(workbench.chat,target=>{
       const selection=this.capture();if(!selection||!selection.content.contains(target))return [];
       workbench.closePreviewFullscreen();
       return [{label:'引用到聊天',run:()=>this.add(selection)}];
-    },{label:'文件引用',touchSelection:()=>this.capture()});
+    },{label:'文件引用',touch:false});
+  }
+  bindPreview(session,tab,actions){
+    const button=tab.quoteButton=this.workbench.button('引用选区',()=>{const selection=this.triggerSnapshot||this.capture();this.triggerSnapshot=null;if(selection?.session===session&&selection.tab===tab)this.add(selection);},'引用选中文字');
+    button.className='wb-preview-quote';button.disabled=true;
+    button.onpointerdown=event=>{if(event.button>0)return;const selection=this.capture();this.triggerSnapshot=selection?.session===session&&selection.tab===tab?selection:null;if(this.triggerSnapshot)event.preventDefault();};
+    actions.append(button);
   }
   capture(){
     const wb=this.workbench,session=wb.current,selection=window.getSelection();
@@ -41,7 +48,9 @@ class FileSelectionAction {
     return targets;
   }
   update(){
-    const selection=this.capture();this.bar.hidden=this.touchSelecting||!selection;if(this.bar.hidden)return;
+    const selection=this.capture();
+    for(const tab of this.workbench.current?.files||[])if(tab.quoteButton)tab.quoteButton.disabled=selection?.tab!==tab;
+    this.bar.hidden=this.touchSelecting||!selection;if(this.bar.hidden)return;
     const viewport=window.visualViewport,left=viewport?.offsetLeft||0,top=viewport?.offsetTop||0,width=viewport?.width||innerWidth,height=viewport?.height||innerHeight;
     this.bar.style.left=Math.max(left+8,Math.min(selection.rect.left,left+width-this.bar.offsetWidth-8))+'px';
     this.bar.style.top=Math.max(top+8,Math.min(selection.rect.bottom+8,top+height-this.bar.offsetHeight-8))+'px';

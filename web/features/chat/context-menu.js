@@ -2,39 +2,30 @@
 
 // One gesture implementation for touch/pen long presses and desktop context menus.
 class ChatContextMenu {
-  constructor(root,items,{touch=true,label='聊天操作',touchSelection=null}={}){
-    Object.assign(this,{root,items,label,touchSelection});this.suppressUntil=0;this.touchAt=-Infinity;
+  constructor(root,items,{touch=true,label='聊天操作'}={}){
+    Object.assign(this,{root,items,label});this.suppressUntil=0;this.touchAt=-Infinity;
     root.addEventListener('contextmenu',event=>{
-      if(this.menu?.open){event.preventDefault();return;}
-      const fromTouch=event.pointerType==='touch'||event.pointerType==='pen'||event.sourceCapabilities?.firesTouchEvents||!event.pointerType&&Date.now()-this.touchAt<1200;
-      if(fromTouch&&(!touch||touchSelection&&!this.sameTouchSelection()))return;
-      if(this.open(event.target,event.clientX,event.clientY))event.preventDefault();
+      const coarse=globalThis.matchMedia?.('(any-pointer: coarse)').matches;
+      // Android's selection handles emit "mouse" contextmenu with button -1.
+      const mouseRightClick=event.button===2&&(event.pointerType==='mouse'||this.pointerType==='mouse');
+      const fromTouch=event.pointerType==='touch'||event.pointerType==='pen'||event.sourceCapabilities?.firesTouchEvents||coarse&&!mouseRightClick||!event.pointerType&&(
+        this.pointerType==='touch'||this.pointerType==='pen'||Date.now()-this.touchAt<1200||!this.pointerType&&globalThis.matchMedia?.('(any-pointer: coarse)').matches);
+      if(fromTouch&&!touch)return;
+      if(this.menu?.open||this.open(event.target,event.clientX,event.clientY))event.preventDefault();
     });
     root.addEventListener('pointerdown',event=>{
-      this.cancel();if(event.pointerType==='touch'||event.pointerType==='pen')this.touchAt=Date.now();if(!touch||event.pointerType==='mouse'||!event.isPrimary)return;
+      this.cancel();if(event.pointerType)this.pointerType=event.pointerType;if(event.pointerType==='touch'||event.pointerType==='pen')this.touchAt=Date.now();if(!touch||event.pointerType==='mouse'||!event.isPrimary)return;
       const {clientX:x,clientY:y,target}=event;this.origin={x,y};
-      if(touchSelection){
-        const selected=touchSelection();
-        if(!selected||![...selected.range.getClientRects()].some(rect=>x>=rect.left&&x<=rect.right&&y>=rect.top&&y<=rect.bottom)){this.cancel();return;}
-        this.touchSnapshot=selected;
-      }
-      this.timer=setTimeout(()=>{this.timer=null;if(touchSelection&&!this.sameTouchSelection())return;if(this.open(target,x,y))this.suppressUntil=Date.now()+900;},600);
+      this.timer=setTimeout(()=>{this.timer=null;if(this.open(target,x,y))this.suppressUntil=Date.now()+900;},600);
     },{passive:true});
     root.addEventListener('pointermove',event=>{if(this.origin&&Math.hypot(event.clientX-this.origin.x,event.clientY-this.origin.y)>10)this.cancel();},{passive:true});
-    for(const name of ['pointerup','pointercancel'])root.addEventListener(name,()=>this.cancel(!!touchSelection),{passive:true,capture:true});
-    root.addEventListener('scroll',()=>this.cancel(),{passive:true,capture:true});
+    for(const name of ['pointerup','pointercancel','scroll'])root.addEventListener(name,()=>this.cancel(),{passive:true,capture:true});
     root.addEventListener('click',event=>{if(Date.now()<this.suppressUntil){event.preventDefault();event.stopImmediatePropagation();}},true);
   }
-  cancel(keepSelection=false){clearTimeout(this.timer);this.timer=null;this.origin=null;if(!keepSelection)this.touchSnapshot=null;}
-  sameTouchSelection(){
-    const before=this.touchSnapshot,after=this.touchSelection?.();
-    return !!before&&!!after&&Date.now()-this.touchAt<1200&&before.context===after.context&&before.text===after.text&&
-      before.range.startContainer===after.range.startContainer&&before.range.startOffset===after.range.startOffset&&
-      before.range.endContainer===after.range.endContainer&&before.range.endOffset===after.range.endOffset;
-  }
-  open(target,x,y){
+  cancel(){clearTimeout(this.timer);this.timer=null;this.origin=null;}
+  open(target,x,y,context){
     if(document.querySelector('dialog[open]'))return false;
-    const rows=this.items(target);if(!rows?.length)return false;
+    const rows=this.items(target,context);if(!rows?.length)return false;
     this.cancel();document.querySelector('.chat-context-menu')?.remove();
     const menu=this.menu=document.createElement('dialog');menu.className='chat-context-menu picker';menu.setAttribute('aria-label',BridgeI18n.t(this.label));
     const close=()=>menu.close();
@@ -95,20 +86,26 @@ class NewChatSettings {
 }
 
 // The Android shell extends its own selection menu through capture/activate.
-// Mouse selections retain a nearby toolbar. Touch selections use a second press.
+// Touch selection belongs to the native Copy/Share menu; draft actions are explicit.
 class SelectedTextAction {
-  constructor(root,{available,run,add,canAdd=()=>!!add,canExplain=()=>true,context=()=>''}){
-    Object.assign(this,{root,available,run,add,canAdd,canExplain,context});this.revision=0;
+  constructor(root,{available,run,add,canAdd=()=>!!add,canExplain=()=>true,context=()=>'',trigger=null,openMenu=()=>{}}){
+    Object.assign(this,{root,available,run,add,canAdd,canExplain,context,trigger});this.revision=0;
+    this.touchSelecting=window.matchMedia?.('(any-pointer: coarse)').matches===true;
     this.bar=document.createElement('div');this.bar.className='selection-actions';this.bar.hidden=true;this.bar.setAttribute('role','toolbar');
     const button=(label,action)=>{const node=document.createElement('button');node.type='button';node.className='selection-more';node.hidden=true;node.textContent=BridgeI18n.t(label);node.onclick=()=>this.activate(action,this.snapshot?.token);this.bar.append(node);return node;};
     this.addButton=button('添加到会话','add');this.button=button('在侧边聊天中了解更多','explain');
     this.bar.onpointerdown=event=>event.preventDefault();document.body.append(this.bar);
+    if(trigger){
+      trigger.disabled=true;
+      trigger.onpointerdown=event=>{if(event.button>0)return;this.triggerSnapshot=this.captureMenu();if(this.triggerSnapshot)event.preventDefault();};
+      trigger.onclick=()=>{const snapshot=this.triggerSnapshot||this.captureMenu();this.triggerSnapshot=null;if(this.currentSnapshot(snapshot)){this.menuSnapshot=snapshot;openMenu(snapshot,trigger.getBoundingClientRect());}};
+    }
     const schedule=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),160);};
     document.addEventListener('selectionchange',schedule);document.addEventListener('scroll',schedule,true);
     window.addEventListener('resize',schedule);window.visualViewport?.addEventListener('resize',schedule);window.visualViewport?.addEventListener('scroll',schedule);
     document.addEventListener('pointerdown',event=>{
       if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;
-      else if(event.pointerType==='mouse')this.touchSelecting=false;
+      else if(event.pointerType==='mouse'&&(!window.matchMedia?.('(any-pointer: coarse)').matches||event.button===2))this.touchSelecting=false;
       if(this.touchSelecting)this.bar.hidden=true;
       if(!root.contains(event.target)&&!this.bar.contains(event.target)){this.bar.hidden=true;this.snapshot=null;}
     },{passive:true,capture:true});
@@ -134,9 +131,10 @@ class SelectedTextAction {
     return {token:snapshot.token,add:this.canAdd(),explain:this.canExplain()};
   }
   releaseNative(token){if(this.nativeSnapshot?.token!==token)return;this.nativeSnapshot=null;this.nativeActive=false;this.update();}
+  currentSnapshot(snapshot){return !!snapshot&&this.available()&&snapshot.context===this.context()&&this.root.contains(snapshot.range.startContainer)&&this.root.contains(snapshot.range.endContainer)&&snapshot.range.toString()===snapshot.rangeText;}
   activate(action,token){
     const snapshot=token?[this.nativeSnapshot,this.menuSnapshot,this.snapshot].find(value=>value?.token===token):this.capture();
-    if(!snapshot||!this.available()||snapshot.context!==this.context()||!this.root.contains(snapshot.range.startContainer)||!this.root.contains(snapshot.range.endContainer)||snapshot.range.toString()!==snapshot.rangeText)return false;
+    if(!this.currentSnapshot(snapshot))return false;
     const selected=window.getSelection()?.toString();if(selected?.trim()&&selected!==snapshot.text)return false;
     if(action!=='add'&&action!=='explain'||action==='add'&&!this.canAdd()||action==='explain'&&!this.canExplain())return false;
     this.snapshot=null;this.nativeSnapshot=null;this.menuSnapshot=null;this.nativeActive=false;this.bar.hidden=true;
@@ -146,6 +144,7 @@ class SelectedTextAction {
   update(){
     if(this.nativeSnapshot&&(this.nativeSnapshot.context!==this.context()||!this.root.contains(this.nativeSnapshot.range.startContainer)||!this.root.contains(this.nativeSnapshot.range.endContainer))){this.nativeSnapshot=null;this.nativeActive=false;}
     const snapshot=this.capture();this.text=snapshot?.text||'';
+    if(this.trigger)this.trigger.disabled=!snapshot||!this.canAdd()&&!this.canExplain();
     this.button.hidden=!this.text||!this.canExplain();this.addButton.hidden=!this.text||!this.canAdd();this.bar.hidden=this.touchSelecting||this.nativeActive||this.button.hidden&&this.addButton.hidden;if(this.bar.hidden)return;
     const rect=window.getSelection().getRangeAt(0).getBoundingClientRect();this.button.textContent=BridgeI18n.t('在侧边聊天中了解更多');
     this.addButton.textContent=BridgeI18n.t('添加到会话');

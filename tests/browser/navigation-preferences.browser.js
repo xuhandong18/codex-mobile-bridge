@@ -14,8 +14,8 @@ async function runNavigationPreferenceBrowserTests(){
   await openChat(listRows[0].id,listRows[0].host);$('message').value='keep this draft';$('message').oninput();
   const node=document.querySelector('#messages .message-body');check(!!node,'message text exists');
   const range=document.createRange();range.selectNodeContents(node);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);selectedTextAction.update();
-  check(!selectedTextAction.button.hidden,'selection exposes learn-more action');
-  const text=selection.toString();selectedTextAction.button.click();
+  check(!selectedTextAction.trigger.disabled,'selection enables explicit chat actions');
+  const text=selection.toString();selectedTextAction.trigger.click();[...document.querySelector('.chat-context-menu').querySelectorAll('button')].find(button=>button.textContent===BridgeI18n.t('在侧边聊天中了解更多')).click();await new Promise(resolve=>setTimeout(resolve,30));
   const side=workbench.current.files.find(tab=>tab.id==='sidechat');check(side.sideChat.input.value.includes(text),'side chat receives selected text as a draft');
   check($('message').value==='keep this draft','side chat preserves the main draft');
   return checks;
@@ -29,7 +29,7 @@ async function runSelectionActionBrowserTests(){
   const select=node=>{const range=document.createRange();range.selectNodeContents(node);getSelection().removeAllRanges();getSelection().addRange(range);document.dispatchEvent(new Event('selectionchange'));};
   select(body);await wait();
   document.getElementById('timeline').dispatchEvent(new Event('scroll'));await wait();
-  check(!selectedTextAction.button.hidden&&!selectedTextAction.button.parentElement.hidden,'Selection actions remain usable after Android selection scrolls the page');
+  check(!selectedTextAction.trigger.disabled,'Explicit selection actions remain usable after Android selection scrolls the page');
   const native=window.BridgeSelection.capture();
   check(native.add&&native.explain&&typeof native.token==='string','Native selection menu receives supported actions and a selection token');
   const selected=body.textContent;
@@ -51,7 +51,7 @@ async function runSelectionActionBrowserTests(){
   activity.remove();
   const previous=currentId;currentId='22222222-2222-4222-8222-222222222222';
   check(window.BridgeSelection.run('add',current.token)===false,'A selection from a different chat cannot change the current draft');selectedTextAction.update();currentId=previous;
-  select(body);selectedTextAction.update();check(!selectedTextAction.bar.hidden,'A stale native menu cannot hide actions in the next chat');
+  select(body);selectedTextAction.update();check(!selectedTextAction.trigger.disabled,'A stale native menu cannot disable explicit actions in the next chat');
   getSelection().removeAllRanges();selectedTextAction.update();
   return checks;
 }

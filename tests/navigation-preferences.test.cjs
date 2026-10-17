@@ -54,35 +54,28 @@ test('message touch selection retains the Android menu while a mouse right-click
   ui.events.pointerdown(touch);assert.equal(ui.tasks.size,0);
   let prevented=false;ui.events.contextmenu({...touch,preventDefault(){prevented=true;}});
   assert.equal(ui.run('opened'),0);assert.equal(prevented,false);
-  ui.events.contextmenu({...touch,pointerType:'mouse',preventDefault(){prevented=true;}});
+  ui.events.contextmenu({...touch,pointerType:'mouse',button:2,preventDefault(){prevented=true;}});
   assert.equal(ui.run('opened'),1);assert.equal(prevented,true);
 });
 
-test('text actions wait for a second long press on an existing unchanged selection',()=>{
-  const ui=fixture();ui.run(`
-    var selected=null,opened=0;
-    var range={startContainer:root,endContainer:root,startOffset:0,endOffset:5,getClientRects:()=>[{left:20,right:80,top:30,bottom:50}]};
-    var menu=new ChatContextMenu(root,()=>[],{touchSelection:()=>selected});
-    menu.open=()=>{opened++;return true;};
-  `);
-  const touch={pointerType:'touch',isPrimary:true,clientX:30,clientY:40,target:{}};
-  ui.events.pointerdown(touch);ui.run("selected={text:'first',context:'one',range}");
-  let prevented=false;ui.events.contextmenu({...touch,preventDefault(){prevented=true;}});
-  for(const task of [...ui.tasks.values()])task();ui.tasks.clear();
-  assert.equal(ui.run('opened'),0,'The gesture that starts selecting must not open actions');assert.equal(prevented,false);
-  ui.events.pointerup();ui.events.pointerdown(touch);assert.equal(ui.tasks.size,1);
-  [...ui.tasks.values()][0]();ui.tasks.clear();assert.equal(ui.run('opened'),1,'A second long press on the selection opens actions');
-  ui.events.pointerup();ui.events.pointerdown(touch);ui.run("selected={text:'longer',context:'one',range:{...range,endOffset:6}}");
-  for(const task of [...ui.tasks.values()])task();ui.tasks.clear();assert.equal(ui.run('opened'),1,'Adjusting the selection cancels the pending menu');
-  ui.events.pointerup();ui.events.pointerdown({...touch,clientX:120});assert.equal(ui.tasks.size,0,'Pressing outside selected text continues ordinary selection');
+test('all touch and pen selection context menus remain native, including delayed contextmenu after cancellation',()=>{
+  for(const pointerType of ['touch','pen']){
+    const ui=fixture();ui.run('var menu=new ChatContextMenu(root,()=>[],{touch:false}),opened=0;menu.open=()=>{opened++;return true;};');
+    const event={pointerType,isPrimary:true,clientX:30,clientY:40,target:{}};
+    for(let repeat=0;repeat<3;repeat++){
+      ui.events.pointerdown(event);assert.equal(ui.tasks.size,0,'Text selection must never arm a web long-press timer');ui.events.pointercancel();
+      let prevented=false;ui.events.contextmenu({...event,preventDefault(){prevented=true;}});
+      assert.equal(prevented,false,'Copy and Share belong to the native menu on every press');assert.equal(ui.run('opened'),0);
+    }
+    let prevented=false;ui.events.contextmenu({clientX:30,clientY:40,sourceCapabilities:{firesTouchEvents:true},preventDefault(){prevented=true;}});assert.equal(prevented,false);
+    ui.events.contextmenu({clientX:30,clientY:40,preventDefault(){prevented=true;}});assert.equal(prevented,false,'Legacy WebView touch contextmenu has no pointerType');
+    ui.run('menu.touchAt=-Infinity');ui.events.contextmenu({clientX:30,clientY:40,preventDefault(){prevented=true;}});assert.equal(prevented,false,'Native selection handles may emit a late untyped menu');
+  }
 });
 
-test('a native touch contextmenu can use an existing selection after pointer cancellation',()=>{
-  const ui=fixture();ui.run(`
-    var selected={text:'selected',context:'one',range:{startContainer:root,endContainer:root,startOffset:0,endOffset:8,getClientRects:()=>[{left:20,right:80,top:30,bottom:50}]}};
-    var menu=new ChatContextMenu(root,()=>[],{touchSelection:()=>selected}),opened=0;menu.open=()=>{opened++;return true;};
-  `);
-  const touch={pointerType:'touch',isPrimary:true,clientX:30,clientY:40,target:{}};
-  ui.events.pointerdown(touch);ui.events.pointercancel();let prevented=false;
-  ui.events.contextmenu({...touch,preventDefault(){prevented=true;}});assert.equal(ui.run('opened'),1);assert.equal(prevented,true);
+test('a native selection menu without pointer events stays native on touch hardware',()=>{
+  const ui=fixture();ui.run('var menu=new ChatContextMenu(root,()=>[],{touch:false}),opened=0;menu.open=()=>{opened++;return true;};');
+  let prevented=false;ui.events.contextmenu({clientX:30,clientY:40,preventDefault(){prevented=true;}});assert.equal(prevented,false);assert.equal(ui.run('opened'),0);
+  ui.events.contextmenu({pointerType:'mouse',button:-1,sourceCapabilities:{firesTouchEvents:false},preventDefault(){prevented=true;}});assert.equal(prevented,false,'Android selection handles synthesize mouse contextmenu with button -1');
+  ui.events.pointerdown({pointerType:'mouse',button:2,isPrimary:true,target:{}});ui.events.contextmenu({clientX:30,clientY:40,button:2,preventDefault(){prevented=true;}});assert.equal(prevented,true);assert.equal(ui.run('opened'),1,'A real mouse retains its right-click menu on a touch device');
 });

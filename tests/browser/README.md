@@ -1,8 +1,10 @@
 # 浏览器检查
 
-`selection-gestures.browser.js` 的 `runSelectionGestureBrowserTests()` 使用同一合成文件夹具，但目录响应故意省略 `root`。它分阶段模拟手机选词、扩大/缩小范围和再次长按，分别检查文件、聊天消息及活动正文：初次选择不显示自定义菜单或浮动按钮、选区变化取消长按、再次长按完整选区后才能操作，以及菜单获得焦点后清空选区仍能引用先前完整文本。驱动需覆盖手机、平板和横屏，并确认选择/引用没有发出聊天发送请求。
+`selection-gestures.browser.js` 的 `runSelectionGestureBrowserTests()` 使用同一合成文件夹具，但目录响应故意省略 `root`。它分阶段模拟手机选词、扩大/缩小范围和重复长按，分别检查文件、聊天消息及活动正文：所有触屏 contextmenu 均不被网页取消，所有长按都不显示自定义菜单或浮动按钮，只有主动点击“引用选区”或“选区操作”才执行草稿操作，且菜单获得焦点后清空选区仍能引用先前完整文本。驱动需覆盖手机、平板和横屏，并确认选择/引用没有发出聊天发送请求。
 
-`file-quotes.browser.js` 的 `runFileQuoteBrowserTests(gesture)` 使用合成文件、两个聊天和侧边聊天夹具，`gesture` 为 `mouse` 或 `touch`。检查右键/长按菜单、自动添加与目标选择、代码选区与完整路径、引用标签详情和删除、聊天草稿隔离，以及主会话/侧边聊天仅有引用时的发送与成功清理。驱动需在电脑、手机、平板和手机横屏分别执行，并检查捕获的发送正文；触屏长按由浏览器 PointerEvent 定时器模拟，不能替代 Android/iOS 原生选区菜单实机验证。
+Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`firesTouchEvents=false` 的菜单事件，不能把它当作电脑右键。此事件由上述夹具及 `navigation-preferences.test.cjs` 单列覆盖；验证系统复制、分享和拖动手柄时，还应在独立 Android WebView 夹具或实机上执行真实触屏操作，不能用脚本先设置 DOM Range 替代原生手柄。
+
+`file-quotes.browser.js` 的 `runFileQuoteBrowserTests(gesture)` 使用合成文件、两个聊天和侧边聊天夹具，`gesture` 为 `mouse` 或 `touch`。检查电脑右键与触屏显式引用按钮、自动添加与目标选择、代码选区与完整路径、引用标签详情和删除、聊天草稿隔离，以及主会话/侧边聊天仅有引用时的发送与成功清理。驱动需在电脑、手机、平板和手机横屏分别执行，并检查捕获的发送正文；触屏长按由浏览器 PointerEvent 定时器模拟，不能替代 Android/iOS 原生选区菜单实机验证。
 
 本目录中的 `*.browser.js` 依赖真实 DOM、页面模块及隔离的网关夹具。它们由浏览器驱动加载并调用文件中声明的检查函数；Markdown 与公式脚本在加载后直接运行。各文件开头说明所需页面与前置状态。
 

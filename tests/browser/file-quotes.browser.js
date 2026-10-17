@@ -8,8 +8,8 @@ async function runFileQuoteBrowserTests(gesture='mouse'){
   const menu=async()=>{
     const code=select();
     if(gesture==='touch'){
-      const rect=[...getSelection().getRangeAt(0).getClientRects()].find(rect=>rect.width>0&&rect.height>0);code.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:51,clientX:rect.left+2,clientY:rect.top+2}));
-      await waitFor(()=>!!wb.fileSelection.menu.menu?.open);code.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:51}));
+      await new Promise(resolve=>setTimeout(resolve,200));const button=wb.current.files.find(tab=>tab.filePath==='src/demo.js').quoteButton;
+      check(!button.disabled,'The file header offers an explicit selection quote action');button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true,pointerId:51}));button.click();return;
     }else code.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:80,clientY:120}));
     await waitFor(()=>!!wb.fileSelection.menu.menu?.open);
     check(wb.fileSelection.menu.menu.textContent.includes('引用到聊天'),'Selection exposes a file quote action');
