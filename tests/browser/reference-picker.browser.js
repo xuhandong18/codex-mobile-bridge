@@ -20,11 +20,13 @@ async function runReferencePickerBrowserTests(){
   folder('src').querySelector('summary').click();await waitFor(()=>!!folder('src/deep'));
   folder('src/deep').querySelector('summary').click();await waitFor(()=>!!row('directory:src/deep/index.js'));
   check(folder('src').contains(folder('src/deep'))&&folder('src/deep').contains(row('directory:src/deep/index.js')),'Nested folders retain their full directory hierarchy');
+  check(!row('directory:src/deep/index.js').disabled,'A regular project file is enabled for selection');
   row('directory:src/deep/index.js').click();await waitFor(()=>!picker.dialog.open);
   check($('message').value.includes('D:\\fixture\\project\\src\\deep\\index.js'),'A file inserts the full native Windows path');
   await picker.open();await picker.setTab('files');
   picker.search.value='needle';picker.search.dispatchEvent(new Event('input',{bubbles:true}));
   await waitFor(()=>!!row('directory:src/deep/needle.txt'));
+  check(!row('directory:src/deep/needle.txt').disabled,'A matching file remains selectable in search results');
   check(folder('src').contains(folder('src/deep'))&&folder('src/deep').contains(row('directory:src/deep/needle.txt')),'Project-wide search retains the matching file ancestor folders');
   check(all('.reference-item').length===1,'File search filters unrelated leaves');
   picker.search.value='';picker.search.dispatchEvent(new Event('input',{bubbles:true}));await waitFor(()=>picker.active.query===''&&!picker.loading&&!!folder('src'));

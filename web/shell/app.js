@@ -1164,7 +1164,7 @@ async function loadComposerReferences(kind,{target,query,offset,path,refresh,sig
   }
   if(kind==='files'){
     const result=await api(sessionUrl(target.id,'workspace',target.host)+'&path='+encodeURIComponent(path)+'&search='+encodeURIComponent(query)+'&offset='+offset+'&hidden='+hidden+'&recursive='+!!query,undefined,signal);
-    return ChatReferencePicker.fileItems(result);
+    return ChatReferencePicker.fileItems(result,target.cwd);
   }
   if(kind!=='sessions')throw Error(t('未知目录类型'));
   const [result,metadata]=await Promise.all([
@@ -1199,7 +1199,7 @@ async function loadComposerReferences(kind,{target,query,offset,path,refresh,sig
     notice:result.unavailableHosts?.length?'部分主机暂不可用，当前显示已读取的会话。':''};
 }
 const composerReferences=new ChatReferencePicker({button:$('skills-button'),input:$('message'),
-  context:()=>currentId&&!sending&&clientNavigation.provider==='codex'?{key:chatKey(),id:currentId,host:currentHost,canSkills:currentAccess().canSelectSkills}:null,
+  context:()=>currentId&&!sending&&clientNavigation.provider==='codex'?{key:chatKey(),id:currentId,host:currentHost,cwd:state?.cwd||'',canSkills:currentAccess().canSelectSkills}:null,
   load:loadComposerReferences,onInsert:()=>{saveDraft();window.BridgePresentation?.resizeMessage();}});
 
 window.addEventListener('pagehide',saveDraft);

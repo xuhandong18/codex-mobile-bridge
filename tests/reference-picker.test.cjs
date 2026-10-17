@@ -25,6 +25,7 @@ function fixture(handler=async()=>({items:[],nextOffset:null})){
   const Picker=context.ChatReferencePicker,picker=new Picker({button,input,context:()=>target,
     load:async(kind,options)=>{calls.push({kind,...options});return handler(kind,options);}});
   return {Picker,picker,button,input,document,calls,events,timers,setTarget:value=>target=value,
+    run:(code,globals={})=>{Object.assign(context,globals);return vm.runInContext(code,context);},
     async search(query){picker.search.value=query;picker.search.oninput();const run=[...timers.values()].at(-1);timers.clear();await run();},
     nodes:root=>[root,...root.children.flatMap(function all(node){return [node,...node.children.flatMap(all)];})]};
 }
@@ -47,6 +48,31 @@ test('files preserve a lazy directory tree and insert native Windows absolute pa
   const item=ui.nodes(ui.picker.list).find(node=>node.dataset.referenceId==='directory:src/index.js');
   assert.ok(item);assert.equal(ui.picker.list.children[0].dataset.referenceGroup,'directory:src');item.onclick();
   assert.equal(ui.input.value,'D:\\project\\src\\index.js\n');assert.equal(ui.calls.at(-1).target.host,'local');
+});
+
+test('project file references remain clickable with a running gateway that omits the root field',async()=>{
+  const reads=[],app=fs.readFileSync('web/shell/app.js','utf8');
+  const start=app.indexOf('async function loadComposerReferences('),end=app.indexOf('const composerReferences=',start);
+  let ui;ui=fixture((kind,options)=>ui.run('loadComposerReferences(kind,options)',{kind,options}));
+  ui.run(app.slice(start,end),{t:text=>text,sessionUrl:()=>'/api/sessions/one/workspace?host=local',api:async url=>{
+    reads.push(url);return {project:'project',entries:[{name:'README.md',path:'README.md',kind:'file'}],nextOffset:null};
+  }});
+  ui.setTarget({key:'local|one',id:'one',host:'local',cwd:'D:\\project',canSkills:false});
+  await ui.picker.open();const file=ui.nodes(ui.picker.list).find(node=>node.dataset.referenceId==='directory:README.md');
+  assert.ok(file);assert.equal(file.disabled,false,'A regular project file must not be greyed out when the chat already supplies its full directory');
+  file.onclick();assert.equal(ui.input.value,'D:\\project\\README.md\n');assert.equal(ui.picker.dialog.open,false);
+  assert.equal(reads.length,1);
+});
+
+test('file references prefer the reported root and only accept absolute fallback directories',()=>{
+  const {Picker}=fixture(),entries=[{name:'README.md',path:'README.md',kind:'file'},{name:'link',path:'link',kind:'blocked'}];
+  const actual=Picker.fileItems({root:'D:\\actual',entries},'C:\\old');assert.equal(actual.items[0].value,'D:\\actual\\README.md');
+  for(const root of ['/srv/project','C:\\项目','C:/project','\\\\server\\share']){
+    const result=Picker.fileItems({entries},root);assert.equal(result.items[0].disabled,false);assert.equal(result.error,'');assert.equal(result.items[1].disabled,true);
+  }
+  for(const root of ['',null,'project','C:relative']){
+    const result=Picker.fileItems({project:'basename',entries},root);assert.equal(result.items[0].disabled,true);assert.equal(result.items[0].value,'');assert.match(result.error,/完整目录/);
+  }
 });
 
 test('POSIX roots containing literal backslashes stay POSIX while UNC and drive roots retain Windows paths',()=>{

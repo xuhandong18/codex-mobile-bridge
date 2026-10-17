@@ -12,8 +12,10 @@ class ChatReferencePicker {
     return {id:skill.id,title:skill.displayName||skill.name||skill.id,description:skill.description||'',
       value:skill.name?'$'+skill.name.replace(/^\$/,''):'',disabled:skill.selectable===false||skill.enabled===false||!skill.name};
   }
-  static fileItems(result){
-    const root=result.root||'',windows=/^(?:[A-Za-z]:[\\/]|\\\\)/.test(root),separator=windows&&root.includes('\\')?'\\':'/';
+  static fileItems(result,fallbackRoot=''){
+    const candidate=result.root||fallbackRoot;
+    const root=typeof candidate==='string'&&/^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/.test(candidate)?candidate:'';
+    const windows=/^(?:[A-Za-z]:[\\/]|\\\\)/.test(root),separator=windows&&root.includes('\\')?'\\':'/';
     const prefix=root.replace(windows?/[\\/]$/:/\/$/,'');
     return {items:(result.entries||[]).map(entry=>{
       const parts=entry.path.split('/'),groups=parts.slice(0,-1).map((title,index)=>({
@@ -22,7 +24,7 @@ class ChatReferencePicker {
       return {id:'directory:'+entry.path,title:entry.name,description:entry.path,kind:entry.kind,path:entry.path,groups,
         value:root?prefix+separator+entry.path.split('/').join(separator):'',
         disabled:entry.kind==='blocked'||entry.kind==='file'&&!root};
-    }),nextOffset:result.nextOffset??null,project:root||result.project,
+    }),nextOffset:result.nextOffset??null,project:root||result.project,error:root?'':'当前会话未提供可访问的项目完整目录',
       notice:result.truncated?'项目较大，搜索结果未全部列出，请缩小搜索范围。':''};
   }
   t(text){return BridgeI18n.t(text);}
