@@ -787,7 +787,7 @@ const selectedTextAction=new SelectedTextAction($('messages'),{available:()=>!!c
   input.value=value;input.oninput();window.BridgePresentation?.resizeMessage();input.focus();
 },run:text=>workbench.sideChat(text)});
 window.BridgeSelection=Object.freeze({capture:()=>selectedTextAction.captureNative(),run:(action,token)=>selectedTextAction.activate(action,token),release:token=>selectedTextAction.releaseNative(token)});
-new ChatContextMenu($('messages'),()=>{const text=selectedTextAction.selected();if(!text)return [];const items=[{label:'复制',copy:true,run:button=>window.BridgeClipboard.copy(()=>text,button)}];if(currentAccess().canSend)items.push({label:'添加到会话',run:()=>selectedTextAction.activate('add')});if(currentAccess().canUseSideChat)items.push({label:'在侧边聊天中了解更多',run:()=>selectedTextAction.activate('explain')});return items;},{touch:false});
+new ChatContextMenu($('messages'),()=>{const snapshot=selectedTextAction.captureMenu();if(!snapshot)return [];const items=[{label:'复制',copy:true,run:button=>window.BridgeClipboard.copy(()=>snapshot.text,button)}];if(currentAccess().canSend)items.push({label:'添加到会话',run:()=>selectedTextAction.activate('add',snapshot.token)});if(currentAccess().canUseSideChat)items.push({label:'在侧边聊天中了解更多',run:()=>selectedTextAction.activate('explain',snapshot.token)});return items;},{touchSelection:()=>selectedTextAction.capture()});
 $('fork-source').onclick=()=>{const source=state?.forkedFrom;if(source){$('chat-details-dialog').close();openChat(source.id,source.host).catch(e=>toast(e.message));}};
 function saveDraft(){runningSendChoice?.close();composerReferences.close();if(currentId)sessionStorage.setItem('draft:'+chatKey(),$('message').value);}
 $('message').oninput=saveDraft;
@@ -911,7 +911,7 @@ function renderState(view){
   workModes.render(modesView,$('send-mode').value,sending);
   $('work-mode').disabled=limited&&!access.canUseModes;
   if(limited&&!access.canUseModes)$('work-mode').value='default';
-  workbench.current.access=access;
+  workbench.current.access=access;workbench.current.cwd=view.cwd||listed?.cwd||'';
   chatTimeline?.refreshActions();
   renderApprovals(access.canApprove?view.requests:[]);renderQueue(view.submissions||[]);
 }

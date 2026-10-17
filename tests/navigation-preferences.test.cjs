@@ -57,3 +57,32 @@ test('message touch selection retains the Android menu while a mouse right-click
   ui.events.contextmenu({...touch,pointerType:'mouse',preventDefault(){prevented=true;}});
   assert.equal(ui.run('opened'),1);assert.equal(prevented,true);
 });
+
+test('text actions wait for a second long press on an existing unchanged selection',()=>{
+  const ui=fixture();ui.run(`
+    var selected=null,opened=0;
+    var range={startContainer:root,endContainer:root,startOffset:0,endOffset:5,getClientRects:()=>[{left:20,right:80,top:30,bottom:50}]};
+    var menu=new ChatContextMenu(root,()=>[],{touchSelection:()=>selected});
+    menu.open=()=>{opened++;return true;};
+  `);
+  const touch={pointerType:'touch',isPrimary:true,clientX:30,clientY:40,target:{}};
+  ui.events.pointerdown(touch);ui.run("selected={text:'first',context:'one',range}");
+  let prevented=false;ui.events.contextmenu({...touch,preventDefault(){prevented=true;}});
+  for(const task of [...ui.tasks.values()])task();ui.tasks.clear();
+  assert.equal(ui.run('opened'),0,'The gesture that starts selecting must not open actions');assert.equal(prevented,false);
+  ui.events.pointerup();ui.events.pointerdown(touch);assert.equal(ui.tasks.size,1);
+  [...ui.tasks.values()][0]();ui.tasks.clear();assert.equal(ui.run('opened'),1,'A second long press on the selection opens actions');
+  ui.events.pointerup();ui.events.pointerdown(touch);ui.run("selected={text:'longer',context:'one',range:{...range,endOffset:6}}");
+  for(const task of [...ui.tasks.values()])task();ui.tasks.clear();assert.equal(ui.run('opened'),1,'Adjusting the selection cancels the pending menu');
+  ui.events.pointerup();ui.events.pointerdown({...touch,clientX:120});assert.equal(ui.tasks.size,0,'Pressing outside selected text continues ordinary selection');
+});
+
+test('a native touch contextmenu can use an existing selection after pointer cancellation',()=>{
+  const ui=fixture();ui.run(`
+    var selected={text:'selected',context:'one',range:{startContainer:root,endContainer:root,startOffset:0,endOffset:8,getClientRects:()=>[{left:20,right:80,top:30,bottom:50}]}};
+    var menu=new ChatContextMenu(root,()=>[],{touchSelection:()=>selected}),opened=0;menu.open=()=>{opened++;return true;};
+  `);
+  const touch={pointerType:'touch',isPrimary:true,clientX:30,clientY:40,target:{}};
+  ui.events.pointerdown(touch);ui.events.pointercancel();let prevented=false;
+  ui.events.contextmenu({...touch,preventDefault(){prevented=true;}});assert.equal(ui.run('opened'),1);assert.equal(prevented,true);
+});

@@ -180,6 +180,7 @@ class DesktopSessionsView {
   staleDetail(){this.freshDetail=false;this.renderRequests([]);this.requestStamp='';this.updateComposer();}
   applyDetail(value,cached=false){
     if(!value.session){this.staleDetail();this.status.textContent=BridgeI18n.t('尚未连接');return;}
+    const workspace=this.workbench.current;if(workspace?.id===this.sid&&workspace.provider===this.provider)workspace.cwd=value.session.cwd||'';
     this.freshDetail=!cached&&value.connected!==false;this.state={...value.session,capabilities:value.capabilities||value.session.capabilities||{},maxRequestBytes:value.maxRequestBytes||value.session.maxRequestBytes||0};this.title.textContent=this.state.title;this.status.textContent=BridgeI18n.t(cached?'正在连接…':!this.canMutate()?(this.state.backend==='cli'?'历史记录':'尚未连接'):this.state.requests?.length?'等待回应':this.state.status==='active'?'运行中':'已连接');this.updateComposer();this.sessionFiles=value.files||[];this.renderMessages(value.messages||[]);
     const requests=this.canMutate()?this.state.requests||[]:[],stamp=JSON.stringify([requests,BridgeI18n.language()]);if(stamp!==this.requestStamp){this.renderRequests(requests);this.requestStamp=stamp;}
     this.detailNotice=value.notice||'';this.renderNotice();if(!cached)this.updateActivity([this.state]);this.renderIndicators();

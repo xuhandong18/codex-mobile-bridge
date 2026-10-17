@@ -2,19 +2,36 @@
 
 // One gesture implementation for touch/pen long presses and desktop context menus.
 class ChatContextMenu {
-  constructor(root,items,{touch=true,label='聊天操作'}={}){
-    this.root=root;this.items=items;this.label=label;this.suppressUntil=0;this.touchAt=-Infinity;
-    root.addEventListener('contextmenu',event=>{if(!touch&&(event.pointerType==='touch'||event.pointerType==='pen'||event.sourceCapabilities?.firesTouchEvents||!event.pointerType&&Date.now()-this.touchAt<1200))return;if(this.menu?.open||this.open(event.target,event.clientX,event.clientY))event.preventDefault();});
+  constructor(root,items,{touch=true,label='聊天操作',touchSelection=null}={}){
+    Object.assign(this,{root,items,label,touchSelection});this.suppressUntil=0;this.touchAt=-Infinity;
+    root.addEventListener('contextmenu',event=>{
+      if(this.menu?.open){event.preventDefault();return;}
+      const fromTouch=event.pointerType==='touch'||event.pointerType==='pen'||event.sourceCapabilities?.firesTouchEvents||!event.pointerType&&Date.now()-this.touchAt<1200;
+      if(fromTouch&&(!touch||touchSelection&&!this.sameTouchSelection()))return;
+      if(this.open(event.target,event.clientX,event.clientY))event.preventDefault();
+    });
     root.addEventListener('pointerdown',event=>{
       this.cancel();if(event.pointerType==='touch'||event.pointerType==='pen')this.touchAt=Date.now();if(!touch||event.pointerType==='mouse'||!event.isPrimary)return;
       const {clientX:x,clientY:y,target}=event;this.origin={x,y};
-      this.timer=setTimeout(()=>{this.timer=null;if(this.open(target,x,y))this.suppressUntil=Date.now()+900;},600);
+      if(touchSelection){
+        const selected=touchSelection();
+        if(!selected||![...selected.range.getClientRects()].some(rect=>x>=rect.left&&x<=rect.right&&y>=rect.top&&y<=rect.bottom)){this.cancel();return;}
+        this.touchSnapshot=selected;
+      }
+      this.timer=setTimeout(()=>{this.timer=null;if(touchSelection&&!this.sameTouchSelection())return;if(this.open(target,x,y))this.suppressUntil=Date.now()+900;},600);
     },{passive:true});
     root.addEventListener('pointermove',event=>{if(this.origin&&Math.hypot(event.clientX-this.origin.x,event.clientY-this.origin.y)>10)this.cancel();},{passive:true});
-    for(const name of ['pointerup','pointercancel','scroll'])root.addEventListener(name,()=>this.cancel(),{passive:true,capture:true});
+    for(const name of ['pointerup','pointercancel'])root.addEventListener(name,()=>this.cancel(!!touchSelection),{passive:true,capture:true});
+    root.addEventListener('scroll',()=>this.cancel(),{passive:true,capture:true});
     root.addEventListener('click',event=>{if(Date.now()<this.suppressUntil){event.preventDefault();event.stopImmediatePropagation();}},true);
   }
-  cancel(){clearTimeout(this.timer);this.timer=null;this.origin=null;}
+  cancel(keepSelection=false){clearTimeout(this.timer);this.timer=null;this.origin=null;if(!keepSelection)this.touchSnapshot=null;}
+  sameTouchSelection(){
+    const before=this.touchSnapshot,after=this.touchSelection?.();
+    return !!before&&!!after&&Date.now()-this.touchAt<1200&&before.context===after.context&&before.text===after.text&&
+      before.range.startContainer===after.range.startContainer&&before.range.startOffset===after.range.startOffset&&
+      before.range.endContainer===after.range.endContainer&&before.range.endOffset===after.range.endOffset;
+  }
   open(target,x,y){
     if(document.querySelector('dialog[open]'))return false;
     const rows=this.items(target);if(!rows?.length)return false;
@@ -78,7 +95,7 @@ class NewChatSettings {
 }
 
 // The Android shell extends its own selection menu through capture/activate.
-// Browsers and older shells retain a nearby toolbar without blocking selection.
+// Mouse selections retain a nearby toolbar. Touch selections use a second press.
 class SelectedTextAction {
   constructor(root,{available,run,add,canAdd=()=>!!add,canExplain=()=>true,context=()=>''}){
     Object.assign(this,{root,available,run,add,canAdd,canExplain,context});this.revision=0;
@@ -89,7 +106,12 @@ class SelectedTextAction {
     const schedule=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),160);};
     document.addEventListener('selectionchange',schedule);document.addEventListener('scroll',schedule,true);
     window.addEventListener('resize',schedule);window.visualViewport?.addEventListener('resize',schedule);window.visualViewport?.addEventListener('scroll',schedule);
-    document.addEventListener('pointerdown',event=>{if(!root.contains(event.target)&&!this.bar.contains(event.target)){this.bar.hidden=true;this.snapshot=null;}},{passive:true});
+    document.addEventListener('pointerdown',event=>{
+      if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;
+      else if(event.pointerType==='mouse')this.touchSelecting=false;
+      if(this.touchSelecting)this.bar.hidden=true;
+      if(!root.contains(event.target)&&!this.bar.contains(event.target)){this.bar.hidden=true;this.snapshot=null;}
+    },{passive:true,capture:true});
   }
   selected(){
     const selection=window.getSelection();if(!selection?.rangeCount||selection.isCollapsed)return '';
@@ -102,8 +124,9 @@ class SelectedTextAction {
     if(!text){this.snapshot=null;return null;}
     const range=window.getSelection().getRangeAt(0),context=this.context(),old=this.snapshot;
     if(old&&old.text===text&&old.context===context&&old.range.startContainer===range.startContainer&&old.range.startOffset===range.startOffset&&old.range.endContainer===range.endContainer&&old.range.endOffset===range.endOffset)return old;
-    return this.snapshot={text,context,range:range.cloneRange(),token:String(++this.revision)};
+    return this.snapshot={text,context,range:range.cloneRange(),rangeText:range.toString(),token:String(++this.revision)};
   }
+  captureMenu(){return this.menuSnapshot=this.capture();}
   captureNative(){
     const snapshot=this.capture();this.nativeSnapshot=snapshot;this.nativeActive=!!snapshot;
     if(!snapshot)return {add:false,explain:false};
@@ -112,18 +135,18 @@ class SelectedTextAction {
   }
   releaseNative(token){if(this.nativeSnapshot?.token!==token)return;this.nativeSnapshot=null;this.nativeActive=false;this.update();}
   activate(action,token){
-    const snapshot=token?(this.nativeSnapshot?.token===token?this.nativeSnapshot:this.snapshot?.token===token?this.snapshot:null):this.capture();
-    if(!snapshot||!this.available()||snapshot.context!==this.context()||!this.root.contains(snapshot.range.startContainer)||!this.root.contains(snapshot.range.endContainer)||snapshot.range.toString()!==snapshot.text)return false;
+    const snapshot=token?[this.nativeSnapshot,this.menuSnapshot,this.snapshot].find(value=>value?.token===token):this.capture();
+    if(!snapshot||!this.available()||snapshot.context!==this.context()||!this.root.contains(snapshot.range.startContainer)||!this.root.contains(snapshot.range.endContainer)||snapshot.range.toString()!==snapshot.rangeText)return false;
     const selected=window.getSelection()?.toString();if(selected?.trim()&&selected!==snapshot.text)return false;
     if(action!=='add'&&action!=='explain'||action==='add'&&!this.canAdd()||action==='explain'&&!this.canExplain())return false;
-    this.snapshot=null;this.nativeSnapshot=null;this.nativeActive=false;this.bar.hidden=true;
+    this.snapshot=null;this.nativeSnapshot=null;this.menuSnapshot=null;this.nativeActive=false;this.bar.hidden=true;
     try{(action==='add'?this.add:this.run)(snapshot.text);window.getSelection()?.removeAllRanges();return true;}
     catch(error){document.dispatchEvent(new CustomEvent('bridge-message-error',{detail:error.message}));return false;}
   }
   update(){
     if(this.nativeSnapshot&&(this.nativeSnapshot.context!==this.context()||!this.root.contains(this.nativeSnapshot.range.startContainer)||!this.root.contains(this.nativeSnapshot.range.endContainer))){this.nativeSnapshot=null;this.nativeActive=false;}
     const snapshot=this.capture();this.text=snapshot?.text||'';
-    this.button.hidden=!this.text||!this.canExplain();this.addButton.hidden=!this.text||!this.canAdd();this.bar.hidden=this.nativeActive||this.button.hidden&&this.addButton.hidden;if(this.bar.hidden)return;
+    this.button.hidden=!this.text||!this.canExplain();this.addButton.hidden=!this.text||!this.canAdd();this.bar.hidden=this.touchSelecting||this.nativeActive||this.button.hidden&&this.addButton.hidden;if(this.bar.hidden)return;
     const rect=window.getSelection().getRangeAt(0).getBoundingClientRect();this.button.textContent=BridgeI18n.t('在侧边聊天中了解更多');
     this.addButton.textContent=BridgeI18n.t('添加到会话');
     const viewport=window.visualViewport,left=viewport?.offsetLeft||0,top=viewport?.offsetTop||0,width=viewport?.width||innerWidth,height=viewport?.height||innerHeight;

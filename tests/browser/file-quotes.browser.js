@@ -8,7 +8,7 @@ async function runFileQuoteBrowserTests(gesture='mouse'){
   const menu=async()=>{
     const code=select();
     if(gesture==='touch'){
-      const rect=code.getBoundingClientRect();code.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:51,clientX:rect.left+5,clientY:rect.top+5}));
+      const rect=[...getSelection().getRangeAt(0).getClientRects()].find(rect=>rect.width>0&&rect.height>0);code.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:51,clientX:rect.left+2,clientY:rect.top+2}));
       await waitFor(()=>!!wb.fileSelection.menu.menu?.open);code.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:51}));
     }else code.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:80,clientY:120}));
     await waitFor(()=>!!wb.fileSelection.menu.menu?.open);
