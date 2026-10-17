@@ -189,7 +189,8 @@ class Workbench {
     this.tabs.replaceChildren();
     for (const tab of [{id: 'chat', name: BridgeI18n.t('聊天')}, ...session.files]) {
       const group = this.node('div', 'wb-tab');group.dataset.tab=tab.id; group.classList.toggle('selected', this.splitMode ? ['chat',session.splitTab].includes(tab.id) : session.active === tab.id);
-      const select = this.button(tab.name, () => this.select(tab.id)); if(tab.id.startsWith('file:'))this.raw(select); select.setAttribute('role', 'tab'); select.setAttribute('aria-selected', String(this.splitMode?['chat',session.splitTab].includes(tab.id):session.active===tab.id));
+      const select = this.button(tab.name, () => this.select(tab.id)); if(tab.id.startsWith('file:')||tab.customTitle)this.raw(select); select.setAttribute('role', 'tab'); select.setAttribute('aria-selected', String(this.splitMode?['chat',session.splitTab].includes(tab.id):session.active===tab.id));
+      if(tab.sideChat)select.ondblclick=()=>tab.sideChat.rename();
       group.append(select);
       group.draggable=this.splitEligible&&tab.id!=='chat';
       group.ondragstart=event=>{if(!group.draggable){event.preventDefault();return;}this.dragTab=tab.id;event.dataTransfer.setData('text/plain',tab.id);event.dataTransfer.effectAllowed='move';this.layout.classList.add('wb-dragging');};
@@ -286,7 +287,7 @@ class Workbench {
     }
     this.select('agents');
   }
-  closeReferences(){for(const tab of this.current?.files||[])tab.sideChat?.references.close();}
+  closeReferences(){for(const tab of this.current?.files||[]){tab.sideChat?.references.close();tab.sideChat?.renameDialog?.close();}}
   async refreshSideChats(){
     clearTimeout(this.sideChatTimer);
     const session=this.current;
@@ -310,20 +311,36 @@ class Workbench {
     if(!session||session.access?.canUseSideChat===false||session.provider&&session.provider!=='codex')return;
     const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;
     const number=session.sideChatSerial=(session.sideChatSerial||0)+1;
-    tab={id,slot,name:BridgeI18n.t('侧边聊天')+(number>1?' '+number:''),body:this.node('div','wb-side-content')};
+    const name=BridgeI18n.t('侧边聊天')+(number>1?' '+number:'');
+    tab={id,slot,name,defaultName:name,body:this.node('div','wb-side-content')};
     session.files.push(tab);tab.sideChat=new SideChatPanel(this,session,tab);return tab;
+  }
+  setSideChatTitle(session,tab,state){
+    if(this.sessions.get(session.key)!==session||!session.files.includes(tab)||typeof state.title!=='string')return false;
+    if(state.id&&tab.sideChat?.state?.id&&state.id!==tab.sideChat.state.id)return false;
+    const revision=state.titleRevision??0;
+    if(state.id===tab.titleChild&&revision<(tab.titleRevision??-1))return false;
+    if(state.id){tab.titleChild=state.id;tab.titleRevision=revision;}
+    const name=state.title||tab.defaultName;
+    tab.customTitle=state.title;
+    if(tab.name===name)return false;
+    tab.name=name;
+    tab.sideChat?.updateCaption?.();
+    return true;
   }
   syncSideChats(session,slots){
     if(!Array.isArray(slots)||this.sessions.get(session.key)!==session)return;
     let changed=false;for(const row of slots){const slot=row?.slot;if(typeof slot!=='string'||slot&&!/^[0-9a-f-]{36}$/.test(slot))continue;
-      const id=slot?'sidechat:'+slot:'sidechat';if(!session.files.some(tab=>tab.id===id)){this.createSideChat(session,slot);changed=true;}
+      const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);
+      if(!tab){tab=this.createSideChat(session,slot);changed=!!tab||changed;}
+      if(tab&&this.setSideChatTitle(session,tab,row))changed=true;
     }
     if(changed&&this.current===session)this.paint();
   }
   sideChat(selectedText='',fresh=false) {
     if(selectedText.length>12000){this.notify(BridgeI18n.t('选中内容过长，请缩小范围后重试'));return;}
     const session=this.current;if(!session||session.access?.canUseSideChat===false)return;
-    const tab=this.createSideChat(session,fresh?uuid():'');if(!tab)return;
+    const tab=this.createSideChat(session,fresh||session.files.some(tab=>tab.sideChat)?uuid():'');if(!tab)return;
     this.select(tab.id);
     if(selectedText)tab.sideChat.quoteSelection(selectedText);
   }

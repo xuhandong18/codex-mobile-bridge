@@ -9,11 +9,13 @@ class SideChatPanel {
     this.createButton=b(BridgeI18n.t('创建侧边聊天'),()=>this.create());this.createButton.className='primary';
     this.stopButton=b(BridgeI18n.t('■ 停止'),()=>this.action('stop'));this.stopButton.hidden=true;
     this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(await this.end())this.load();});this.endButton.hidden=true;
-    this.newButton=b(BridgeI18n.t('新建侧边聊天'),()=>workbench.sideChat('',true));this.newButton.hidden=true;
+    this.newButton=b(BridgeI18n.t('新建侧边聊天'),()=>workbench.sideChat('',true));
+    this.renameButton=b(BridgeI18n.t('重命名侧边聊天'),()=>this.rename());
     this.modelButton=b(BridgeI18n.t('模型与思考程度'),()=>this.modelSettings());
     this.referenceButton=b('＋',()=>{},'添加引用');this.referenceButton.className='tool-button reference-button';
     this.permissionsButton=b(BridgeI18n.t('权限'),()=>this.permissions());this.permissionsButton.className='tool-button';this.contextUsage=new ContextUsageControl();
-    this.head.append(n('span','wb-side-caption',BridgeI18n.t('临时侧边聊天')),this.newButton,this.endButton);
+    this.caption=workbench.raw(n('strong','wb-side-caption',tab.name));
+    this.head.append(this.caption,this.renameButton,this.newButton,this.endButton);
     this.landing=n('div','wb-side-landing');
     this.help=n('p','wb-side-help',BridgeI18n.t('继承当前会话的上下文，单独讨论一个问题。主会话的任务不会被接续执行。'));
     this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t('可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
@@ -54,6 +56,36 @@ class SideChatPanel {
     tab.body.append(this.head,this.landing,this.status,this.messages,this.approvals,this.queued,this.form);this.controls();this.load();this.schedule();
   }
   resizeInput(){this.input.style.height='auto';this.input.style.height=Math.min(160,Math.max(48,this.input.scrollHeight))+'px';}
+  updateCaption(){this.caption.textContent=this.tab.customTitle?this.tab.name:BridgeI18n.t(this.tab.name);this.caption.title=this.caption.textContent;}
+  rename(){
+    if(this.disposed||this.busy)return;
+    this.renameDialog?.close();
+    const child=this.state?.id,dialog=this.renameDialog=this.dialog('修改侧边聊天名称');
+    const form=this.workbench.node('form'),label=this.workbench.node('label','','聊天名称'),input=this.workbench.node('input');
+    input.maxLength=120;input.value=this.tab.customTitle||this.tab.name;label.append(input);
+    const error=this.workbench.node('p','error'),actions=this.workbench.node('div','actions');
+    const save=this.workbench.button('保存',()=>{});save.type='submit';
+    actions.append(save,this.workbench.button('取消',()=>dialog.close()));form.append(label,error,actions);dialog.append(form);
+    dialog.addEventListener('close',()=>{if(this.renameDialog===dialog)this.renameDialog=null;},{once:true});
+    form.onsubmit=async event=>{
+      event.preventDefault();if(this.busy||this.disposed||this.workbench.current!==this.session||(this.state?.id||null)!==(child||null))return;
+      const title=input.value.trim();
+      if(!title||[...title].length>120||/[\u0000-\u001f\u007f-\u009f]/.test(input.value)){
+        error.textContent=BridgeI18n.t('聊天名称需为 1–120 个字符，不能包含换行或控制字符');return;
+      }
+      if(!child){
+        this.workbench.setSideChatTitle(this.session,this.tab,{title});this.updateCaption();this.workbench.paint();dialog.close();return;
+      }
+      this.readRevision=(this.readRevision||0)+1;this.busy=true;save.disabled=true;this.controls();error.textContent='';
+      try{
+        const state=await this.request({action:'rename',id:child,title});
+        if(!this.disposed&&this.state?.id===child)this.apply(state);
+        dialog.close();
+      }catch(e){error.textContent=BridgeI18n.t(e.message);}
+      finally{this.busy=false;save.disabled=false;if(!this.disposed)this.controls();}
+    };
+    input.focus();input.select();
+  }
   quoteSelection(text){
     const prompt=BridgeI18n.t('请进一步解释以下内容：')+'\n\n'+text.split('\n').map(line=>'> '+line).join('\n');
     this.input.value=(this.input.value.trim()?this.input.value+'\n\n':'')+prompt;this.collapse(false);this.input.oninput();
@@ -93,7 +125,7 @@ class SideChatPanel {
   request(body){return this.workbench.request(this.url(),body);}
   controls(){
     const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
-    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created;this.head.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
+    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created;this.head.hidden=false;this.messages.hidden=!created;this.queued.hidden=!created;
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.permissionsButton])button.disabled=locked;
     this.referenceButton.disabled=!!this.busy||!!this.pending||created&&!this.state.connected;
@@ -107,7 +139,7 @@ class SideChatPanel {
     this.createButton.disabled=!!this.busy;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
     this.endButton.hidden=!created;this.endButton.disabled=!!this.busy;
-    this.newButton.hidden=!created||!!this.state?.connected||!this.state?.error;this.newButton.disabled=!!this.busy;
+    this.newButton.disabled=!!this.busy;this.renameButton.disabled=!!this.busy;
     this.status.hidden=!this.status.textContent;
   }
   dialog(title){
@@ -155,7 +187,7 @@ class SideChatPanel {
   async load(){const revision=this.readRevision=(this.readRevision||0)+1;try{const state=await this.request();if(this.disposed||revision!==this.readRevision)return;this.apply(state);this.workbench.syncSideChats(this.session,state.slots);}catch(e){if(!this.disposed&&revision===this.readRevision){this.status.textContent=BridgeI18n.t(e.message);if(this.state)this.state.connected=false;this.controls();}}}
   async create(){
     if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();this.status.textContent=BridgeI18n.t('正在创建临时侧边聊天…');
-    try{this.apply(await this.request({action:'create',creationId:this.creationId}));}
+    try{this.apply(await this.request({action:'create',creationId:this.creationId,...(this.tab?.customTitle?{title:this.tab.customTitle}:{})}));}
     catch(e){if(!this.disposed)this.status.textContent=BridgeI18n.t(e.message);}
     finally{this.busy=false;this.controls();}
   }
@@ -163,6 +195,8 @@ class SideChatPanel {
     if(this.disposed)return;
     if(this.state?.id&&this.state.id!==state.id){this.pending=null;this.creationId=uuid();this.input.value='';this.fileQuotes.clear(this.fileQuotes.key,this.fileQuotes.rows.map(row=>row.id));this.attachments.clear(this.attachments.key,this.attachments.ids());this.attachments.reset();this.references.close();this.modeSelected=false;this.workMode.value='default';}
     this.state=state;this.contextUsage.update(state);
+    if(this.workbench.setSideChatTitle(this.session,this.tab,state)&&this.workbench.current===this.session)this.workbench.paint();
+    this.updateCaption();
     if(state.id&&this.attachments.key!==state.id)this.attachments.open(state.id);
     if(state.id){this.modelButton.textContent=[state.model,state.effort].filter(Boolean).join(' · ')||BridgeI18n.t('模型与思考程度');delete this.modelButton.dataset.i18n;}
     if(!this.modeSelected)this.workMode.value=state.collaborationMode==='plan'?'plan':'default';
@@ -271,5 +305,5 @@ class SideChatPanel {
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }
-  dispose(){this.contextUsage.dispose();this.disposed=true;this.selectionAction.dispose();this.selectionMenu.menu?.close();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
+  dispose(){this.contextUsage.dispose();this.disposed=true;this.renameDialog?.close();this.selectionAction.dispose();this.selectionMenu.menu?.close();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
 }

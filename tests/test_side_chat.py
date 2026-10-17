@@ -239,6 +239,37 @@ class SideChatServiceTests(unittest.TestCase):
             bridge.side_chat(support.THREAD, 'browser', 'read', {'slot': '../../other'})
         self.assertEqual(self.fixture.state, before)
 
+    def test_side_chat_titles_are_shared_and_renaming_never_calls_the_runtime(self):
+        bridge = self.bridge
+        bridge.catalog_reader.executable = 'fixture-runtime'
+        bridge.side_chats.factory = lambda *args: SideChat(*args, runtime_factory=RuntimeFixture)
+        self.fixture.state['cwd'] = str(self.root)
+        slots = [str(uuid.uuid4()), str(uuid.uuid4())]
+        with patch('bridge.features.sessions.side_chat.check_runtime'):
+            first = bridge.side_chat(support.THREAD, 'phone', 'create',
+                {'creationId': str(uuid.uuid4()), 'slot': slots[0], 'title': '方案讨论'})
+            second = bridge.side_chat(support.THREAD, 'phone', 'create',
+                {'creationId': str(uuid.uuid4()), 'slot': slots[1], 'title': '验证计划'})
+        self.assertEqual(first['title'], '方案讨论')
+        chat = bridge.side_chats.chats[(support.THREAD, slots[0])]
+        calls = copy.deepcopy(chat.runtime.calls)
+        renamed = bridge.side_chat(support.THREAD, 'tablet', 'rename',
+            {'slot': slots[0], 'id': first['id'], 'title': '  保存  '})
+        self.assertEqual(renamed['title'], '保存')
+        self.assertGreater(renamed['titleRevision'], first['titleRevision'])
+        self.assertEqual(chat.runtime.calls, calls)
+        listing = bridge.side_chat(support.THREAD, 'browser', 'read', {})['slots']
+        self.assertEqual({row['slot']: row['title'] for row in listing},
+                         {slots[0]: '保存', slots[1]: '验证计划'})
+        self.assertEqual(bridge.side_chat(support.THREAD, 'phone', 'read', {'slot': slots[1]})['title'], second['title'])
+        for title in ('', ' ', 'x' * 121, 'line\nbreak', 'null\x00byte', None, 123):
+            with self.subTest(title=repr(title)), self.assertRaises(ValueError):
+                bridge.side_chat(support.THREAD, 'phone', 'rename',
+                    {'slot': slots[0], 'id': first['id'], 'title': title})
+        with self.assertRaises(ValueError):
+            bridge.side_chat(support.THREAD, 'phone', 'rename',
+                {'slot': slots[1], 'id': first['id'], 'title': 'Wrong child'})
+
 
 class SideChatHttpTests(unittest.TestCase):
     setUpClass = classmethod(support.HttpTests.setUpClass.__func__)
@@ -255,6 +286,8 @@ class SideChatHttpTests(unittest.TestCase):
         self.server.bridge.side_chat = lambda *args: calls.append(args) or {'connected': True}
         self.assertEqual(self.request('GET', path, headers=auth)[0], 200)
         for body in ({'action': 'create', 'creationId': str(uuid.uuid4())},
+                     {'action': 'create', 'creationId': str(uuid.uuid4()), 'title': 'Named side'},
+                     {'action': 'rename', 'id': support.THREAD, 'title': 'Renamed side'},
                      {'action': 'close', 'id': support.THREAD}, {'action': 'stop', 'id': support.THREAD},
                      {'action': 'respond', 'id': support.THREAD, 'requestId': 1, 'response': {'decision': 'decline'}},
                      {'action': 'send', 'id': support.THREAD, 'submissionId': str(uuid.uuid4()), 'text': 'question'}):

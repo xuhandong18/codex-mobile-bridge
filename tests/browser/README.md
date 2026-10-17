@@ -8,6 +8,8 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 
 本目录中的 `*.browser.js` 依赖真实 DOM、页面模块及隔离的网关夹具。它们由浏览器驱动加载并调用文件中声明的检查函数；Markdown 与公式脚本在加载后直接运行。各文件开头说明所需页面与前置状态。
 
+`side-chat-names.browser.js` 的 `runSideChatNamesBrowserTests()` 在全新的隔离侧边聊天网关中执行，检查连续创建三条独立聊天、创建前命名、创建后改名、名称发现与版本防回退、草稿隔离、空名称校验，以及名称与 UI 翻译词相同时仍按原文显示。驱动另开独立页面检查三个名称自动恢复与双向改名同步，并核对 390 像素和宽屏布局；只使用合成运行时，不发送真实模型消息。
+
 仅使用合成会话和测试工作区。不要在真实用户会话中运行会发送消息、修改文件或操作 Git 的夹具。
 
 `navigation-preferences.browser.js` 的 `runNavigationPreferenceBrowserTests()` 依赖合成导航网关，检查分区/项目折叠、新建设置与统一选词入口中的新建侧边聊天草稿。`markdown-navigation.browser.js` 的 `runMarkdownNavigationChecks()` 自建合成文件读取，检查章节、跨文件链接和保留标签栏的 Markdown 全屏；需在窄屏和平板宽度分别调用，检查结果应包含实际断言数。

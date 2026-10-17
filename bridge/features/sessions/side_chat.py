@@ -34,6 +34,12 @@ class SideChatError(ValueError):
     pass
 
 
+def side_chat_title(value):
+    if not isinstance(value, str) or re.search(r'[\x00-\x1f\x7f-\x9f]', value) or not 1 <= len(value.strip()) <= 120:
+        raise ValueError('聊天名称需为 1–120 个字符，不能包含换行或控制字符')
+    return value.strip()
+
+
 class SideRuntime:
     def __init__(self, executable, home, cwd, event):
         self.event = event
@@ -154,6 +160,8 @@ class SideChat:
         self.closed = False
         self.ready = False
         self.error = None
+        self.title = ''
+        self.title_revision = 0
         self.submissions = {}
         self.file_directory = None
         self.uploads = None
@@ -286,7 +294,17 @@ class SideChat:
                     request['supported'] = False
                     request['params'] = {'message': '此请求暂不支持在侧边聊天处理，请停止本次回复。'}
             return {**result, 'parentId': self.parent, 'error': self.error,
+                    'title': self.title, 'titleRevision': self.title_revision,
                     'submissions': [{'id': k, 'status': v['status'], 'text': v['text'], 'mode': v.get('mode', 'send'), 'workMode': v.get('workMode', 'default'), 'attachments': v.get('attachments', []), 'error': v.get('error')} for k, v in self.submissions.items()]}
+
+    def rename(self, title):
+        title = side_chat_title(title)
+        with self.lock:
+            if self.closed:
+                raise SideChatError('此侧边聊天已关闭或已失效，请刷新标签')
+            if self.title != title:
+                self.title, self.title_revision = title, self.title_revision + 1
+            return self.view()
 
     def settings(self, model, effort, catalog):
         if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}", model):
@@ -546,7 +564,7 @@ class SideChats:
         with self.lock:
             chat = self.chats.get(key)
             if action == 'read':
-                slots = [{'slot': identifier[1], 'id': child.id}
+                slots = [{'slot': identifier[1], 'id': child.id, 'title': child.title, 'titleRevision': child.title_revision}
                          for identifier, child in self.chats.items()
                          if identifier[0] == parent]
                 view = chat.view() if chat else {'id': None, 'connected': False, 'turns': [], 'requests': []}
@@ -564,6 +582,7 @@ class SideChats:
                     raise ValueError('此预览暂支持网关电脑上的聊天，SSH 远程工作区尚未接入侧边聊天')
                 if len(self.chats) >= 8 or len(self.creations) >= 1000:
                     raise ValueError('临时侧边聊天数量已达上限，请关闭不用的聊天；必要时重启网关')
+                title = side_chat_title(body['title']) if 'title' in body else ''
                 executable = self.executable_getter() if self.executable_getter else self.executable
                 if not executable:
                     raise SideChatError('找不到桌面 App 的 Codex 运行时')
@@ -572,6 +591,8 @@ class SideChats:
                     self.checked = True
                     self._checked_executable = executable
                 chat = self.factory(executable, self.home, parent, snapshot['cwd'], settings)
+                if title:
+                    chat.rename(title)
                 chat.file_directory = tempfile.TemporaryDirectory(prefix='side-files-', dir=self.directory)
                 chat.uploads = Uploads(chat.file_directory.name)
                 self.chats[key] = chat
@@ -579,6 +600,8 @@ class SideChats:
                 return chat.view()
             if not chat or chat.id != body.get('id'):
                 raise ValueError('此侧边聊天已关闭或已失效，请刷新标签')
+            if action == 'rename':
+                return chat.rename(body.get('title'))
             if action == 'close':
                 chat.close()
                 self.chats.pop(key)

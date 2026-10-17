@@ -3,16 +3,16 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const slot='00000000-0000-4000-8000-000000000001';
 
 function device(gateway){
-  const calls=[],timers=new Map(),listeners=new Map();let timerId=0;
+  const calls=[],timers=new Map(),listeners=new Map();let timerId=0,uuidId=0;
   const document={hidden:false,addEventListener:(name,run)=>listeners.set(name,run)};
-  const context=vm.createContext({document,AbortController,uuid:()=>slot,BridgeI18n:{t:text=>text},
+  const context=vm.createContext({document,AbortController,uuid:()=>slot.slice(0,-12)+String(++uuidId).padStart(12,'0'),BridgeI18n:{t:text=>text},
     setTimeout:run=>{timers.set(++timerId,run);return timerId;},clearTimeout:id=>timers.delete(id)});
   for(const file of ['side-chat','workbench'])vm.runInContext(fs.readFileSync('web/features/workspace/'+file+'.js','utf8'),context);
   vm.runInContext(`const Panel=SideChatPanel;
     SideChatPanel=class {
       constructor(workbench,session,tab){
         const panel=Object.create(Panel.prototype);
-        Object.assign(panel,{workbench,session,tab,status:{},apply(state){this.state=state;},controls(){},
+        Object.assign(panel,{workbench,session,tab,status:{},caption:{},apply(state){this.state=state;},controls(){},
           references:{close(){}},dispose(){this.disposed=true;}});
         panel.load();return panel;
       }
@@ -125,4 +125,23 @@ test('the new-tab side-chat entry opens a distinct draft when the previous side 
   assert.equal(session.files.length,2);assert.notEqual(session.active,old.id);
   assert.equal(session.files[1].slot,slot);assert.equal(old.sideChat.input.value,'Preserved draft');
   assert.ok(tablet.calls.every(call=>call.body===undefined),'opening a new draft does not send or replay messages');
+});
+
+test('repeated side-chat creation opens independent tabs instead of selecting the first chat',async()=>{
+  const tablet=device(async()=>({id:null,slots:[]}));
+  tablet.wb.open('parent','local');await tablet.flush();
+  tablet.wb.select=id=>tablet.wb.current.active=id;
+  for(let i=0;i<3;i++)tablet.wb.sideChat();
+  await tablet.flush();const tabs=tablet.wb.current.files;
+  assert.equal(tabs.length,3);assert.equal(new Set(tabs.map(tab=>tab.slot)).size,3);
+  assert.equal(tablet.wb.current.active,tabs[2].id);
+});
+
+test('side-chat titles sync to existing tabs while older reads cannot undo a rename',async()=>{
+  const tablet=device(async()=>({id:'child',slots:[{slot,id:'child',title:'First title',titleRevision:1}]}));
+  tablet.wb.open('parent','local');await tablet.flush();
+  const session=tablet.wb.current,tab=session.files[0];assert.equal(tab.name,'First title');
+  tablet.wb.syncSideChats(session,[{slot,id:'child',title:'保存',titleRevision:2}]);assert.equal(tab.name,'保存');
+  tablet.wb.syncSideChats(session,[{slot,id:'child',title:'Stale title',titleRevision:1}]);assert.equal(tab.name,'保存');
+  assert.equal(tab.customTitle,'保存');assert.equal(session.active,'chat');
 });

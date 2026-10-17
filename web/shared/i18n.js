@@ -3,6 +3,8 @@
 const BridgeI18n=(()=>{
 const en={
 "新建侧边聊天":"New side chat",
+"重命名侧边聊天":"Rename side chat",
+"修改侧边聊天名称":"Rename side chat",
 "此文件夹创建记录不属于当前登录":"This folder creation record belongs to another sign-in.",
 "文件夹选择已失效，请刷新父目录后重新创建":"The folder selection expired. Refresh the parent folder before creating it.",
 "文件夹选择标识无效，请刷新父目录后重新创建":"Invalid folder selection. Refresh the parent folder before creating it.",

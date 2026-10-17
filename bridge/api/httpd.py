@@ -739,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
                 owner = self.server.auth.key(self.token())
                 body = self.read_json() if write else {}
                 action = body.get('action') if write else 'read'
-                fields = {'create': {'action', 'creationId'}, 'send': {'action', 'id', 'text', 'submissionId', 'attachments', 'skills', 'mode', 'workMode'},
+                fields = {'create': {'action', 'creationId', 'title'}, 'rename': {'action', 'id', 'title'}, 'send': {'action', 'id', 'text', 'submissionId', 'attachments', 'skills', 'mode', 'workMode'},
                           'catalog': {'action', 'id'}, 'skills': {'action', 'id', 'query', 'offset', 'refresh', 'selected'},
                           'linux-permission-options': {'action', 'id'},
                           'permissions': {'action', 'id', 'preset', 'confirmed'}, 'cancel-queued': {'action', 'id', 'submissionId'}, 'settings': {'action', 'id', 'model', 'effort'},
