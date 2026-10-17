@@ -1,44 +1,70 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const {webcrypto}=require('node:crypto');
 const official={visible:true,loginType:'chatgpt',accountKey:'a'.repeat(64),limits:[],resetCredits:null,canReset:false,updatedAt:1900000000};
+const allNodes=node=>[node,...node.children.flatMap(allNodes)];
+const isSkillRequest=url=>url.includes('/catalog?')&&new URL(url,'http://fixture').searchParams.get('kind')==='skills';
+const skillRequests=ui=>ui.requests.filter(isSkillRequest);
+
+async function runSearch(ui,value){
+  const search=ui.run('composerReferences.search');search.value=value;search.oninput();
+  const pending=[...ui.timers.entries()].filter(([,t])=>t.delay===200);assert.equal(pending.length,1,'Reference search should keep one 200 ms debounce');
+  const timer=pending[0];
+  ui.timers.delete(timer[0]);await timer[1].fn();await new Promise(setImmediate);
+}
 
 async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage,accountSnapshot=null){
   const nodes=new Map(),timers=new Map(),requests=[],intervals=[],events={},responses=[];let timerId=0,delayNextSkill=null,failNextSkill=false;
-  const node=(tag='div')=>({tagName:tag.toUpperCase(),getBoundingClientRect(){return {width:0};},value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],style:{setProperty(k,v){this[k]=v;}},scrollTop:0,parentElement:{},
-    classList:{add(){},remove(){},toggle(){},contains(){return false;}},addEventListener(){},setAttribute(k,v){this[k]=v;},closest(selector){return selector==='dialog'?nodes.get('accounts-dialog'):null;},
-    replaceChildren(...children){this.children=children;},append(...children){for(const child of children){child.parentElement=this;this.children.push(child);}},after(child){const parent=this.parentElement;if(parent?.children){parent.children.splice(parent.children.indexOf(this)+1,0,child);child.parentElement=parent;}},querySelectorAll(){return [];},querySelector(){return null;},
-    showModal(){this.open=true;},close(){this.open=false;}});
+  const matches=(node,selector)=>selector.startsWith('.')?String(node.className||'').split(/\s+/).includes(selector.slice(1)):
+    selector.startsWith('[')?node[selector.slice(1,-1).split('=')[0]]===selector.slice(1,-1).split('=')[1]?.replace(/["']/g,''):node.tagName===selector.toUpperCase();
+  const node=(tag='div')=>{const listeners=new Map();return {tagName:tag.toUpperCase(),getBoundingClientRect(){return {width:0};},value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],style:{setProperty(k,v){this[k]=v;}},scrollTop:0,parentElement:null,
+    classList:{add(){},remove(){},toggle(){},contains(){return false;}},setAttribute(k,v){this[k]=String(v);},
+    addEventListener(type,fn,options={}){if(!listeners.has(type))listeners.set(type,[]);listeners.get(type).push({fn,once:options.once});},
+    dispatchEvent(event){event.target??=this;this['on'+event.type]?.(event);for(const entry of [...listeners.get(event.type)||[]]){if(entry.once)listeners.set(event.type,listeners.get(event.type).filter(value=>value!==entry));entry.fn(event);}return !event.defaultPrevented;},
+    closest(selector){for(let current=this;current;current=current.parentElement)if(matches(current,selector))return current;return selector==='dialog'?nodes.get('accounts-dialog'):null;},
+    replaceChildren(...children){for(const child of this.children)child.parentElement=null;this.children=[];this.textContent='';this.append(...children);},append(...children){for(const child of children){child.parentElement=this;this.children.push(child);}},after(child){const parent=this.parentElement;if(parent?.children){parent.children.splice(parent.children.indexOf(this)+1,0,child);child.parentElement=parent;}},
+    querySelectorAll(selector){return this.children.flatMap(allNodes).filter(child=>selector.split(',').some(value=>matches(child,value.trim())));},querySelector(selector){return this.querySelectorAll(selector)[0]||null;},
+    focus(){document.activeElement=this;},remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=null;},
+    setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},
+    showModal(){this.open=true;},close(){if(this.open){this.open=false;this.dispatchEvent({type:'close'});}}};};
   const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
   for(const match of html.matchAll(/<([a-z]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)){
     const n=node(match[1]);n.hidden=/\bhidden\b/.test(match[2]);nodes.set(match[3],n);
   }
-  const storage=()=>({getItem(){return null;},setItem(){},clear(){}});
+  const document={body:node('body'),activeElement:null,addEventListener(){},dispatchEvent(){},documentElement:{},getElementById:id=>nodes.get(id)||allNodes(document.body).find(node=>node.id===id),querySelector:()=>({classList:{toggle(){}}}),querySelectorAll:()=>[],createElement:node};
+  document.body.append(...nodes.values());
+  for(const value of ['default','plan','goal']){const option=node('option');option.value=value;nodes.get('work-mode').append(option);}
+  const storage=()=>{const saved=new Map();return {getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,String(value)),removeItem:key=>saved.delete(key),clear:()=>saved.clear()};};
   const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
-  const context=vm.createContext({SidebarNavigation:class{},ChatContextMenu:class{},SelectedTextAction:class{},NewChatSettings:class{constructor(){this.defaults={remember(){}};}load(){}},ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}async openChatLink(hash){assert.equal(hash,'','This fixture enters without a chat deep link');return false;}},DesktopSessionsView:class{clear(){}},Workbench:class{open(){}reset(){}setThumbnails(){}relabel(){}},Event:class{constructor(type){this.type=type;}},navigator:{userAgent:'test'},Date,Option:function(text,value){return {...node('option'),textContent:text,value};},document:{addEventListener(){},dispatchEvent(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:()=>({classList:{toggle(){}}}),querySelectorAll:()=>[],createElement:node},
-    window:{addEventListener:(name,fn)=>events[name]=fn},localStorage:storage(),sessionStorage:storage(),
+  const context=vm.createContext({SidebarNavigation:class{},ChatContextMenu:class{},SelectedTextAction:class{},NewChatSettings:class{constructor(){this.defaults={remember(){}};}load(){}},ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}async openChatLink(hash){assert.equal(hash,'','This fixture enters without a chat deep link');return false;}},DesktopSessionsView:class{clear(){}},Workbench:class{open(){}reset(){}setThumbnails(){}relabel(){}},Event:class{constructor(type){this.type=type;}},navigator:{userAgent:'test'},Date,crypto:webcrypto,Option:function(text,value){return {...node('option'),textContent:text,value};},document,
+    AbortController,window:{addEventListener:(name,fn)=>events[name]=fn},localStorage:storage(),sessionStorage:storage(),
     location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},
     setTimeout(fn,delay){timers.set(++timerId,{fn,delay});return timerId;},clearTimeout(id){timers.delete(id);},setInterval(fn,delay){intervals.push({fn,delay});},
     fetch:async(url,options={})=>{
       requests.push(url);
       if(url==='/api/auth')return response({authenticated:true,csrf:'fixture',uiLanguage:gatewayLanguage});
       if(url.startsWith('/api/sessions?'))return response({sessions:[]});
+      if(url==='/api/projects?metadata=1')return response({sections:[],projects:[]});
+      if(url.includes('/workspace?'))return response({root:'D:\\fixture',entries:[{name:'README.md',path:'README.md',kind:'file'}],nextOffset:null});
       if(url==='/api/accounts')return response(accountSnapshot||{accounts:[],activeId:null,current:{kind,status:'ready',name:'Fixture'},switch:{phase:'idle'}});
-      if(url.includes('/catalog?kind=skills')){
+      if(isSkillRequest(url)){
         if(failNextSkill){failNextSkill=false;return response({error:'Skill fixture error'},500);}
-        if(delayNextSkill){const wait=delayNextSkill;delayNextSkill=null;await wait.promise;}
-        const params=new URL(url,'http://fixture').searchParams;const rows=catalog.skills||[];const query=(params.get('q')||'').toLowerCase();
+        const params=new URL(url,'http://fixture').searchParams;const rows=catalog?.skills||[];const query=(params.get('q')||'').toLowerCase();
         const filtered=rows.filter(row=>[row.name,row.displayName,row.description].join(' ').toLowerCase().includes(query));
-        const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||200),ids=params.getAll('id');
-        return response({skills:filtered.slice(offset,offset+limit),selectedSkills:rows.filter(row=>ids.includes(row.id)),errors:[],total:filtered.length,offset,limit,cache:{state:'fresh',updatedAt:1,bucketId:'fixture-bucket'}});
+        const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||200);
+        const result={skills:filtered.slice(offset,offset+limit),errors:[],total:filtered.length,offset,limit,cache:{state:'fresh',updatedAt:1,bucketId:'fixture-bucket'}};
+        if(delayNextSkill){const wait=delayNextSkill;delayNextSkill=null;await wait.promise;}
+        return response(result);
       }
       if(url.includes('/catalog?kind=models'))return response(catalog);
       if(url.includes('/catalog'))return response(catalog);
       if(url.includes('/settings')){responses.push(JSON.parse(options.body));return response({confirmed:true});}
       if(url.includes('/respond')){responses.push(JSON.parse(options.body));return response({});}
+      if(url.includes('/send')){responses.push(JSON.parse(options.body));return response({status:'accepted'});}
       throw Error('Unexpected request '+url);
     }});
-  for(const file of ['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/chat/session-list.js','web/features/accounts/account.js','web/features/accounts/accounts.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/shell/app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
+  for(const file of ['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/chat/session-list.js','web/features/accounts/account.js','web/features/accounts/accounts.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/features/chat/reference-picker.js','web/shell/app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
   await new Promise(setImmediate);
   return {nodes,requests,timers,intervals,events,responses,run:code=>vm.runInContext(code,context),
     failNextSkill(){failNextSkill=true;},
@@ -110,11 +136,21 @@ test('API model discovery failure shows its error with manual input instead of s
  assert.equal(ui.nodes.get('model-select').children.some(o=>o.value.startsWith('gpt')),false);
  assert.equal(ui.responses.length,0);
 });
-test('selected skill pills render before the catalog response arrives',async()=>{
+test('reference picker creates its dialog lazily and replaces the old Skill selection UI',async()=>{
   const ui=await fixture(r=>r(official));
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';catalogData={models:null,skills:null};selectedSkills=new Set(['fixture-skill']);renderSkillPills()");
-  assert.equal(ui.nodes.get('skill-count').textContent,'(1)');
-  assert.equal(ui.nodes.get('skill-pills').children[0].textContent,'已选 Skill ×');
+  const picker=ui.run('composerReferences');
+  assert.equal(picker.dialog,undefined);
+  assert.equal(skillRequests(ui).length,0);
+  assert.equal(picker.button,ui.nodes.get('skills-button'));
+  assert.match(fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8'),/<button\b[^>]*\bid="skills-button"[^>]*>＋<\/button>/);
+  for(const id of ['skill-count','skill-pills','skills-dialog','skill-list','skills-error'])assert.equal(ui.nodes.has(id),false,id);
+  ui.run("currentId='thread';currentHost='local';state={connected:true};startCatalog()");await new Promise(setImmediate);
+  assert.equal(skillRequests(ui).length,0,'Model preloading must leave skills lazy');
+  await picker.button.onclick();
+  assert.equal(picker.dialog.open,true);
+  assert.deepEqual(Array.from(picker.tabButtons.keys()),['skills','files','sessions']);
+  assert.deepEqual(Array.from(picker.tabButtons.values(),button=>button.textContent),['技能','项目文件','会话']);
+  assert.equal(skillRequests(ui).length,1);
 });
 test('cached async model catalog still renders the picker instead of returning raw rows',async()=>{
   const catalog={models:[{id:'fixture-model',name:'Fixture',efforts:['high']}],skills:[],modelSource:'codex',currentModel:'fixture-model',fastMode:{allowed:false}};
@@ -140,111 +176,188 @@ test('model catalog accepts legacy array payloads and reports invalid payload ty
   await bad.nodes.get('model-button').onclick();
   assert.match(bad.nodes.get('model-error').textContent,/models: string/);
 });
-test('skill catalog preloads one page, renders full descriptions, and repeated opens do not refetch',async()=>{
+test('opening references loads one skill page and repeated opens do not refetch',async()=>{
   const rows=Array.from({length:5000},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description:'Fixture skill '+i}));
   const ui=await fixture(r=>r(official),'api',{models:[],skills:rows,modelSource:'codex',fastMode:{allowed:false}});
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';state={connected:true}");
-  await ui.nodes.get('skills-button').onclick();
-  const count=ui.requests.filter(url=>url.includes('/catalog?kind=skills')).length;
-  assert.equal(count,1);
-  assert.equal(ui.nodes.get('skill-list').children.length,200);
-  const all=n=>[n,...n.children.flatMap(all)];assert.ok(all(ui.nodes.get('skill-list')).some(node=>node.textContent==='Skill 0'));
-  assert.equal(all(ui.nodes.get('skill-list')).some(node=>node.textContent==='Skill 4000'),false);
-  await ui.nodes.get('skills-button').onclick();
-  assert.equal(ui.requests.filter(url=>url.includes('/catalog?kind=skills')).length,1);
-});
-test('skill search debounces to a new SQLite-backed page and refresh is explicit',async()=>{
-  const rows=Array.from({length:3},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description:'Fixture '+i}));
-  const ui=await fixture(r=>r(official),'api',{models:[],skills:rows,modelSource:'codex',fastMode:{allowed:false}});
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';state={connected:true}");
-  await ui.nodes.get('skills-button').onclick();
-  const search=ui.nodes.get('skill-search');search.value='fixture';search.oninput();
-  const timer=[...ui.timers.entries()].find(([,t])=>t.delay===200);assert.ok(timer);
-  ui.timers.delete(timer[0]);await timer[1].fn();
-  const searched=ui.requests.filter(url=>url.includes('/catalog?kind=skills')).at(-1);
-  assert.match(searched,/q=fixture/);assert.match(searched,/limit=200/);assert.match(searched,/offset=0/);
-  await ui.nodes.get('skills-refresh').onclick();
-  assert.match(ui.requests.filter(url=>url.includes('/catalog?kind=skills')).at(-1),/refresh=true/);
-});
-test('a stale skill append cannot overwrite a newer search result',async()=>{
-  const rows=Array.from({length:500},(_,i)=>({id:'skill-'+i,name:i===0?'needle skill':'skill-'+i,displayName:i===0?'Needle Skill':'Skill '+i,description:'Fixture '+i}));
-  const ui=await fixture(r=>r(official),'api',{models:[],skills:rows,modelSource:'codex',fastMode:{allowed:false}});
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';state={connected:true}");
-  await ui.nodes.get('skills-button').onclick();
-  const releaseAppend=ui.delayNextSkill();
-  const stale=ui.run('loadSkills({append:true})');
-  ui.nodes.get('skill-search').value='needle';ui.nodes.get('skill-search').oninput();
-  const timer=[...ui.timers.entries()].find(([,t])=>t.delay===200);assert.ok(timer);ui.timers.delete(timer[0]);
-  await timer[1].fn();await new Promise(setImmediate);
-  releaseAppend();await stale;await new Promise(setImmediate);
-  assert.equal(ui.run('skillTotal'),1);
-  assert.deepEqual(Array.from(ui.run('catalogData.skills.map(row=>row.id)')),['skill-0']);
-  assert.equal(ui.run('skillQuery.offset'),1);
-});
-test('skill search and refresh reset the list scroll position',async()=>{
-  const rows=Array.from({length:500},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description:'Fixture '+i}));
-  const ui=await fixture(r=>r(official),'api',{models:[],skills:rows,modelSource:'codex',fastMode:{allowed:false}});
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';state={connected:true}");
-  await ui.nodes.get('skills-button').onclick();
-  ui.nodes.get('skill-list').scrollTop=20000;ui.run('renderSkills()');
-  ui.nodes.get('skill-search').value='skill-499';ui.nodes.get('skill-search').oninput();
-  const timer=[...ui.timers.entries()].find(([,t])=>t.delay===200);assert.ok(timer);ui.timers.delete(timer[0]);
-  await timer[1].fn();
-  assert.equal(ui.nodes.get('skill-list').scrollTop,0);
-  assert.ok(ui.nodes.get('skill-list').children.length<=34);
-  await ui.nodes.get('skills-refresh').onclick();
-  assert.equal(ui.nodes.get('skill-list').scrollTop,0);
-});
-test('a missing selected skill is visibly invalid and blocks submission',async()=>{
-  const rows=[{id:'available',name:'available',displayName:'Available',description:'Available'}];
-  const ui=await fixture(r=>r(official),'api',{models:[],skills:rows,modelSource:'codex',fastMode:{allowed:false}});
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';state={connected:true};selectedSkills=new Set(['available','missing']);attachments.ready=()=>true;attachments.ids=()=>[]");
-  await ui.nodes.get('skills-button').onclick();
-  assert.equal(ui.nodes.get('skill-count').textContent,'(2)');
-  assert.ok([...ui.nodes.get('skill-pills').children].some(node=>node.textContent==='已失效 Skill ×'));
-  ui.nodes.get('message').value='fixture';
-  await ui.nodes.get('composer').onsubmit({preventDefault(){}});
-  assert.equal(ui.nodes.get('send-error').textContent,'已选 Skill 已失效，请刷新列表后重新选择');
-  assert.equal(ui.responses.length,0);
-});
-test('a skill selected during pagination is not invalidated by older hydration',async()=>{
-  const rows=Array.from({length:500},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description:'Fixture'}));
-  const ui=await fixture(r=>r(official),'api',{models:[],skills:rows,modelSource:'codex',fastMode:{allowed:false}});
-  ui.run("currentId='11111111-1111-4111-8111-111111111111';currentHost='local';state={connected:true}");
-  await ui.nodes.get('skills-button').onclick();
-  const release=ui.delayNextSkill(),pending=ui.run('loadSkills({append:true})');
-  const all=n=>[n,...n.children.flatMap(all)];
-  const checkbox=all(ui.nodes.get('skill-list')).find(n=>n.tagName==='INPUT');
-  assert.ok(checkbox);checkbox.checked=true;checkbox.onchange();
-  release();await pending;
-  assert.deepEqual(Array.from(ui.run('[...selectedSkills]')),['skill-0']);
-  assert.equal(ui.run('invalidSkills.size'),0);
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences');assert.equal(skillRequests(ui).length,0);
+  await picker.open();
+  assert.equal(skillRequests(ui).length,1);
+  assert.equal(picker.active.items.length,200);assert.equal(picker.active.nextOffset,200);
+  assert.equal(picker.list.querySelectorAll('.reference-item').length,200);
+  assert.ok(allNodes(picker.list).some(node=>node.textContent==='Skill 0'));
+  assert.equal(allNodes(picker.list).some(node=>node.textContent==='Skill 4000'),false);
+  picker.close();await picker.button.onclick();
+  assert.equal(skillRequests(ui).length,1);
 });
 
+test('skill search debounces to a new page and refresh is explicit',async()=>{
+  const rows=Array.from({length:3},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description:'Fixture '+i}));
+  const ui=await fixture(r=>r(official),'api',{skills:rows});
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences');await picker.open();
+  picker.search.value='ignored';picker.search.oninput();
+  assert.equal(skillRequests(ui).length,1,'Typing should wait for the debounce');
+  await runSearch(ui,'fixture');
+  assert.equal(skillRequests(ui).length,2,'Later input should cancel the earlier debounce');
+  const searched=skillRequests(ui).at(-1);
+  assert.match(searched,/q=fixture/);assert.match(searched,/limit=200/);assert.match(searched,/offset=0/);
+  assert.doesNotMatch(searched,/[?&]refresh=true/);
+  await picker.refresh.onclick();
+  assert.match(skillRequests(ui).at(-1),/refresh=true/);
+});
+
+test('a stale skill append cannot overwrite a newer search result',async()=>{
+  const rows=Array.from({length:500},(_,i)=>({id:'skill-'+i,name:i===0?'needle skill':'skill-'+i,displayName:i===0?'Needle Skill':'Skill '+i,description:'Fixture '+i}));
+  const ui=await fixture(r=>r(official),'api',{skills:rows});
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences');await picker.open();
+  const releaseAppend=ui.delayNextSkill(),stale=picker.loadPage({append:true});
+  assert.match(skillRequests(ui).at(-1),/offset=200/);
+  await runSearch(ui,'needle');releaseAppend();await stale;
+  assert.deepEqual(Array.from(picker.active.items,row=>row.id),['skill-0']);
+  assert.equal(picker.active.query,'needle');assert.equal(picker.active.nextOffset,null);
+  assert.equal(picker.error.textContent,'');assert.equal(picker.list.querySelectorAll('.reference-item').length,1);
+});
+
+test('skill search and refresh reset the list scroll position',async()=>{
+  const rows=Array.from({length:500},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description:'Fixture '+i}));
+  const ui=await fixture(r=>r(official),'api',{skills:rows});
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences');await picker.open();
+  picker.list.scrollTop=20000;await runSearch(ui,'skill-499');
+  assert.equal(picker.list.scrollTop,0);
+  assert.deepEqual(Array.from(picker.active.items,row=>row.id),['skill-499']);
+  picker.list.scrollTop=500;await picker.refresh.onclick();
+  assert.equal(picker.list.scrollTop,0);
+});
+
+test('choosing a skill inserts editable plain text without pills or implicit skills in submission',async()=>{
+  const rows=[{id:'available',name:'skill-name',displayName:'Available',description:'Available'}];
+  const ui=await fixture(r=>r(official),'api',{skills:rows});
+  ui.run("currentId='thread';currentHost='local';state={connected:true,status:'idle'};sessionStorage.setItem('skills:'+chatKey(),JSON.stringify(['available','missing']));attachments.open(chatKey());workModes.open(chatKey())");
+  const input=ui.nodes.get('message'),picker=ui.run('composerReferences');
+  let inputEvents=0;input.addEventListener('input',()=>inputEvents++);
+  input.value='Use this skill';input.setSelectionRange(input.value.length,input.value.length);
+  await picker.open();
+  assert.equal(picker.list.querySelectorAll('input').length,0,'Skills should be insertion buttons without checkboxes');
+  const option=picker.list.querySelector('.reference-item');assert.ok(option);option.onclick();
+  assert.equal(input.value,'Use this skill\n$skill-name\n');
+  assert.equal(inputEvents,1);assert.equal(picker.dialog.open,false);
+  assert.equal(ui.nodes.has('skill-pills'),false);assert.equal(ui.responses.length,0);
+  assert.equal(ui.run('document.activeElement'),input);
+  ui.nodes.get('send-mode').value='send';
+  for(const text of [input.value,'An ordinary message after deleting the reference']){
+    input.value=text;const previous=ui.responses.length;
+    await ui.nodes.get('composer').onsubmit({preventDefault(){}});
+    assert.equal(ui.responses.length,previous+1);assert.equal(ui.responses.at(-1).text,text);
+    assert.equal(Object.hasOwn(ui.responses.at(-1),'skills'),false);
+    assert.equal(ui.nodes.get('send-error').textContent,'');
+  }
+});
+
+test('a stale skill search cannot overwrite a later search',async()=>{
+  const rows=[{id:'older',name:'older',description:'First query'},{id:'newer',name:'newer',description:'Second query'}];
+  const ui=await fixture(r=>r(official),'api',{skills:rows});
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences');await picker.open();
+  const release=ui.delayNextSkill();
+  picker.search.value='older';picker.search.oninput();
+  const timer=[...ui.timers.entries()].find(([,t])=>t.delay===200);assert.ok(timer);ui.timers.delete(timer[0]);
+  const stale=timer[1].fn();
+  await runSearch(ui,'newer');release();await stale;
+  assert.equal(picker.active.query,'newer');
+  assert.deepEqual(Array.from(picker.active.items,item=>item.id),['newer']);
+  assert.equal(picker.error.textContent,'');
+});
+
+test('reference tabs keep separate state and ignore a skill response after switching tabs',async()=>{
+  const rows=[{id:'needle',name:'needle',description:'Fixture skill'}];
+  const ui=await fixture(r=>r(official),'api',{skills:rows});
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences');await picker.open();await runSearch(ui,'needle');
+  assert.deepEqual(Array.from(picker.active.items,item=>item.id),['needle'],'The search must finish before the cancelled refresh begins');
+  assert.equal(picker.active.loaded,true);
+  const skillsState=picker.active,release=ui.delayNextSkill(),stale=picker.refresh.onclick();
+  await picker.tabButtons.get('files').onclick();
+  assert.equal(picker.active,picker.states.get('files'));
+  assert.equal(picker.search.value,'');assert.equal(picker.list.querySelector('strong').textContent,'README.md');
+  release();await stale;
+  assert.equal(picker.active,picker.states.get('files'));
+  assert.equal(picker.list.querySelector('strong').textContent,'README.md');assert.equal(picker.error.textContent,'');
+  await picker.tabButtons.get('sessions').onclick();
+  assert.equal(picker.active,picker.states.get('sessions'));assert.equal(picker.active.loaded,true);
+  await picker.setTab('skills');
+  assert.equal(picker.active,skillsState);assert.equal(picker.search.value,'needle');
+  assert.deepEqual(Array.from(picker.active.items,item=>item.id),['needle']);
+});
+
+for(const [changed,target] of [['conversation',"currentId='another-thread'"],['host',"currentHost='remote'"]])test('a stale skill response stays isolated when the '+changed+' changes',async()=>{
+  const catalog={skills:[{id:'old',name:'old',description:'Old context'}]};
+  const ui=await fixture(r=>r(official),'api',catalog);
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  const picker=ui.run('composerReferences'),release=ui.delayNextSkill(),stale=picker.open();
+  catalog.skills=[{id:'new',name:'new',description:'New context'}];
+  ui.run(target);await picker.open();
+  release();await stale;
+  assert.deepEqual(Array.from(picker.active.items,item=>item.id),['new']);
+  assert.equal(picker.active.query,'');assert.equal(picker.active.nextOffset,null);
+  assert.equal(picker.list.querySelector('strong').textContent,'new');assert.equal(picker.error.textContent,'');
+  assert.equal(picker.loading,false);
+  const url=new URL(skillRequests(ui).at(-1),'http://fixture');
+  assert.equal(url.pathname,changed==='conversation'?'/api/sessions/another-thread/catalog':'/api/sessions/thread/catalog');
+  assert.equal(url.searchParams.get('host'),changed==='host'?'remote':'local');
+});
+
+test('an account catalog reset closes references and discards cached source pages',async()=>{
+  const ui=await fixture(r=>r(official),'chatgpt',{skills:[{id:'skill',name:'sample'}]});
+  ui.run("currentId='thread';currentHost='local';state={connected:true}");
+  await ui.nodes.get('skills-button').onclick();
+  assert.equal(ui.run('composerReferences.dialog.open'),true);assert.equal(ui.run('composerReferences.active.items.length'),1);
+  ui.run('resetModelCatalog()');
+  assert.equal(ui.run('composerReferences.dialog.open'),false);assert.equal(ui.run('composerReferences.states.size'),0);
+  await ui.nodes.get('skills-button').onclick();
+  assert.equal(ui.requests.filter(url=>url.includes('kind=skills')).length,2,'The same chat must reload its new account catalog');
+});
 
 test('Skill failure clears the loading state and refresh can recover',async()=>{
   const ui=await fixture(r=>r(official),'chatgpt',{skills:[{id:'skill',name:'sample',displayName:'Sample',description:'fixture'}]});
-  ui.run("currentId='thread';currentHost='local'");
-  ui.failNextSkill();
-  await ui.run('openSkills()');
-  assert.equal(ui.nodes.get('skill-list').textContent,'Skill 加载失败，请点击刷新重试');
-  assert.equal(ui.nodes.get('skills-error').textContent,'Skill fixture error');
-  await ui.run('openSkills(true)');
-  assert.equal(ui.run('skillPages.length'),1);
-  assert.equal(ui.nodes.get('skills-error').textContent,'');
+  ui.run("currentId='thread';currentHost='local'");ui.failNextSkill();
+  const picker=ui.run('composerReferences');await picker.open();
+  assert.equal(picker.error.textContent,'Skill fixture error');
+  assert.equal(picker.loading,false);assert.equal(picker.refresh.disabled,false);
+  assert.equal(picker.list.querySelectorAll('.reference-item').length,0);
+  await picker.refresh.onclick();
+  assert.equal(picker.active.items.length,1);assert.equal(picker.active.loaded,true);
+  assert.equal(picker.error.textContent,'');assert.equal(picker.loading,false);
+  assert.match(skillRequests(ui).at(-1),/refresh=true/);
 });
 
+test('a failed explicit skill refresh can be retried without leaving the picker loading',async()=>{
+  const catalog={skills:[{id:'old',name:'old'}]},ui=await fixture(r=>r(official),'api',catalog);
+  ui.run("currentId='thread';currentHost='local'");const picker=ui.run('composerReferences');await picker.open();
+  ui.failNextSkill();await picker.refresh.onclick();
+  assert.equal(picker.error.textContent,'Skill fixture error');
+  assert.equal(picker.loading,false);assert.equal(picker.refresh.disabled,false);
+  catalog.skills=[{id:'new',name:'new'}];await picker.refresh.onclick();
+  assert.equal(picker.error.textContent,'');assert.equal(picker.loading,false);
+  assert.deepEqual(Array.from(picker.active.items,item=>item.id),['new']);
+  assert.match(skillRequests(ui).at(-1),/refresh=true/);
+});
 
 test('Skill pagination uses actual scroll geometry and keeps complete descriptions',async()=>{
   const description='Full multiline Skill description. '.repeat(30);
   const rows=Array.from({length:220},(_,i)=>({id:'skill-'+i,name:'skill-'+i,displayName:'Skill '+i,description}));
   const ui=await fixture(r=>r(official),'api',{skills:rows});
-  ui.run("currentId='thread';currentHost='local'");await ui.run('openSkills()');
-  assert.equal(ui.nodes.get('skill-list').children[0].children[1].children[1].textContent,description);
-  Object.assign(ui.nodes.get('skill-list'),{scrollHeight:30000,clientHeight:400,scrollTop:1000});
-  ui.run('skillScroll()');assert.equal(ui.requests.filter(x=>x.includes('kind=skills')).length,1);
-  ui.nodes.get('skill-list').scrollTop=29500;ui.run('skillScroll()');await new Promise(setImmediate);
-  assert.equal(ui.run('skillPages.length'),220);
+  ui.run("currentId='thread';currentHost='local'");const picker=ui.run('composerReferences');await picker.open();
+  assert.equal(picker.list.querySelector('strong').textContent,'Skill 0');
+  assert.equal(picker.list.querySelector('small').textContent,description);
+  Object.assign(picker.list,{scrollHeight:30000,clientHeight:400,scrollTop:1000});
+  picker.list.onscroll();assert.equal(skillRequests(ui).length,1);
+  picker.list.scrollTop=29500;picker.list.onscroll();await new Promise(setImmediate);
+  assert.equal(picker.active.items.length,220);assert.equal(picker.active.nextOffset,null);
+  assert.equal(picker.more.hidden,true);assert.match(skillRequests(ui).at(-1),/offset=200/);
+  assert.equal(picker.list.querySelectorAll('small').at(-1).textContent,description);
 });
 
 test('entering a gateway follows its language, and manual switching remains available',async()=>{

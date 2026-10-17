@@ -1,0 +1,34 @@
+.tool-button.reference-button{display:grid;place-items:center;flex:none;width:34px;height:34px;padding:6px;border-radius:50%;font-size:23px;line-height:1;color:var(--text)}
+.reference-button svg{width:18px;height:18px}
+.reference-picker{width:min(94vw,600px);overflow:hidden}
+.reference-picker[open]{display:flex;flex-direction:column;gap:10px}
+.reference-picker .picker-head{margin-bottom:0;flex:none}
+.reference-picker p{margin:0;flex:none}
+.reference-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);flex:none}
+.reference-tabs button{flex:1;min-height:42px;padding:8px 6px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font-size:13px}
+.reference-tabs button[aria-selected=true]{color:var(--green);border-bottom-color:var(--green)}
+.reference-picker .reference-search{width:100%;max-width:none;flex:none}
+.reference-picker .reference-options{display:flex;align-items:center;gap:7px;margin:0;font-size:12px;flex:none;color:var(--muted)}
+.reference-options input{margin:0;accent-color:var(--green)}
+.reference-project{overflow-wrap:anywhere;max-height:3.5em;overflow:auto}
+.reference-list{overflow:auto;min-height:120px;max-height:46dvh;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;flex:1 1 auto}
+.reference-group{min-width:0;margin:2px 0}
+.reference-group>summary{min-height:42px;padding:10px 6px;cursor:pointer;font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.reference-children{margin-left:12px;padding-left:8px;border-left:1px solid var(--line);min-width:0}
+.reference-item{display:block;width:100%;min-height:48px;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text);padding:10px;cursor:pointer}
+.reference-item:hover,.reference-item:focus-visible{background:var(--soft)}
+.reference-item strong{display:block;font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.reference-item small{display:block;margin-top:4px;font-size:11px;line-height:1.5;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.reference-picker .picker-actions{padding-top:2px;justify-content:space-between;flex:none}
+.reference-picker .error:empty,.reference-picker .muted:empty{display:none}
+@media(max-width:540px){.reference-picker{padding:16px}.reference-children{margin-left:7px;padding-left:5px}.reference-list{max-height:44dvh}}
+@media(max-height:540px){
+  .picker.reference-picker{padding:12px;max-height:94dvh}
+  .reference-picker[open]{gap:6px}
+  .reference-picker .reference-hint{display:none}
+  .reference-list{min-height:40px;max-height:none}
+  .reference-tabs button{min-height:34px;padding:6px}
+  .reference-picker .reference-search{height:36px;padding:8px 12px}
+  .reference-picker .reference-project{max-height:1.6em}
+  .reference-picker .picker-head .icon-button{height:30px;min-height:30px}
+}

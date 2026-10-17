@@ -785,7 +785,14 @@ class Handler(BaseHTTPRequestHandler):
                 if operation == 'git-diff':
                     return self.output(200, bridge.workspace(thread_id, operation, {'path': relative, 'section': query.get('section', ['unstaged'])[0]}))
                 if operation is None:
-                    return self.output(200, bridge.workspace(thread_id, 'list', {'path': relative, 'hidden': query.get('hidden') == ['true'],
+                    booleans = {}
+                    boolean_query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    for name in ('hidden', 'recursive'):
+                        values = boolean_query.get(name, ['false'])
+                        if values not in (['true'], ['false']):
+                            raise ValueError('目录查询布尔参数无效')
+                        booleans[name] = values == ['true']
+                    return self.output(200, bridge.workspace(thread_id, 'list', {'path': relative, **booleans,
                         'search': query.get('search', [''])[0], 'offset': int(query.get('offset', ['0'])[0])}))
                 if operation == 'download':
                     policy = transfer_settings(self.server.transfer_directory)

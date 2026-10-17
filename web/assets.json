@@ -3,7 +3,7 @@
   "/index.html": "index.html",
   "/icon.png": "icon.png",
   "/manifest.webmanifest": "manifest.webmanifest",
-  "/app.js": ["shared/dialog-dismiss.js", "features/chat/context-menu.js", "features/chat/session-list.js", "features/chat/sidebar-management.js", "shell/app.js"],
+  "/app.js": ["shared/dialog-dismiss.js", "features/chat/context-menu.js", "features/chat/session-list.js", "features/chat/sidebar-management.js", "features/chat/reference-picker.js", "shell/app.js"],
   "/bootstrap.js": "shared/bootstrap.js",
   "/style.css": [
     "shell/style.css",
@@ -11,7 +11,8 @@
     "shell/chat-list.css",
     "layouts/compact/shell.css",
     "shell/content.css",
-    "features/chat/message-map.css"
+    "features/chat/message-map.css",
+    "features/chat/reference-picker.css"
   ],
   "/activity.js": "features/chat/activity.js",
   "/attachments.js": "features/chat/attachments.js",

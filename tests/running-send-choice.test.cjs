@@ -22,7 +22,6 @@ function fixture({active=true}={}){
   $('message').value='A follow-up with an attachment';$('send-mode').value='send';
   const ctx={$,t:value=>value,document,el:(...args)=>new Element(...args),currentId:'parent',currentHost:'local',
     state:{status:active?'active':'idle'},runningSendChoice:null,sending:false,applyingNewChat:null,
-    invalidSkills:new Set(),selectedSkills:new Set(['skill-a']),
     currentAccess:()=>({canSend:true}),uuid:()=>String(++ctx.ids),ids:0,
     chatKey:(id=ctx.currentId,host=ctx.currentHost)=>host+'|'+id,
     sessionUrl:(id,action,host)=>host+'/'+id+'/'+action,
@@ -30,7 +29,7 @@ function fixture({active=true}={}){
     workModes:{value:mode=>mode==='steer'?null:'plan',render(){},submitted(){}},
     files:['file-a'],attachments:{ready:()=>true,ids:()=>[...ctx.files],setLocked(value){this.locked=value;},clear(){ctx.files=[];}},
     BridgeI18n:{locale:()=> 'zh-CN'},window:{BridgePresentation:{resizeMessage(){},showError(){}}},
-    bumpRecency(){},renderSkillPills(){},toast:text=>notices.push(text)};
+    bumpRecency(){},toast:text=>notices.push(text)};
   let handler=async(_url,body)=>({status:body.mode==='queue'?'queued':'accepted'});
   ctx.api=async(url,body)=>{calls.push({url,body:structuredClone(body)});return handler(url,body);};
   vm.createContext(ctx);vm.runInContext(code,ctx);
@@ -47,7 +46,7 @@ test('a running chat opens a choice before any request and cancellation preserve
   assert.equal(ui.document.activeElement.textContent,'取消');
   ui.cancel();await pending;
   assert.equal(ui.calls.length,0);assert.equal(ui.$('message').value,'A follow-up with an attachment');
-  assert.deepEqual(ui.ctx.files,['file-a']);assert.equal(ui.ctx.selectedSkills.has('skill-a'),true);
+  assert.deepEqual(ui.ctx.files,['file-a']);
   assert.equal(ui.ctx.runningSendChoice,null);
 });
 
@@ -62,7 +61,7 @@ for(const mode of ['queue','steer'])test('choosing '+mode+' submits exactly once
   ui.choose(mode);await pending;
   assert.equal(ui.calls.length,1);const {body,url}=ui.calls[0];
   assert.equal(body.mode,mode);assert.equal(body.workMode,mode==='steer'?null:'plan');
-  assert.deepEqual(body.attachments,['file-a']);assert.deepEqual(body.skills,['skill-a']);assert.equal(url,'local/parent/send');
+  assert.deepEqual(body.attachments,['file-a']);assert.equal(body.skills,undefined);assert.equal(url,'local/parent/send');
   assert.equal(ui.$('message').value,'');assert.equal(ui.ctx.runningSendChoice,null);
 });
 
@@ -74,6 +73,18 @@ test('an earlier dropdown setting does not silently send the next running-chat m
 test('idle chats continue to send directly',async()=>{
   const ui=fixture({active:false});await ui.submit();assert.equal(ui.dialog(),undefined);
   assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].body.mode,'send');
+});
+
+test('all reference types send as literal message text with no hidden skill selection',async()=>{
+  const ui=fixture({active:false}),text='$code-review\nD:\\project\\src\\index.js\ncodex://threads/reference\nReview these';
+  ui.$('message').value=text;await ui.submit();assert.equal(ui.calls[0].body.text,text);
+  assert.equal(Object.hasOwn(ui.calls[0].body,'skills'),false);
+});
+
+test('an uncertain submission from the old skill picker retains its original payload identity',async()=>{
+  const ui=fixture({active:false}),old={id:'old-request',text:ui.$('message').value,mode:'send',workMode:'plan',skills:['old-skill'],attachments:['file-a']};
+  ui.saved.set('pending:local|parent',JSON.stringify(old));ui.setHandler(async()=>({status:'unknown'}));
+  await ui.submit();assert.deepEqual(ui.calls[0].body,old);assert.equal(ui.dialog(),undefined);
 });
 
 for(const choice of [null,'queue','steer'])test('a definite busy rejection opens the choice and waits for '+String(choice),async()=>{

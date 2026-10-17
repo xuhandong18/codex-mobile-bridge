@@ -17,6 +17,9 @@ import atexit
 
 MAX_TRANSFER = 20 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
+SEARCH_MAX_DEPTH = 32
+SEARCH_MAX_SCANNED = 20000
+SEARCH_MAX_SECONDS = 2.0
 IMAGES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp'}
 
 
@@ -29,6 +32,50 @@ def _windows_reparse_point(path):
         return bool(path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
     except FileNotFoundError:
         return False  # An upload may be creating a new ordinary file.
+
+
+@contextmanager
+def _windows_listing_directory(target):
+    """Pin every ancestor before path-based scandir; no sharing fallback."""
+    # Imported only on Windows; the SSH payload remains standalone on POSIX.
+    import ctypes
+    from ctypes import wintypes
+
+    class AttributeTagInfo(ctypes.Structure):
+        _fields_ = [('attributes', wintypes.DWORD), ('tag', wintypes.DWORD)]
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handles = []
+    try:
+        # Include the drive/UNC anchor and the ancestors above the workspace:
+        # locking only the target would still allow an ancestor to be replaced.
+        for path in [*reversed(target.parents), target]:
+            handle = kernel.CreateFileW(str(path), 0x81, 1, None, 3, 0x02000000 | 0x00200000, None)
+            # FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY: attribute-only opens
+            # do not participate in share checks and would still allow rename.
+            # FILE_SHARE_READ (no WRITE/DELETE);
+            # OPEN_EXISTING; BACKUP_SEMANTICS | OPEN_REPARSE_POINT.
+            if handle in (None, ctypes.c_void_p(-1).value):
+                raise ctypes.WinError(ctypes.get_last_error())
+            handles.append(handle)
+            info = AttributeTagInfo()
+            if not kernel.GetFileInformationByHandleEx(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if info.attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+                raise PermissionError('暂不支持通过符号链接访问文件')
+            if not info.attributes & 0x10:  # FILE_ATTRIBUTE_DIRECTORY
+                raise NotADirectoryError('路径不是目录')
+        yield target
+    finally:
+        for handle in reversed(handles):
+            kernel.CloseHandle(handle)
 
 
 def download_range(size, etag, range_header='', if_range=''):
@@ -158,6 +205,15 @@ class Workspace:
                     raise NotADirectoryError('路径不是目录')
             yield path, None
 
+    @contextmanager
+    def _listing_directory(self, parts):
+        if os.name == 'nt':
+            with _windows_listing_directory(self.root.joinpath(*parts)) as directory:
+                yield directory, None
+        else:
+            with self.directory(parts) as value:
+                yield value
+
     @staticmethod
     def open_file(directory, fd, name, flags, mode=0o600):
         if fd is not None:
@@ -167,29 +223,95 @@ class Workspace:
             raise PermissionError('暂不支持通过符号链接访问文件')
         return os.open(path, flags | getattr(os, 'O_BINARY', 0), mode)
 
-    def listing(self, path='', hidden=False, search='', offset=0):
+    @staticmethod
+    def _listing_entry(entry, parts):
+        info = entry.stat(follow_symlinks=False)
+        kind = 'directory' if stat.S_ISDIR(info.st_mode) else 'file' if stat.S_ISREG(info.st_mode) else 'blocked'
+        if (getattr(entry, 'is_junction', lambda: False)() or
+                os.name == 'nt' and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            kind = 'blocked'
+        return {'name': entry.name, 'path': '/'.join(parts + [entry.name]), 'kind': kind,
+                'size': info.st_size if kind == 'file' else None, 'modified': info.st_mtime}
+
+    def _search_listing(self, parts, hidden, search):
+        # Scan before paging: the 200-row response limit must not limit search.
+        # Re-walk every directory through the existing no-link boundary, including
+        # when an entry is replaced between enumeration and descent.
+        with self._listing_directory(parts):
+            pass
+        protected = lambda name: name.rstrip(' .').casefold() if os.name == 'nt' else name
+        if any(protected(part) == '.git' for part in parts):
+            return [], set()
+        deadline = time.monotonic() + SEARCH_MAX_SECONDS
+        rows, reasons, pending, scanned = [], set(), [(parts, 0)], 0
+        while pending:
+            if time.monotonic() >= deadline:
+                reasons.add('timeLimit')
+                break
+            current, depth = pending.pop()
+            children = []
+            try:
+                with self._listing_directory(current) as (directory, fd):
+                    with os.scandir(fd if fd is not None else directory) as entries:
+                        for entry in entries:
+                            if time.monotonic() >= deadline:
+                                reasons.add('timeLimit')
+                                return rows, reasons
+                            if scanned >= SEARCH_MAX_SCANNED:
+                                reasons.add('scanLimit')
+                                return rows, reasons
+                            scanned += 1  # Hidden and excluded entries still consume work.
+                            if (entry.name.startswith('.bridge-upload-') or protected(entry.name) == '.git' or
+                                    not hidden and entry.name.startswith('.')):
+                                continue
+                            try:
+                                row = self._listing_entry(entry, current)
+                                self.parts(row['path'])
+                            except (OSError, ValueError):
+                                reasons.add('unreadable')
+                                continue
+                            if row['kind'] == 'blocked':
+                                continue
+                            if search in row['path'].casefold():
+                                rows.append(row)
+                            if row['kind'] == 'directory':
+                                if depth >= SEARCH_MAX_DEPTH:
+                                    reasons.add('depthLimit')
+                                else:
+                                    children.append((current + [entry.name], depth + 1))
+                # Stable directory order for repeated offset requests on an
+                # unchanged tree. Like ordinary listing, this is not a snapshot.
+                children.sort(key=lambda child: (child[0][-1].casefold(), child[0][-1]), reverse=True)
+                pending.extend(children)
+            except OSError:
+                if current == parts:
+                    raise
+                reasons.add('unreadable')
+        return rows, reasons
+
+    def listing(self, path='', hidden=False, search='', offset=0, recursive=False):
         parts = self.parts(path)
-        if not isinstance(search, str) or len(search) > 200 or not isinstance(offset, int) or offset < 0:
+        if (not isinstance(search, str) or len(search) > 200 or type(offset) is not int or offset < 0 or
+                type(hidden) is not bool or type(recursive) is not bool):
             raise ValueError('目录查询无效')
-        rows = []
-        with self.directory(parts) as (directory, fd):
-            with os.scandir(fd if fd is not None else directory) as entries:
-                for entry in entries:
-                    if entry.name.startswith('.bridge-upload-') or (not hidden and entry.name.startswith('.')) or search.casefold() not in entry.name.casefold():
-                        continue
-                    try:
-                        info = entry.stat(follow_symlinks=False)
-                        kind = 'directory' if stat.S_ISDIR(info.st_mode) else 'file' if stat.S_ISREG(info.st_mode) else 'blocked'
-                        if (getattr(entry, 'is_junction', lambda: False)() or
-                                os.name == 'nt' and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT):
-                            kind = 'blocked'
-                        rows.append({'name': entry.name, 'path': '/'.join(parts + [entry.name]), 'kind': kind,
-                                     'size': info.st_size if kind == 'file' else None, 'modified': info.st_mtime})
-                    except OSError:
-                        continue
-        rows.sort(key=lambda item: (item['kind'] != 'directory', item['name'].casefold(), item['name']))
-        return {'project': self.root.name, 'path': path, 'entries': rows[offset:offset + 200],
-                'total': len(rows), 'nextOffset': offset + 200 if len(rows) > offset + 200 else None}
+        rows, reasons = [], set()
+        if recursive:
+            rows, reasons = self._search_listing(parts, hidden, search.casefold())
+        else:
+            with self._listing_directory(parts) as (directory, fd):
+                with os.scandir(fd if fd is not None else directory) as entries:
+                    for entry in entries:
+                        if entry.name.startswith('.bridge-upload-') or (not hidden and entry.name.startswith('.')) or search.casefold() not in entry.name.casefold():
+                            continue
+                        try:
+                            rows.append(self._listing_entry(entry, parts))
+                        except OSError:
+                            continue
+        sort_field = 'path' if recursive else 'name'
+        rows.sort(key=lambda item: (item['kind'] != 'directory', item[sort_field].casefold(), item[sort_field]))
+        return {'project': self.root.name, 'root': str(self.root), 'path': path, 'entries': rows[offset:offset + 200],
+                'total': len(rows), 'nextOffset': offset + 200 if len(rows) > offset + 200 else None,
+                'truncated': bool(reasons), 'truncationReasons': sorted(reasons)}
 
     def info(self, path):
         parts = self.parts(path)

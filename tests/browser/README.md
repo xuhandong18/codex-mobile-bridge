@@ -22,6 +22,8 @@
 
 `sidebar-collapse.browser.js` 的 `runSidebarCollapseBrowserTests(mode)` 在 `codex` 和 `project` 显示方式下检查工具栏“⋯”菜单的“折叠所有”，覆盖分区及嵌套项目一起收起、刷新保留、单独重新展开，以及当前聊天、草稿和项目分页保留。驱动在电脑、手机和平板宽度分别调用，并检查整页刷新后仍折叠。
 
+`reference-picker.browser.js` 的 `runReferencePickerBrowserTests()` 使用合成技能、嵌套项目文件和分区会话，检查“＋”入口、三个类型标签、技能纯文本、文件完整路径、目录懒展开、搜索保留父目录、隐藏文件，以及会话搜索保留分区/项目结构。驱动需在电脑、手机、平板和手机横屏分别执行，校验发送正文包含三类引用且无独立 `skills` 字段；仅打开原合成聊天，选择会话引用不打开被引用聊天。目录搜索与读取边界由 `test_workspace.py` 验证。
+
 `timeline.browser.js` 还提供 `runReasoningSummaryTests()`，检查无公开摘要的记录隐藏、不读取空记录，以及后续公开摘要到达后显示并加载正文。
 
 `navigation-preferences.browser.js` 的 `runSelectionActionBrowserTests()` 检查选词后的滚动、当前输入框引用、侧边聊天草稿、活动正文选词，以及原生菜单消费选区凭证时的单次消费和会话隔离；只在合成聊天中执行。
