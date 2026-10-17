@@ -39,13 +39,7 @@ class FileSelectionAction {
     return {session,tab,content,text,context:session.key,range:range.cloneRange(),rect:range.getBoundingClientRect()};
   }
   targets(session){
-    const wb=this.workbench,targets=[];
-    if(session!==wb.current)return targets;
-    targets.push({id:'chat',name:BridgeI18n.t('主会话'),quotes:wb.fileQuotes,available:()=>wb.canQuoteMain?.()!==false&&session.access?.canSend!==false,focus:()=>{wb.select('chat');wb.revealMainComposer?.();}});
-    for(const tab of session.files){const side=tab.sideChat;if(!side||side.disposed)continue;
-      targets.push({id:tab.id,name:tab.name,quotes:side.fileQuotes,available:()=>!side.disposed&&!side.busy&&!side.pending,focus:()=>{wb.select(tab.id);side.collapse(false);side.controls();}});
-    }
-    return targets;
+    return this.workbench.selectionTargets.targets(session);
   }
   update(){
     const selection=this.capture();
@@ -66,19 +60,8 @@ class FileSelectionAction {
       const path=ChatReferencePicker.fileItems({root,entries:[{name:tab.name,path:tab.filePath,kind:'file'}]},session.cwd).items[0].value;
       if(!path)throw Error(BridgeI18n.t('当前会话未提供可访问的项目完整目录'));
       const quote={path,name:tab.name,text,host:session.host};
-      const insert=target=>{
-        if(!valid()||!this.targets(session).some(row=>row.id===target.id&&row.quotes===target.quotes)||!target.available())return;
-        if(target.quotes.add(quote)){this.menu.suppressUntil=0;window.getSelection()?.removeAllRanges();wb.closePreviewFullscreen();target.focus();target.quotes.input.focus();}
-      };
-      const targets=this.targets(session);
-      if(targets.length===1){insert(targets[0]);return;}
-      wb.closePreviewFullscreen();
-      const dialog=this.dialog=wb.node('dialog','picker file-quote-target'),head=wb.node('div','picker-head');
-      head.append(wb.node('h2','','添加到哪个聊天？'),wb.button('关闭',()=>dialog.close(),'关闭'));
-      const list=wb.node('div','file-quote-targets');
-      for(const target of targets){const button=wb.raw(wb.button(target.name,()=>{try{insert(target);dialog.close();}catch(error){wb.notify(error.message);}},target.name));button.dataset.quoteTarget=target.id;button.disabled=!target.available();list.append(button);}
-      dialog.append(head,list);dialog.addEventListener('close',()=>{dialog.remove();if(this.dialog===dialog)this.dialog=null;},{once:true});document.body.append(dialog);dialog.showModal();
+      wb.selectionTargets.choose(session,{file:quote},valid,()=>{this.menu.suppressUntil=0;});
     }catch(error){wb.notify(error.message);}
   }
-  close(){this.bar.hidden=true;this.menu.menu?.close();this.dialog?.close();}
+  close(){this.bar.hidden=true;this.menu.menu?.close();this.workbench.selectionTargets.close();}
 }

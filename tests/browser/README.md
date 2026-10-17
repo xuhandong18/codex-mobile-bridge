@@ -37,3 +37,5 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 `timeline.browser.js` 还提供 `runReasoningSummaryTests()`，检查无公开摘要的记录隐藏、不读取空记录，以及后续公开摘要到达后显示并加载正文。
 
 `navigation-preferences.browser.js` 的 `runSelectionActionBrowserTests()` 检查选词后的滚动、当前输入框引用、侧边聊天草稿、活动正文选词，以及原生菜单消费选区凭证时的单次消费和会话隔离；只在合成聊天中执行。
+
+`selection-targets.browser.js` 的 `runSelectionTargetsBrowserTests()` 在独立合成网关执行，验证文件、主聊天和侧边聊天选区的目标选择、新侧边草稿、独立槽位与发送隔离；网关夹具须按 `slot` 分开保存侧边状态。不要在真实会话运行该发送夹具。

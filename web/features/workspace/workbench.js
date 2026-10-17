@@ -42,6 +42,7 @@ class Workbench {
     this.mobileObserver=new MutationObserver(()=>this.paint());this.mobileObserver.observe(document.documentElement,{attributes:true,attributeFilter:['class']});
     const input=chat.querySelector('.composer').querySelector('textarea');
     this.fileQuotes=new FileQuoteDrafts({input,onChange:()=>input.dispatchEvent(new Event('input',{bubbles:true}))});
+    this.selectionTargets=new ChatSelectionTargets(this);
     this.fileSelection=new FileSelectionAction(this);
   }
   canSplit(){return BridgeLayout.canSplit(this.chat.clientWidth);}
@@ -278,15 +279,26 @@ class Workbench {
     }
     this.select('agents');
   }
+  createSideChat(session,slot='') {
+    if(!session||session.access?.canUseSideChat===false||session.provider&&session.provider!=='codex')return;
+    const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;
+    const number=session.sideChatSerial=(session.sideChatSerial||0)+1;
+    tab={id,slot,name:BridgeI18n.t('侧边聊天')+(number>1?' '+number:''),body:this.node('div','wb-side-content')};
+    session.files.push(tab);tab.sideChat=new SideChatPanel(this,session,tab);return tab;
+  }
+  syncSideChats(session,slots){
+    if(!Array.isArray(slots)||this.sessions.get(session.key)!==session)return;
+    let changed=false;for(const row of slots){const slot=row?.slot;if(typeof slot!=='string'||slot&&!/^[0-9a-f-]{36}$/.test(slot))continue;
+      const id=slot?'sidechat:'+slot:'sidechat';if(!session.files.some(tab=>tab.id===id)){this.createSideChat(session,slot);changed=true;}
+    }
+    if(changed&&this.current===session)this.paint();
+  }
   sideChat(selectedText='') {
     if(selectedText.length>12000){this.notify(BridgeI18n.t('选中内容过长，请缩小范围后重试'));return;}
     const session=this.current;if(!session||session.access?.canUseSideChat===false)return;
-    if(!session.files.some(tab=>tab.id==='sidechat')) {
-      const tab={id:'sidechat',name:BridgeI18n.t('侧边聊天'),body:this.node('div','wb-side-content')};
-      session.files.push(tab);tab.sideChat=new SideChatPanel(this,session,tab);
-    }
+    const tab=this.createSideChat(session);if(!tab)return;
     this.select('sidechat');
-    if(selectedText)session.files.find(tab=>tab.id==='sidechat').sideChat.quoteSelection(selectedText);
+    if(selectedText)tab.sideChat.quoteSelection(selectedText);
   }
   terminal() {
     const session=this.current;if(!session)return;

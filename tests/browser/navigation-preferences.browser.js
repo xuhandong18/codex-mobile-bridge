@@ -36,6 +36,8 @@ async function runSelectionActionBrowserTests(){
   getSelection().removeAllRanges();document.dispatchEvent(new Event('selectionchange'));await wait();
   const original=$('message').value;
   check(window.BridgeSelection.run('add',native.token)===true,'Native action retains the captured selection when Android clears its handles');
+  check(!!document.querySelector('.file-quote-target[open]'),'The native add action uses the shared chat destination picker');
+  document.querySelector('.file-quote-target[open] [data-quote-target=chat]').click();
   check($('message').value.includes(selected)&&$('message').value.startsWith(original),'Add to chat appends a quote and retains the existing draft');
   check(window.BridgeSelection.run('add',native.token)===false,'A consumed native selection cannot be added twice');
   const activity=document.createElement('details');activity.className='activity timeline-row';activity.open=true;

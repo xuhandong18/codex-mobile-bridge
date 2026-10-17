@@ -31,6 +31,8 @@ async function runSelectionGestureBrowserTests(){
       const buttons=[...menu().querySelectorAll('button')];buttons.find(button=>button.textContent===action).click();
     }
     await wait(80);
+    check(!!document.querySelector('.file-quote-target[open]'),label+': an explicit add offers the unified target picker');
+    document.querySelector('.file-quote-target[open] [data-quote-target=chat]').click();await wait(80);
     return full;
   };
   await workbench.preview(workbench.current,{name:'demo.js',path:'src/demo.js'});

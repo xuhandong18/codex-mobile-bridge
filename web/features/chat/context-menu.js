@@ -101,15 +101,17 @@ class SelectedTextAction {
       trigger.onclick=()=>{const snapshot=this.triggerSnapshot||this.captureMenu();this.triggerSnapshot=null;if(this.currentSnapshot(snapshot)){this.menuSnapshot=snapshot;openMenu(snapshot,trigger.getBoundingClientRect());}};
     }
     const schedule=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),160);};
-    document.addEventListener('selectionchange',schedule);document.addEventListener('scroll',schedule,true);
-    window.addEventListener('resize',schedule);window.visualViewport?.addEventListener('resize',schedule);window.visualViewport?.addEventListener('scroll',schedule);
-    document.addEventListener('pointerdown',event=>{
+    this.listeners=[];const listen=(target,name,run,options)=>{if(!target)return;target.addEventListener(name,run,options);this.listeners.push([target,name,run,options]);};
+    listen(document,'selectionchange',schedule);listen(document,'scroll',schedule,true);
+    listen(window,'resize',schedule);listen(window.visualViewport,'resize',schedule);listen(window.visualViewport,'scroll',schedule);
+    listen(document,'pointerdown',event=>{
       if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;
       else if(event.pointerType==='mouse'&&(!window.matchMedia?.('(any-pointer: coarse)').matches||event.button===2))this.touchSelecting=false;
       if(this.touchSelecting)this.bar.hidden=true;
       if(!root.contains(event.target)&&!this.bar.contains(event.target)){this.bar.hidden=true;this.snapshot=null;}
     },{passive:true,capture:true});
   }
+  dispose(){clearTimeout(this.timer);for(const [target,name,run,options] of this.listeners)target.removeEventListener(name,run,options);this.bar.remove();}
   selected(){
     const selection=window.getSelection();if(!selection?.rangeCount||selection.isCollapsed)return '';
     const range=selection.getRangeAt(0),start=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement,end=range.endContainer.nodeType===1?range.endContainer:range.endContainer.parentElement;

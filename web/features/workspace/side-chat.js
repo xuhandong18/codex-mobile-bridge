@@ -26,7 +26,8 @@ class SideChatPanel {
     const tools=n('div','composer-tools'),bottom=n('div','compose-bottom'),actions=n('div','compose-actions');
     this.modelButton.className='tool-button wb-side-model';
     this.toggle=b('',()=>this.collapse(!this.collapsed),BridgeI18n.t('收起输入区'));this.toggle.className='composer-toggle';this.toggle.setAttribute('aria-expanded','true');this.toggle.append(document.querySelector('#composer-toggle svg').cloneNode(true));
-    this.stopButton.className='stop';tools.append(this.modelButton,this.skillsButton,this.permissionsButton,this.contextUsage.button,this.toggle);
+    this.selectionButton=b('选区操作',()=>{},'操作选中的聊天文字');this.selectionButton.className='tool-button';
+    this.stopButton.className='stop';tools.append(this.modelButton,this.skillsButton,this.permissionsButton,this.contextUsage.button,this.selectionButton,this.toggle);
     this.composerBody=n('div','wb-side-composer-body');this.skillPills=n('div','skill-pills');
     this.attachmentList=n('div','attachment-list');this.fileInput=n('input');this.fileInput.type='file';this.fileInput.multiple=true;this.fileInput.hidden=true;
     this.attachButton=b('',()=>{},BridgeI18n.t('添加文件或图片'));this.attachButton.className='attach-button';
@@ -38,6 +39,12 @@ class SideChatPanel {
     actions.append(this.stopButton,this.sendButton);bottom.append(this.attachButton,this.fileInput,this.sendMode,this.workMode,actions);
     this.composerBody.append(this.skillPills,this.attachmentList,this.input,bottom);this.form.append(tools,this.composerBody);
     this.fileQuotes=new FileQuoteDrafts({input:this.input,onChange:()=>this.controls()});this.fileQuotes.open(session.key+'|'+tab.id);
+    this.selectionAction=new SelectedTextAction(this.messages,{available:()=>!this.disposed&&workbench.isVisible(session,tab),context:()=>session.key+'|'+tab.id+'|'+(this.state?.id||''),trigger:this.selectionButton,
+      canAdd:()=>workbench.selectionTargets.available(session),canExplain:()=>false,add:text=>workbench.selectionTargets.addText(text,session),
+      openMenu:(snapshot,rect)=>this.selectionMenu.open(this.messages,rect.left,rect.top,snapshot)});
+    this.selectionMenu=new ChatContextMenu(this.messages,(_target,snapshot=this.selectionAction.captureMenu())=>snapshot?[
+      {label:'复制',copy:true,run:button=>window.BridgeClipboard.copy(()=>snapshot.text,button)},
+      {label:'添加到会话',run:()=>this.selectionAction.activate('add',snapshot.token)}]:[],{touch:false});
     this.attachments=new ChatAttachments({root:this.attachmentList,button:this.attachButton,input:this.fileInput,paste:this.input,drop:this.form,
       onChange:()=>this.controls(),preview:(key,id)=>this.uploadUrl(key,id,'preview'),
       upload:(key,id,file)=>this.uploadFile(this.uploadUrl(key,id)+'&name='+encodeURIComponent(file.name),file),
@@ -70,7 +77,7 @@ class SideChatPanel {
     this.messages.setAttribute("data-i18n-aria-label",'侧边聊天消息');this.messages.setAttribute('aria-label',BridgeI18n.t('侧边聊天消息'));
     if(this.state)this.apply(this.state);
   }
-  url(){return '/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host);}
+  url(){return '/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host)+(this.tab.slot?'&slot='+encodeURIComponent(this.tab.slot):'');}
   request(body){return this.workbench.request(this.url(),body);}
   controls(){
     const created=!!this.state?.id,active=this.state?.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
@@ -155,9 +162,9 @@ class SideChatPanel {
       document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
     }catch(e){this.status.textContent=BridgeI18n.t(e.message);}
   }
-  async load(){try{this.apply(await this.request());}catch(e){if(!this.disposed){this.status.textContent=BridgeI18n.t(e.message);if(this.state)this.state.connected=false;this.controls();}}}
+  async load(){const revision=this.readRevision=(this.readRevision||0)+1;try{const state=await this.request();if(this.disposed||revision!==this.readRevision)return;this.apply(state);this.workbench.syncSideChats(this.session,state.slots);}catch(e){if(!this.disposed&&revision===this.readRevision){this.status.textContent=BridgeI18n.t(e.message);if(this.state)this.state.connected=false;this.controls();}}}
   async create(){
-    if(this.busy)return;this.busy=true;this.controls();this.status.textContent=BridgeI18n.t('正在创建临时侧边聊天…');
+    if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();this.status.textContent=BridgeI18n.t('正在创建临时侧边聊天…');
     try{this.apply(await this.request({action:'create',creationId:this.creationId}));}
     catch(e){if(!this.disposed)this.status.textContent=BridgeI18n.t(e.message);}
     finally{this.busy=false;this.controls();}
@@ -251,6 +258,7 @@ class SideChatPanel {
   async send(){
     if(this.sendButton.disabled)return;
     let text;try{text=this.fileQuotes.validate();}catch(error){this.status.textContent=error.message;this.controls();return;}
+    this.readRevision=(this.readRevision||0)+1;
     this.pendingDraft={raw:this.input.value,quotes:this.fileQuotes.rows.map(row=>row.id)};
     this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),skills:[...this.selectedSkills.keys()],mode:this.sendMode.value,workMode:this.sendMode.value==='steer'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.controls();this.status.textContent=BridgeI18n.t('正在发送…');
     try{const result=await this.request({action:'send',id:this.state.id,...this.pending});if(this.disposed)return;
@@ -263,14 +271,15 @@ class SideChatPanel {
     if(this.input.value===(this.pendingDraft?.raw??this.pending.text))this.input.value='';
     this.fileQuotes.clear(this.fileQuotes.key,this.pendingDraft?.quotes||[]);this.pendingDraft=null;
   }
-  async action(action,fields={}){if(this.busy)return;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);}finally{this.busy=false;this.controls();}}
+  async action(action,fields={}){if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);}finally{this.busy=false;this.controls();}}
   async end(){
     if(this.busy)return false;if(!this.state?.id)return true;
     if(!confirm(BridgeI18n.t('结束此侧边聊天？正在运行的回复会停止，临时内容将清除，所有设备都无法继续此聊天。')))return false;
+    this.readRevision=(this.readRevision||0)+1;
     this.busy=true;this.controls();
     try{await this.request({action:'close',id:this.state.id});this.apply({id:null,connected:false,turns:[],requests:[]});return true;}
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }
-  dispose(){this.contextUsage.dispose();this.disposed=true;this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
+  dispose(){this.contextUsage.dispose();this.disposed=true;this.selectionAction.dispose();this.selectionMenu.menu?.close();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
 }

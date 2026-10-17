@@ -784,13 +784,19 @@ async function manageChat(row,action){
   listRows=listRows.filter(chat=>chat.id!==row.id||chat.host!==row.host);listRenderStamp='';renderList();loadList(true).catch(error=>toast(error.message));
   toast(action==='delete'?'聊天已删除':action==='archive'?'聊天已归档':'聊天已取消归档');
 }
-const selectedTextAction=new SelectedTextAction($('messages'),{available:()=>!!currentId&&!$('chat').hidden,context:()=>chatKey(),trigger:$('selection-button'),openMenu:(snapshot,rect)=>messageSelectionMenu.open($('messages'),rect.left,rect.top,snapshot),canAdd:()=>currentAccess().canSend,canExplain:()=>currentAccess().canUseSideChat,add:text=>{
-  const input=$('message'),quote=text.split('\n').map(line=>'> '+line).join('\n'),value=input.value+(input.value?'\n\n':'')+quote+'\n\n';
-  if(value.length>input.maxLength)throw Error(t('选中内容过长，请缩小范围后重试'));
-  input.value=value;input.oninput();window.BridgePresentation?.resizeMessage();input.focus();
-},run:text=>workbench.sideChat(text)});
-window.BridgeSelection=Object.freeze({capture:()=>selectedTextAction.captureNative(),run:(action,token)=>selectedTextAction.activate(action,token),release:token=>selectedTextAction.releaseNative(token)});
-const messageSelectionMenu=new ChatContextMenu($('messages'),(_target,snapshot=selectedTextAction.captureMenu())=>{if(!snapshot)return [];const items=[{label:'复制',copy:true,run:button=>window.BridgeClipboard.copy(()=>snapshot.text,button)}];if(currentAccess().canSend)items.push({label:'添加到会话',run:()=>selectedTextAction.activate('add',snapshot.token)});if(currentAccess().canUseSideChat)items.push({label:'在侧边聊天中了解更多',run:()=>selectedTextAction.activate('explain',snapshot.token)});return items;},{touch:false});
+const selectedTextAction=new SelectedTextAction($('messages'),{available:()=>!!currentId&&!$('chat').hidden,context:()=>chatKey(),trigger:$('selection-button'),openMenu:(snapshot,rect)=>messageSelectionMenu.open($('messages'),rect.left,rect.top,snapshot),canAdd:()=>workbench.selectionTargets.available(),canExplain:()=>currentAccess().canUseSideChat,add:text=>workbench.selectionTargets.addText(text),run:text=>workbench.sideChat(text)});
+let nativeSelectionTarget=null;
+window.BridgeSelection=Object.freeze({
+  capture:()=>{
+    nativeSelectionTarget?.action.releaseNative(nativeSelectionTarget.token);
+    const action=(workbench.current?.files||[]).map(tab=>tab.sideChat?.selectionAction).find(action=>action?.available()&&action.selected())||selectedTextAction;
+    const snapshot=action.captureNative();nativeSelectionTarget=snapshot.token?{action,token:snapshot.token,id:uuid()}:null;
+    return {...snapshot,token:nativeSelectionTarget?.id};
+  },
+  run:(action,token)=>{const target=nativeSelectionTarget;if(!target||target.id!==token)return false;const consumed=target.action.activate(action,target.token);if(consumed)nativeSelectionTarget=null;return consumed;},
+  release:token=>{const target=nativeSelectionTarget;if(target?.id===token){nativeSelectionTarget=null;target.action.releaseNative(target.token);}}
+});
+const messageSelectionMenu=new ChatContextMenu($('messages'),(_target,snapshot=selectedTextAction.captureMenu())=>{if(!snapshot)return [];const items=[{label:'复制',copy:true,run:button=>window.BridgeClipboard.copy(()=>snapshot.text,button)}];if(workbench.selectionTargets.available())items.push({label:'添加到会话',run:()=>selectedTextAction.activate('add',snapshot.token)});if(currentAccess().canUseSideChat)items.push({label:'在侧边聊天中了解更多',run:()=>selectedTextAction.activate('explain',snapshot.token)});return items;},{touch:false});
 $('fork-source').onclick=()=>{const source=state?.forkedFrom;if(source){$('chat-details-dialog').close();openChat(source.id,source.host).catch(e=>toast(e.message));}};
 function saveDraft(){runningSendChoice?.close();composerReferences.close();if(currentId)sessionStorage.setItem('draft:'+chatKey(),$('message').value);}
 $('message').oninput=saveDraft;

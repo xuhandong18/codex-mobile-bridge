@@ -541,15 +541,21 @@ class SideChats:
         self._checked_executable = executable
 
     def operate(self, parent, action, body, snapshot=None, settings=None, catalog_reader=None):
+        slot = str(uuid.UUID(body['slot'])) if 'slot' in body else ''
+        key = (parent, slot)
         with self.lock:
-            chat = self.chats.get(parent)
+            chat = self.chats.get(key)
             if action == 'read':
-                return chat.view() if chat else {'id': None, 'connected': False, 'turns': [], 'requests': []}
+                slots = [{'slot': identifier[1], 'id': child.id}
+                         for identifier, child in self.chats.items()
+                         if identifier[0] == parent]
+                view = chat.view() if chat else {'id': None, 'connected': False, 'turns': [], 'requests': []}
+                return {**view, 'slots': slots}
             if action == 'create':
                 token = str(uuid.UUID(str(body.get('creationId', ''))))
                 if token in self.creations:
-                    original_parent, child = self.creations[token]
-                    if original_parent != parent or not chat or chat.id != child:
+                    original_key, child = self.creations[token]
+                    if original_key != key or not chat or chat.id != child:
                         raise ValueError('此次创建的侧边聊天已关闭，请重新打开标签后新建')
                     return chat.view()
                 if chat:
@@ -568,14 +574,14 @@ class SideChats:
                 chat = self.factory(executable, self.home, parent, snapshot['cwd'], settings)
                 chat.file_directory = tempfile.TemporaryDirectory(prefix='side-files-', dir=self.directory)
                 chat.uploads = Uploads(chat.file_directory.name)
-                self.chats[parent] = chat
-                self.creations[token] = (parent, chat.id)
+                self.chats[key] = chat
+                self.creations[token] = (key, chat.id)
                 return chat.view()
             if not chat or chat.id != body.get('id'):
                 raise ValueError('此侧边聊天已关闭或已失效，请刷新标签')
             if action == 'close':
                 chat.close()
-                self.chats.pop(parent)
+                self.chats.pop(key)
                 return {'closed': True}
         if action == 'skills':
             return catalog_reader.get_kind('skills', chat.state['cwd'], query=body.get('query', ''), offset=body.get('offset', 0), limit=200, refresh=body.get('refresh') is True, ids=body.get('selected', []))
@@ -604,7 +610,8 @@ class SideChats:
 
     def attachment(self, parent, child, operation, *args):
         with self.lock:
-            chat = self.chats.get(parent)
+            chat = next((chat for key, chat in self.chats.items()
+                         if key[0] == parent and chat.id == child), None)
             if self.host != 'local' or not chat or chat.id != child or chat.closed:
                 raise ValueError('此侧边聊天已关闭或已失效，请刷新标签')
             with chat.actions:

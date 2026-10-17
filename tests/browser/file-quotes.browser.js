@@ -15,9 +15,10 @@ async function runFileQuoteBrowserTests(gesture='mouse'){
     check(wb.fileSelection.menu.menu.textContent.includes('引用到聊天'),'Selection exposes a file quote action');
     wb.fileSelection.menu.menu.querySelector('button').click();
   };
-  $('message').value='已有草稿';$('message').oninput();await preview();await menu();
+  const chooseMain=async()=>{await waitFor(()=>!!document.querySelector('.file-quote-target[open]'));document.querySelector('.file-quote-target[open] [data-quote-target=chat]').click();};
+  $('message').value='已有草稿';$('message').oninput();await preview();await menu();await chooseMain();
   await waitFor(()=>wb.fileQuotes.rows.length===1);
-  check(!document.querySelector('.file-quote-target[open]'),'A single composer needs no target picker');
+  check(!document.querySelector('.file-quote-target[open]'),'Choosing the main draft closes the unified target picker');
   check($('message').value==='已有草稿','Adding a file excerpt preserves editable draft text');
   check(wb.fileQuotes.rows[0].path==='D:\\fixture\\project\\src\\demo.js','The excerpt uses the full native file path');
   check(wb.fileQuotes.rows[0].text===quoteText,'The source selection excludes line numbers and preserves whitespace');
@@ -27,13 +28,13 @@ async function runFileQuoteBrowserTests(gesture='mouse'){
   check(rect.left>=0&&rect.top>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight,'The detail dialog fits the current viewport');
   check(detail.scrollHeight<=detail.clientHeight+1,'The detail text scrolls inside the dialog');
   detail.querySelector('.file-quote-remove').click();check(wb.fileQuotes.rows.length===0&&$('message').value==='已有草稿','Deleting a tag removes only its excerpt');
-  await preview();await menu();await waitFor(()=>wb.fileQuotes.rows.length===1);
+  await preview();await menu();await chooseMain();await waitFor(()=>wb.fileQuotes.rows.length===1);
   const oldKey=wb.fileQuotes.key;await openChat('22222222-2222-4222-8222-222222222222');await waitFor(()=>state?.connected);
   check(wb.fileQuotes.rows.length===0,'A different conversation has no excerpts from the first chat');
   await openChat(first);await waitFor(()=>state?.connected);check(wb.fileQuotes.key===oldKey&&wb.fileQuotes.rows.length===1,'Returning to the first chat restores its excerpt');
   wb.sideChat();const side=wb.current.files.find(tab=>tab.sideChat).sideChat;await waitFor(()=>side.state?.id);
   await preview();await menu();await waitFor(()=>!!document.querySelector('.file-quote-target[open]'));
-  let target=document.querySelector('.file-quote-target[open]');check(target.querySelectorAll('[data-quote-target]').length===2,'Open side chats require an explicit target choice');
+  let target=document.querySelector('.file-quote-target[open]');check(target.querySelectorAll('[data-quote-target]').length===3,'The target picker offers main, existing side and new side drafts');
   target.querySelector('[data-quote-target="sidechat"]').click();await waitFor(()=>side.fileQuotes.rows.length===1);
   check(wb.fileQuotes.rows.length===1&&side.input.value==='','Choosing the side composer keeps its excerpt separate from the main draft');
   side.fileQuotes.root.querySelector('button').click();side.fileQuotes.dialog.querySelector('.file-quote-remove').click();

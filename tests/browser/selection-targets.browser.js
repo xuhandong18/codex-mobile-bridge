@@ -1,0 +1,51 @@
+// Run only against the isolated quote fixture with independent side-chat slots.
+async function runSelectionTargetsBrowserTests(){
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  const waitFor=async run=>{for(let i=0;i<120;i++){if(run())return;await new Promise(resolve=>setTimeout(resolve,25));}throw Error('Selection target fixture timed out');};
+  const wb=workbench,session=wb.current;
+  const choose=async id=>{await waitFor(()=>!!document.querySelector('.file-quote-target[open]'));document.querySelector('.file-quote-target[open] [data-quote-target="'+id+'"]').click();};
+  const select=node=>{const range=document.createRange();range.selectNodeContents(node);getSelection().removeAllRanges();getSelection().addRange(range);};
+  const addMessage=async(text,target)=>{
+    wb.select('chat');const body=document.createElement('div');body.className='message-body';body.textContent=text;$('messages').append(body);select(body);
+    const token=BridgeSelection.capture();check(BridgeSelection.run('add',token.token),'A native add action accepts the current complete selection');
+    await choose(target);body.remove();
+  };
+  await addMessage('First new side quote','new-sidechat');
+  const first=session.files.find(tab=>tab.slot),panel=first.sideChat;
+  check(!!first&&session.active===first.id,'New side quoting opens a distinct tab');
+  check(panel.input.value==='> First new side quote\n\n'&&!panel.state?.id,'The new side starts with a quote draft and waits for explicit creation');
+  await panel.create();check(!!panel.state?.id,'Explicit creation creates the first independent side chat');
+  await addMessage('Second new side quote','new-sidechat');
+  const second=session.files.find(tab=>tab.slot&&tab!==first),other=second.sideChat;
+  check(first.slot!==second.slot&&panel.input.value.includes('First new'),'A second new side has its own slot and preserves the first draft');
+  await other.create();check(panel.state.id!==other.state.id,'The two side tabs connect to different runtime chats');
+  await addMessage('Only the first side',first.id);
+  check(panel.input.value.includes('Only the first side')&&!other.input.value.includes('Only the first side'),'Choosing an existing side modifies only that draft');
+  await wb.preview(session,{name:'demo.js',path:'src/demo.js'});
+  const file=session.files.find(tab=>tab.filePath==='src/demo.js');select(wb.panel.querySelector('.wb-source-code code'));
+  await wb.fileSelection.add(wb.fileSelection.capture());await choose(second.id);
+  check(other.fileQuotes.rows.length===1&&panel.fileQuotes.rows.length===0&&wb.fileQuotes.rows.length===0,'A file excerpt routes to the selected second side as a compact tag');
+  wb.select(file.id);select(wb.panel.querySelector('.wb-source-code code'));await wb.fileSelection.add(wb.fileSelection.capture());await choose('new-sidechat');
+  const fromFile=session.files.find(tab=>tab.slot&&tab!==first&&tab!==second);
+  check(fromFile.sideChat.fileQuotes.rows.length===1&&fromFile.sideChat.input.value===''&&!fromFile.sideChat.state?.id,'A file selection can also open a new independent side draft without creating a runtime');
+  wb.select(second.id);
+  const reply=document.createElement('div');reply.className='message-body';reply.textContent='Selected side reply';other.messages.append(reply);select(reply);other.selectionAction.update();
+  check(!other.selectionButton.disabled,'A side message has its own explicit selection action');
+  other.selectionButton.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true}));other.selectionButton.click();
+  check(other.selectionMenu.menu.open,'Explicit side selection opens draft actions');
+  [...other.selectionMenu.menu.querySelectorAll('button')].find(button=>button.textContent==='添加到会话').click();await choose('chat');
+  check($('message').value.includes('Selected side reply'),'Side chat text can be quoted back into the main draft');
+  wb.select(second.id);select(reply);const nativeSide=BridgeSelection.capture();
+  check(nativeSide.add&&!nativeSide.explain&&BridgeSelection.run('add',nativeSide.token),'The native selection API also routes a side message');await choose(first.id);
+  check(panel.input.value.includes('Selected side reply'),'Native side selection can quote into another side draft');
+  const originalMain=$('message').value;wb.selectionTargets.addText('Cancelled content');wb.selectionTargets.close();
+  check($('message').value===originalMain,'Cancelling target choice preserves the original draft');
+  wb.select(second.id);await other.send();await panel.load();
+  check(other.input.value===''&&other.fileQuotes.rows.length===0&&panel.input.value.includes('Only the first side'),'An accepted send clears only the selected side draft and tags');
+  const freshSlots=(await panel.request()).slots,ids=new Set(freshSlots.map(row=>row.slot));
+  check(ids.has(first.slot)&&ids.has(second.slot),'Read-only side state exposes the independent slots for other devices');
+  const childId=other.state.id;other.dispose();session.files.splice(session.files.indexOf(second),1);await panel.load();
+  const restored=session.files.find(tab=>tab.slot===second.slot);await waitFor(()=>restored?.sideChat.state?.id);
+  check(restored!==second&&restored.sideChat.state.id===childId,'Opening a fresh view discovers and reconnects the same side slot through read-only state');
+  return checks;
+}

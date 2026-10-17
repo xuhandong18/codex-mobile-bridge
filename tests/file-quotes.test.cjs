@@ -12,6 +12,7 @@ function fixture(){
   const context=vm.createContext({document,sessionStorage,uuid:()=>String(++id),BridgeI18n:{t:text=>text}});
   vm.runInContext(fs.readFileSync('web/features/chat/file-quotes.js','utf8'),context);
   vm.runInContext(fs.readFileSync('web/features/chat/reference-picker.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('web/features/chat/selection-targets.js','utf8'),context);
   vm.runInContext(fs.readFileSync('web/features/workspace/file-selection.js','utf8'),context);
   const Drafts=vm.runInContext('FileQuoteDrafts',context),input=new Node('textarea'),quotes=new Drafts({input,onChange:()=>changes++});quotes.open('local|one');
   return {Drafts,input,quotes,saved,document,sessionStorage,context,changes:()=>changes};
@@ -66,7 +67,7 @@ test('remote excerpts retain the target host and POSIX path without using the ga
   const {quotes,context}=fixture(),Selection=vm.runInContext('FileSelectionAction',context),selection=Object.create(Selection.prototype);
   const tab={name:'file.js',filePath:'src/file.js'},session={key:'ssh|one',host:'ssh',root:'/remote/project',files:[tab]};
   context.window={getSelection:()=>({removeAllRanges(){}})};quotes.input.focus=()=>{};
-  selection.workbench={current:session,sessions:new Map([[session.key,session]]),closePreviewFullscreen(){}};selection.bar={};selection.menu={};selection.targets=()=>[{id:'chat',quotes,available:()=>true,focus(){}}];
+  selection.workbench={current:session,sessions:new Map([[session.key,session]]),closePreviewFullscreen(){}};selection.bar={};selection.menu={};selection.workbench.selectionTargets=new (vm.runInContext('ChatSelectionTargets',context))(selection.workbench);selection.workbench.selectionTargets.targets=()=>[{id:'chat',quotes,available:()=>true,focus(){}}];
   await selection.add({session,tab,text:'selected'});assert.equal(quotes.rows[0].path,'/remote/project/src/file.js');assert.equal(quotes.rows[0].host,'ssh');
 });
 
@@ -76,7 +77,7 @@ test('file selection references use the current chat directory when an older gat
     const tab={name:'file.js',filePath:'src/file.js'},session={key:'local|one',host:'local',cwd,files:[tab]},errors=[];
     context.window={getSelection:()=>({removeAllRanges(){}})};quotes.input.focus=()=>{};
     selection.workbench={current:session,sessions:new Map([[session.key,session]]),url:()=>'/workspace',request:async()=>({project:'basename',entries:[]}),closePreviewFullscreen(){},notify:message=>errors.push(message)};
-    selection.bar={};selection.menu={};selection.targets=()=>[{id:'chat',quotes,available:()=>true,focus(){}}];
+    selection.bar={};selection.menu={};selection.workbench.selectionTargets=new (vm.runInContext('ChatSelectionTargets',context))(selection.workbench);selection.workbench.selectionTargets.targets=()=>[{id:'chat',quotes,available:()=>true,focus(){}}];
     await selection.add({session,tab,text:'selected'});assert.equal(errors.length,0);assert.equal(quotes.rows.length,1);
     assert.equal(quotes.rows[0].path,cwd.startsWith('/')?'/srv/project/src/file.js':'D:\\project\\src\\file.js');
   }
