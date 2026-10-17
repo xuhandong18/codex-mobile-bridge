@@ -9,10 +9,11 @@ class SideChatPanel {
     this.createButton=b(BridgeI18n.t('创建侧边聊天'),()=>this.create());this.createButton.className='primary';
     this.stopButton=b(BridgeI18n.t('■ 停止'),()=>this.action('stop'));this.stopButton.hidden=true;
     this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(await this.end())this.load();});this.endButton.hidden=true;
+    this.newButton=b(BridgeI18n.t('新建侧边聊天'),()=>workbench.sideChat('',true));this.newButton.hidden=true;
     this.modelButton=b(BridgeI18n.t('模型与思考程度'),()=>this.modelSettings());
     this.referenceButton=b('＋',()=>{},'添加引用');this.referenceButton.className='tool-button reference-button';
     this.permissionsButton=b(BridgeI18n.t('权限'),()=>this.permissions());this.permissionsButton.className='tool-button';this.contextUsage=new ContextUsageControl();
-    this.head.append(n('span','wb-side-caption',BridgeI18n.t('临时侧边聊天')),this.endButton);
+    this.head.append(n('span','wb-side-caption',BridgeI18n.t('临时侧边聊天')),this.newButton,this.endButton);
     this.landing=n('div','wb-side-landing');
     this.help=n('p','wb-side-help',BridgeI18n.t('继承当前会话的上下文，单独讨论一个问题。主会话的任务不会被接续执行。'));
     this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t('可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
@@ -91,7 +92,7 @@ class SideChatPanel {
   url(){return '/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host)+(this.tab.slot?'&slot='+encodeURIComponent(this.tab.slot):'');}
   request(body){return this.workbench.request(this.url(),body);}
   controls(){
-    const created=!!this.state?.id,active=this.state?.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
+    const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
     this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created;this.head.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.permissionsButton])button.disabled=locked;
@@ -106,6 +107,7 @@ class SideChatPanel {
     this.createButton.disabled=!!this.busy;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
     this.endButton.hidden=!created;this.endButton.disabled=!!this.busy;
+    this.newButton.hidden=!created||!!this.state?.connected||!this.state?.error;this.newButton.disabled=!!this.busy;
     this.status.hidden=!this.status.textContent;
   }
   dialog(title){
@@ -169,7 +171,7 @@ class SideChatPanel {
     if(this.pending&&state.submissions?.some(s=>s.id===this.pending.submissionId&&['accepted','queued'].includes(s.status))){
       this.completeSubmission();this.attachments.clear(state.id,this.pending.attachments);this.pending=null;this.references.close();this.resizeInput();
     }
-    this.status.textContent=state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):BridgeI18n.t('已连接'));
+    this.status.textContent=state.id&&!state.connected&&state.error?BridgeI18n.t('侧边聊天已断开，已有记录可继续查看；请新建侧边聊天继续。'):state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):BridgeI18n.t('已连接'));
     const stamp=JSON.stringify([state.id,state.connected,state.turns]);
     if(stamp!==this.stamp){
       this.stamp=stamp;const scroll=this.messages.scrollTop,follow=this.messages.scrollHeight-this.messages.clientHeight-scroll<60;this.messages.replaceChildren();

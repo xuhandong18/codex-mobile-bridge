@@ -250,7 +250,7 @@ class SideChat:
                 item = next((i for i in turn['items'] if i['id'] == params['itemId']), None)
                 if item is not None:
                     key = 'text' if method == 'item/agentMessage/delta' else 'aggregatedOutput'
-                    item[key] = item.get(key, '') + params.get('delta', '')
+                    item[key] = (item.get(key) or '') + (params.get('delta') or '')
             elif method == 'serverRequest/resolved':
                 self.state['requests'] = [r for r in self.state['requests'] if r['id'] != params.get('requestId')]
                 self.queue_event.set()

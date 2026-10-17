@@ -262,7 +262,7 @@ class Workbench {
     const dialog = this.node('dialog', 'picker wb-new-tab'), head = this.node('div', 'picker-head');
     head.append(this.node('h2', '', BridgeI18n.t('新标签页')), this.button('×', () => dialog.close(), BridgeI18n.t('关闭')));
     const choices = this.node('div', 'wb-tab-choices');
-    for (const [name, description, action] of [[BridgeI18n.t('文件'), BridgeI18n.t('浏览项目文件、上传与下载'), () => this.files()], ['Git', BridgeI18n.t('历史、暂存、提交与分支管理'), () => this.git()], [BridgeI18n.t('终端'), BridgeI18n.t('运行项目命令、构建与查看输出'), () => this.terminal()], [BridgeI18n.t('侧边聊天'), BridgeI18n.t('继承当前上下文，临时讨论并跨设备接续'), () => this.sideChat()], [BridgeI18n.t('子智能体'), BridgeI18n.t('查看派生任务关系与执行记录'), () => this.agents()]]) {
+    for (const [name, description, action] of [[BridgeI18n.t('文件'), BridgeI18n.t('浏览项目文件、上传与下载'), () => this.files()], ['Git', BridgeI18n.t('历史、暂存、提交与分支管理'), () => this.git()], [BridgeI18n.t('终端'), BridgeI18n.t('运行项目命令、构建与查看输出'), () => this.terminal()], [BridgeI18n.t('侧边聊天'), BridgeI18n.t('继承当前上下文，临时讨论并跨设备接续'), () => this.sideChat('',true)], [BridgeI18n.t('子智能体'), BridgeI18n.t('查看派生任务关系与执行记录'), () => this.agents()]]) {
       const button = this.button('', () => { dialog.close(); action(); }, name);
       button.append(this.node('strong', '', name), this.node('span', '', description));
       if((this.current.provider||this.current.access?.canUseSideChat===false)&&['侧边聊天','子智能体'].map(BridgeI18n.t).includes(name)) {button.disabled=true;button.lastChild.textContent=BridgeI18n.t('当前客户端尚未提供此能力');}
@@ -320,11 +320,11 @@ class Workbench {
     }
     if(changed&&this.current===session)this.paint();
   }
-  sideChat(selectedText='') {
+  sideChat(selectedText='',fresh=false) {
     if(selectedText.length>12000){this.notify(BridgeI18n.t('选中内容过长，请缩小范围后重试'));return;}
     const session=this.current;if(!session||session.access?.canUseSideChat===false)return;
-    const tab=this.createSideChat(session);if(!tab)return;
-    this.select('sidechat');
+    const tab=this.createSideChat(session,fresh?uuid():'');if(!tab)return;
+    this.select(tab.id);
     if(selectedText)tab.sideChat.quoteSelection(selectedText);
   }
   terminal() {

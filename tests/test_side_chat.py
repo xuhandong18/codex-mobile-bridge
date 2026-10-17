@@ -91,6 +91,23 @@ class SideChatTests(unittest.TestCase):
         self.chat.send('question', submission)
         self.assertEqual(sum(m == 'turn/start' for m, _ in self.runtime.calls), 1)
 
+    def test_nullable_streamed_item_fields_do_not_disconnect_the_side_chat(self):
+        for kind, key, method in (
+                ('commandExecution', 'aggregatedOutput', 'item/commandExecution/outputDelta'),
+                ('agentMessage', 'text', 'item/agentMessage/delta')):
+            with self.subTest(kind=kind):
+                identifier = str(uuid.uuid4())
+                self.runtime.emit('turn/started', turn={'id': identifier, 'status': 'inProgress'})
+                self.runtime.emit('item/started', turnId=identifier,
+                                  item={'id': identifier, 'type': kind, key: None})
+                for delta in ('first', ' second'):
+                    self.runtime.emit(method, turnId=identifier, itemId=identifier, delta=delta)
+                self.runtime.emit('turn/completed', turn={'id': identifier, 'status': 'completed'})
+                turn = next(turn for turn in self.chat.state['turns'] if turn['turnId'] == identifier)
+                self.assertEqual(turn['items'][0][key], 'first second')
+                self.assertTrue(self.chat.view()['connected'])
+                self.assertEqual(self.chat.view()['status'], 'idle')
+
     def test_approval_scoped_to_child_and_single_use(self):
         self.chat._event({'id': 70, 'method': 'item/commandExecution/requestApproval', 'params': {
             'threadId': self.parent, 'command': 'must not approve'}})

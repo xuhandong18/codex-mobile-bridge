@@ -5,7 +5,7 @@ const slot='00000000-0000-4000-8000-000000000001';
 function device(gateway){
   const calls=[],timers=new Map(),listeners=new Map();let timerId=0;
   const document={hidden:false,addEventListener:(name,run)=>listeners.set(name,run)};
-  const context=vm.createContext({document,AbortController,BridgeI18n:{t:text=>text},
+  const context=vm.createContext({document,AbortController,uuid:()=>slot,BridgeI18n:{t:text=>text},
     setTimeout:run=>{timers.set(++timerId,run);return timerId;},clearTimeout:id=>timers.delete(id)});
   for(const file of ['side-chat','workbench'])vm.runInContext(fs.readFileSync('web/features/workspace/'+file+'.js','utf8'),context);
   vm.runInContext(`const Panel=SideChatPanel;
@@ -114,4 +114,15 @@ test('discovery retries connection failures, pauses in the background and refres
 test('expired discovery authentication follows the shared logout handler',async()=>{
   const tablet=device(async()=>{throw Object.assign(Error('Login required'),{status:401});});
   tablet.wb.open('parent','local');await tablet.flush();assert.equal(tablet.wb.unauthorized,true);
+});
+
+test('the new-tab side-chat entry opens a distinct draft when the previous side chat has disconnected',async()=>{
+  const tablet=device(async()=>({id:'old-child',connected:false,slots:[{slot:'',id:'old-child'}]}));
+  tablet.wb.open('parent','local');await tablet.flush();
+  const session=tablet.wb.current,old=session.files[0];old.sideChat.input={value:'Preserved draft'};
+  tablet.wb.select=id=>session.active=id;
+  tablet.wb.sideChat('',true);await tablet.flush();
+  assert.equal(session.files.length,2);assert.notEqual(session.active,old.id);
+  assert.equal(session.files[1].slot,slot);assert.equal(old.sideChat.input.value,'Preserved draft');
+  assert.ok(tablet.calls.every(call=>call.body===undefined),'opening a new draft does not send or replay messages');
 });
