@@ -12,6 +12,11 @@ class ChatReferencePicker {
     return {id:skill.id,title:skill.displayName||skill.name||skill.id,description:skill.description||'',
       value:skill.name?'$'+skill.name.replace(/^\$/,''):'',disabled:skill.selectable===false||skill.enabled===false||!skill.name};
   }
+  static skillItems(result,offset=0){
+    if(!Array.isArray(result.skills))throw Error(BridgeI18n.t('引用列表返回无效'));
+    return {items:result.skills.map(ChatReferencePicker.skillItem),nextOffset:offset+result.skills.length<result.total?offset+result.skills.length:null,
+      error:[...(result.errors||[]),result.refreshError].filter(Boolean).join('\n'),notice:['stale','legacy'].includes(result.cache?.state)?'正在显示缓存 Skill，后台会自动刷新。':''};
+  }
   static fileItems(result,fallbackRoot=''){
     const candidate=result.root||fallbackRoot;
     const root=typeof candidate==='string'&&/^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/.test(candidate)?candidate:'';
@@ -43,6 +48,7 @@ class ChatReferencePicker {
   current(){return this.dialog?.open&&this.target?.key===this.context()?.key;}
   cancel(){clearTimeout(this.searchTimer);this.revision++;this.controller?.abort();this.controller=null;}
   close(){this.cancel();if(this.dialog?.open)this.dialog.close();}
+  dispose(){this.close();this.dialog?.remove();this.dialog=null;this.states.clear();this.target=null;}
   ensureDialog(){
     if(this.dialog)return;
     const id='reference-picker-'+(++ChatReferencePicker.sequence);

@@ -236,7 +236,7 @@ test('closing a split tool while narrow preserves the adjacent tool when widened
 });
 test('a pending side-chat close updates only its original session and respects cancellation',async()=>{
  const ui=await opened(),wb=ui.view.workbench,s=wb.current;let finish;
- s.files=['files','sidechat'].map(id=>({id,name:id,body:wb.node('div')}));s.files[1].sideChat={end:()=>new Promise(resolve=>finish=resolve),dispose(){}};wb.split('sidechat');
+ s.files=['files','sidechat'].map(id=>({id,name:id,body:wb.node('div')}));s.files[1].sideChat={end:()=>new Promise(resolve=>finish=resolve),references:{close(){}},dispose(){}};wb.split('sidechat');
  const cancelled=wb.close('sidechat');finish(false);await cancelled;assert.equal(s.splitTab,'sidechat');assert.equal(s.files.length,2);
  const closing=wb.close('sidechat');wb.open('other','local');const other=wb.current;finish(true);await closing;assert.equal(wb.current,other);assert.equal(s.splitTab,'files');assert.equal(s.active,'files');assert.equal(other.active,'chat');
 });

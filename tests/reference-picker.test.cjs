@@ -16,6 +16,7 @@ function fixture(handler=async()=>({items:[],nextOffset:null})){
     dispatchEvent(event){events.push(event.type);for(const run of this.listeners[event.type]||[])run(event);}
     showModal(){this.open=true;}close(){this.open=false;this.dispatchEvent({type:'close'});}
     focus(){document.activeElement=this;}setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;}
+    remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(node=>node!==this);this.parentElement=null;}
   }
   const document={body:new Element('body'),createElement:tag=>new Element(tag)},button=new Element('button'),input=new Element('textarea');
   input.maxLength=100000;
@@ -156,4 +157,44 @@ test('selection cannot exceed the composer limit or overwrite text changed durin
   ui.input.value='Draft';ui.input.maxLength=7;await ui.picker.open();ui.picker.list.children[0].onclick();
   assert.equal(ui.input.value,'Draft');assert.match(ui.picker.error.textContent,/长度限制/);
   ui.input.maxLength=100;ui.input.value='Edited';ui.picker.list.children[0].onclick();assert.equal(ui.input.value,'Edited\n/long/path\n');
+});
+
+function sideFixture(handler){
+  const ui=fixture(),reads=[];let visible=true;
+  const Panel=ui.run(fs.readFileSync('web/features/workspace/side-chat.js','utf8')+'\nSideChatPanel;'),panel=Object.create(Panel.prototype);
+  panel.session={id:'parent',host:'local',key:'local|parent',cwd:'D:\\parent'};panel.tab={id:'sidechat:slot',slot:'slot'};
+  panel.state={id:'child',connected:true,cwd:'D:\\child'};
+  panel.workbench={isVisible:()=>visible,request:async(url,body,signal)=>{reads.push({url,body,signal});return handler(url,body,signal);},
+    loadReferences:async(kind,options)=>{reads.push({kind,options});return {items:[{id:kind,title:kind,value:kind==='files'?options.target.cwd+'\\file.js':'codex://threads/linked'}]};}};
+  ui.picker.context=()=>panel.referenceContext();ui.picker.load=(kind,options)=>panel.loadReferences(kind,options);
+  return {...ui,panel,reads,setVisible:value=>visible=value};
+}
+
+test('a side plus picker reads its own child skills and inserts the same editable reference text as main',async()=>{
+  const ui=sideFixture(async()=>({skills:[{id:'review',name:'review',displayName:'Review',description:'child skill'}],total:201,cache:{state:'stale'}}));
+  ui.input.value='side draft';await ui.picker.open();
+  assert.equal(ui.reads[0].body.id,'child');assert.equal(ui.reads[0].body.action,'skills');assert.match(ui.reads[0].url,/slot=slot/);
+  assert.equal(ui.picker.active.nextOffset,1);assert.match(ui.picker.notice.textContent,/缓存/);
+  ui.picker.list.children[0].onclick();assert.equal(ui.input.value,'side draft\n$review\n');assert.equal(ui.panel.selectedSkills,undefined);
+});
+
+test('side file and session references share the parent catalog with a side-specific context and draft',async()=>{
+  const ui=sideFixture(async()=>({skills:[],total:0}));await ui.picker.open();await ui.picker.setTab('files');ui.picker.list.children[0].onclick();
+  await ui.picker.open();await ui.picker.setTab('sessions');ui.picker.list.children[0].onclick();
+  const file=ui.reads.find(read=>read.kind==='files');assert.equal(file.options.target.id,'parent');assert.equal(file.options.target.cwd,'D:\\child');assert.match(file.options.target.key,/sidechat:slot/);
+  assert.equal(ui.input.value,'D:\\child\\file.js\ncodex://threads/linked\n');
+});
+
+test('new side drafts allow file references without creating a runtime while skills wait for a child',async()=>{
+  const ui=sideFixture(()=>{throw Error('Skills must wait for creation');});ui.panel.state={id:null,connected:false};await ui.picker.open();
+  assert.equal(ui.picker.tab,'files');assert.equal(ui.picker.tabButtons.get('skills').disabled,true);assert.equal(ui.reads[0].kind,'files');
+  ui.picker.list.children[0].onclick();assert.equal(ui.input.value,'D:\\parent\\file.js\n');
+  ui.panel.busy=true;assert.equal(ui.panel.referenceContext(),null);ui.panel.busy=false;ui.setVisible(false);assert.equal(ui.panel.referenceContext(),null);
+});
+
+test('a replaced side child and a disposed picker discard old reads and cannot insert stale skill rows',async()=>{
+  let finish;const ui=sideFixture(()=>new Promise(resolve=>finish=resolve));const opening=ui.picker.open();ui.panel.state.id='replacement';
+  finish({skills:[{id:'old',name:'old'}],total:1});await opening;ui.picker.insert({value:'$old'});assert.equal(ui.input.value,'');
+  const reopening=ui.picker.open();const dialog=ui.picker.dialog;ui.picker.dispose();finish({skills:[{id:'old',name:'old'}],total:1});await reopening;
+  assert.equal(ui.picker.dialog,null);assert.equal(dialog.isConnected,false);assert.equal(ui.picker.states.size,0);assert.equal(ui.input.value,'');
 });

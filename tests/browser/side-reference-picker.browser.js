@@ -1,0 +1,46 @@
+// Only use the synthetic reference fixture; it includes accepted and unknown sends.
+async function runSideReferencePickerBrowserTests(){
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  const waitFor=async run=>{for(let i=0;i<140;i++){if(run())return;await new Promise(resolve=>setTimeout(resolve,25));}throw Error('Side reference fixture timed out');};
+  const wb=workbench,session=wb.current,first=wb.createSideChat(session,uuid()),second=wb.createSideChat(session,uuid()),panel=first.sideChat,other=second.sideChat;
+  await panel.create();wb.select(first.id);$('message').value='Untouched main draft';$('message').oninput();
+  panel.input.value='BeforeAfter';panel.input.setSelectionRange(6,6);panel.input.oninput();
+  const picker=panel.references,row=id=>[...picker.list.querySelectorAll('.reference-item')].find(node=>node.dataset.referenceId===id);
+  check(panel.referenceButton.textContent==='＋'&&panel.referenceButton.className===$('skills-button').className,'The side composer uses the same plus button and styling as main');
+  check(!panel.form.querySelector('.skill-pills')&&panel.selectedSkills===undefined,'The old Skill checkbox and pill state is removed');
+  await panel.referenceButton.onclick();
+  check(picker.tabButtons.size===3&&[...picker.tabButtons.keys()].join(',')==='skills,files,sessions','The same three reference types are available');
+  check(picker.dialog.className===composerReferences.node('dialog','picker reference-picker').className,'The side picker uses the shared main reference component');
+  check(!!row('review-skill'),'The side child skill catalog is loaded');
+  check(picker.more.hidden===false,'Large side skill catalogs support pagination');await picker.more.onclick();
+  check(picker.active.items.length===221&&picker.more.hidden,'Skill pagination appends the remaining child catalog');
+  row('review-skill').click();check(panel.input.value==='Before\n$code-review\nAfter','Skill references insert editable text at the caret');
+  check($('message').value==='Untouched main draft'&&other.input.value==='','The main and other side drafts are unchanged');
+  await picker.open();await picker.setTab('files');
+  const folder=picker.list.querySelector('details[data-reference-group="directory:src"]');
+  check(!!folder&&!row('directory:src/deep/index.js'),'Side project files start with the same lazy directory tree');
+  folder.querySelector('summary').click();await waitFor(()=>!!picker.list.querySelector('details[data-reference-group="directory:src/deep"]'));
+  picker.search.value='index';picker.search.dispatchEvent(new Event('input',{bubbles:true}));await waitFor(()=>!!row('directory:src/deep/index.js'));
+  row('directory:src/deep/index.js').click();
+  check(panel.input.value.includes('D:\\fixture\\project\\src\\deep\\index.js'),'Project references insert full paths in the side draft');
+  await picker.open();await picker.setTab('sessions');picker.search.value='Needle chat';picker.search.dispatchEvent(new Event('input',{bubbles:true}));
+  await waitFor(()=>!!row('local|22222222-2222-4222-8222-222222222222')&&picker.active.items.length===1);
+  check(!!picker.list.querySelector('details[data-reference-group="section:planning"] details[data-reference-group="project:local|fixture"]'),'Session references retain the same section and project grouping');
+  row('local|22222222-2222-4222-8222-222222222222').click();
+  check(panel.input.value.includes('codex://threads/22222222-2222-4222-8222-222222222222')&&wb.current===session&&session.active===first.id,'Session references insert the native link without opening that chat');
+  await picker.open();const bounds=picker.dialog.getBoundingClientRect();
+  check(bounds.left>=0&&bounds.top>=0&&bounds.right<=innerWidth&&bounds.bottom<=innerHeight,'The reference picker fits the current viewport');picker.close();
+  const text=panel.input.value;panel.workMode.value='plan';panel.sendMode.value='queue';panel.controls();await panel.send();
+  check(!panel.input.value&&!panel.pending,'Accepted sends clear the side reference text');
+  check($('message').value==='Untouched main draft','Sending the side references leaves the main draft untouched');
+  await picker.open();picker.active.query='slow-side-skill';const late=picker.loadPage({refresh:true});wb.select(second.id);other.input.value='Second side draft';await late;
+  picker.insert({value:'$stale'});check(!picker.dialog.open&&!panel.input.value&&other.input.value==='Second side draft','Switching side tabs closes the picker and rejects a late selection');
+  other.input.oninput();await other.references.open();
+  check(other.references.tab==='files'&&other.references.tabButtons.get('skills').disabled,'A new side draft offers files and sessions while skills wait for creation');
+  check(!other.state?.id&&other.sendButton.disabled,'Opening references never creates or sends the new side chat');other.references.close();
+  wb.select(first.id);panel.input.value='UNCONFIRMED_SIDE_REFERENCE\n$code-review';panel.sendMode.value='send';panel.controls();await panel.send();await panel.load();await panel.send();
+  check(!!panel.pending&&panel.input.value==='UNCONFIRMED_SIDE_REFERENCE\n$code-review','Unconfirmed sends retain reference text and are not replayed');
+  const closed=picker.dialog;panel.dispose();
+  check(!closed.isConnected&&picker.dialog===null,'Disposing a side panel removes its reference dialog');
+  return {checks,text,child:panel.state.id,slot:first.slot};
+}

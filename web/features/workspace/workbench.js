@@ -1,8 +1,8 @@
 'use strict';
 
 class Workbench {
-  constructor({chat, request, csrf, notify, onUnauthorized, openChat}) {
-    Object.assign(this, {chat, request, csrf, notify, onUnauthorized, openChat});
+  constructor({chat, request, csrf, notify, onUnauthorized, openChat, loadReferences}) {
+    Object.assign(this, {chat, request, csrf, notify, onUnauthorized, openChat, loadReferences});
     window.BridgeFileActions?.register(chat,this);
     this.sessions = new Map();
     this.scrollPositions = new WeakMap();
@@ -139,6 +139,7 @@ class Workbench {
   }
   open(id, host) {
     this.fileSelection?.close();
+    this.closeReferences();
     this.rememberScroll();
     const key = (this.provider&&this.provider!=='codex'?this.provider+'|':'')+host + '|' + id;
     if (this.previewFullscreen && this.previewFullscreen.session.key !== key) this.closePreviewFullscreen();
@@ -165,6 +166,7 @@ class Workbench {
   select(id) {
     if (!this.current) return;
     this.fileSelection?.close();
+    this.closeReferences();
     if (this.previewFullscreen && this.previewFullscreen.tab.id !== id) {
       const tab=this.current.files.find(tab=>tab.id===id);
       if(this.previewFullscreen.documentMode&&tab?.id.startsWith('file:'))this.syncPreviewFullscreen(tab);
@@ -279,6 +281,7 @@ class Workbench {
     }
     this.select('agents');
   }
+  closeReferences(){for(const tab of this.current?.files||[])tab.sideChat?.references.close();}
   createSideChat(session,slot='') {
     if(!session||session.access?.canUseSideChat===false||session.provider&&session.provider!=='codex')return;
     const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;

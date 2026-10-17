@@ -73,7 +73,7 @@ function clearListSnapshot(){
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
 async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
-const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat});
+const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat,loadReferences:loadComposerReferences});
 workbench.canQuoteMain=()=>!!currentId&&!sending&&currentAccess().canSend;
 workbench.revealMainComposer=()=>{if($('composer-toggle').getAttribute('aria-expanded')==='false')$('composer-toggle').click();};
 const desktopSessions=new DesktopSessionsView({root:$('app'),select:$('desktop-backend'),request:api,notify:toast,csrf:()=>csrf,onUnauthorized:authLost,onSelect:provider=>{
@@ -1168,9 +1168,7 @@ $('model-form').onsubmit=async event=>{
 async function loadComposerReferences(kind,{target,query,offset,path,refresh,signal,hidden=false}){
   if(kind==='skills'){
     const result=await api(sessionUrl(target.id,'catalog',target.host)+'&kind=skills&q='+encodeURIComponent(query)+'&offset='+offset+'&limit=200'+(refresh?'&refresh=true':''),undefined,signal);
-    if(!Array.isArray(result.skills))throw Error(t('引用列表返回无效'));
-    return {items:result.skills.map(ChatReferencePicker.skillItem),nextOffset:offset+result.skills.length<result.total?offset+result.skills.length:null,
-      error:[...(result.errors||[]),result.refreshError].filter(Boolean).join('\n'),notice:['stale','legacy'].includes(result.cache?.state)?'正在显示缓存 Skill，后台会自动刷新。':''};
+    return ChatReferencePicker.skillItems(result,offset);
   }
   if(kind==='files'){
     const result=await api(sessionUrl(target.id,'workspace',target.host)+'&path='+encodeURIComponent(path)+'&search='+encodeURIComponent(query)+'&offset='+offset+'&hidden='+hidden+'&recursive='+!!query,undefined,signal);
