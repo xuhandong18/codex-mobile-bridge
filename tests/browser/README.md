@@ -4,13 +4,13 @@
 
 Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`firesTouchEvents=false` 的菜单事件，不能把它当作电脑右键。此事件由上述夹具及 `navigation-preferences.test.cjs` 单列覆盖；验证系统复制、分享和拖动手柄时，还应在独立 Android WebView 夹具或实机上执行真实触屏操作，不能用脚本先设置 DOM Range 替代原生手柄。
 
-`file-quotes.browser.js` 的 `runFileQuoteBrowserTests(gesture)` 使用合成文件、两个聊天和侧边聊天夹具，`gesture` 为 `mouse` 或 `touch`。检查电脑右键与触屏显式引用按钮、自动添加与目标选择、代码选区与完整路径、引用标签详情和删除、聊天草稿隔离，以及主会话/侧边聊天仅有引用时的发送与成功清理。驱动需在电脑、手机、平板和手机横屏分别执行，并检查捕获的发送正文；触屏长按由浏览器 PointerEvent 定时器模拟，不能替代 Android/iOS 原生选区菜单实机验证。
+`file-quotes.browser.js` 的 `runFileQuoteBrowserTests(gesture)` 使用合成文件、两个聊天和侧边聊天夹具，`gesture` 为 `mouse` 或 `touch`。检查电脑右键与触屏显式引用按钮、统一目标选择、代码选区与完整路径、引用标签详情和删除、聊天草稿隔离，以及主会话/侧边聊天仅有引用时的发送与成功清理。驱动需在电脑、手机、平板和手机横屏分别执行，并检查捕获的发送正文；触屏长按由浏览器 PointerEvent 定时器模拟，不能替代 Android/iOS 原生选区菜单实机验证。
 
 本目录中的 `*.browser.js` 依赖真实 DOM、页面模块及隔离的网关夹具。它们由浏览器驱动加载并调用文件中声明的检查函数；Markdown 与公式脚本在加载后直接运行。各文件开头说明所需页面与前置状态。
 
 仅使用合成会话和测试工作区。不要在真实用户会话中运行会发送消息、修改文件或操作 Git 的夹具。
 
-`navigation-preferences.browser.js` 的 `runNavigationPreferenceBrowserTests()` 依赖合成导航网关，检查分区/项目折叠、新建设置与选词侧边聊天草稿。`markdown-navigation.browser.js` 的 `runMarkdownNavigationChecks()` 自建合成文件读取，检查章节、跨文件链接和保留标签栏的 Markdown 全屏；需在窄屏和平板宽度分别调用，检查结果应包含实际断言数。
+`navigation-preferences.browser.js` 的 `runNavigationPreferenceBrowserTests()` 依赖合成导航网关，检查分区/项目折叠、新建设置与统一选词入口中的新建侧边聊天草稿。`markdown-navigation.browser.js` 的 `runMarkdownNavigationChecks()` 自建合成文件读取，检查章节、跨文件链接和保留标签栏的 Markdown 全屏；需在窄屏和平板宽度分别调用，检查结果应包含实际断言数。
 
 这些脚本不会由 `npm run test:desktop` 执行。该命令只发现 `tests/` 和 `mobile/tests/` 下的 `*.test.js`、`*.test.cjs`、`*.test.mjs`；浏览器检查应单独记录实际执行与未执行情况。
 
@@ -39,3 +39,5 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 `navigation-preferences.browser.js` 的 `runSelectionActionBrowserTests()` 检查选词后的滚动、当前输入框引用、侧边聊天草稿、活动正文选词，以及原生菜单消费选区凭证时的单次消费和会话隔离；只在合成聊天中执行。
 
 `selection-targets.browser.js` 的 `runSelectionTargetsBrowserTests()` 在独立合成网关执行，验证文件、主聊天和侧边聊天选区的目标选择、新侧边草稿、独立槽位与发送隔离；网关夹具须按 `slot` 分开保存侧边状态。不要在真实会话运行该发送夹具。
+
+`selection-popup.browser.js` 的 `runUnifiedSelectionPopupBrowserTests(gesture)` 使用各自隔离的合成侧边会话，检查主消息、侧边消息、文件三处主动引用后直接出现同一个目标框，并比较完整弹框 DOM。电脑通过右键触发，手机/平板通过显式按钮触发，触屏长按保留原生菜单；同时检查提醒设置入口已移至聊天详情。

@@ -2,8 +2,8 @@
 
 // One gesture implementation for touch/pen long presses and desktop context menus.
 class ChatContextMenu {
-  constructor(root,items,{touch=true,label='聊天操作'}={}){
-    Object.assign(this,{root,items,label});this.suppressUntil=0;this.touchAt=-Infinity;
+  constructor(root,items,{touch=true,label='聊天操作',show=null}={}){
+    Object.assign(this,{root,items,label,show});this.suppressUntil=0;this.touchAt=-Infinity;
     root.addEventListener('contextmenu',event=>{
       const coarse=globalThis.matchMedia?.('(any-pointer: coarse)').matches;
       // Android's selection handles emit "mouse" contextmenu with button -1.
@@ -25,6 +25,7 @@ class ChatContextMenu {
   cancel(){clearTimeout(this.timer);this.timer=null;this.origin=null;}
   open(target,x,y,context){
     if(document.querySelector('dialog[open]'))return false;
+    if(this.show){this.cancel();return this.show(target,x,y,context)===true;}
     const rows=this.items(target,context);if(!rows?.length)return false;
     this.cancel();document.querySelector('.chat-context-menu')?.remove();
     const menu=this.menu=document.createElement('dialog');menu.className='chat-context-menu picker';menu.setAttribute('aria-label',BridgeI18n.t(this.label));

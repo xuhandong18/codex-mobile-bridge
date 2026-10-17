@@ -114,7 +114,7 @@ test('failed saves keep the dialog and draft choice for retry',async()=>{
   assert.equal(ui.nodes.get('notify-error').textContent,'Cannot save');
   assert.equal(ui.nodes.get('notify-save').disabled,false);
   assert.equal(ui.nodes.get('notify-completion').value,'on');
-  assert.equal(ui.nodes.get('notify-button').textContent,'提醒');
+  assert.equal(ui.nodes.get('notify-button').textContent,'聊天通知设置');
   await ui.save();assert.equal(ui.nodes.get('notify-dialog').open,false);
 });
 
@@ -127,7 +127,7 @@ test('late save responses cannot change or close another chat notification dialo
   finish(ui.response({available:true,watching:true,notifyOnCompletion:true}));await saving;
   assert.equal(ui.nodes.get('notify-dialog').open,true);
   assert.equal(ui.nodes.get('notify-enabled').value,'inherit');
-  assert.equal(ui.nodes.get('notify-button').textContent,'提醒');
+  assert.equal(ui.nodes.get('notify-button').textContent,'聊天通知设置');
 });
 
 test('notification controls have English translations and language changes preserve choices',async()=>{
@@ -140,6 +140,16 @@ test('notification controls have English translations and language changes prese
   }
   assert.equal(ui.nodes.get('notify-completion').value,'on');
   assert.equal(ui.writes.length,0);
+});
+
+test('notification settings live in chat details and opening them dismisses the details dialog',async()=>{
+  const ui=await fixture();await ui.open();
+  const composer=ui.html.match(/<form id="composer"[\s\S]*?<\/form>/)[0],details=ui.html.match(/<dialog id="chat-details-dialog"[\s\S]*?<\/dialog>/)[0];
+  assert.doesNotMatch(composer,/id="notify-button"/);assert.match(details,/id="notify-button"/);
+  ui.nodes.get('chat-details-dialog').showModal();await ui.settings();
+  assert.equal(ui.nodes.get('chat-details-dialog').open,false);assert.equal(ui.nodes.get('notify-dialog').open,true);
+  ui.nodes.get('notify-enabled').value='on';await ui.save();
+  assert.equal(ui.nodes.get('notify-button').textContent,'聊天通知设置');assert.equal(ui.writes.at(-1).body.requests,'on');
 });
 
 

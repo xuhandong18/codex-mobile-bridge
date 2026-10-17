@@ -32,8 +32,7 @@ async function runSelectionTargetsBrowserTests(){
   const reply=document.createElement('div');reply.className='message-body';reply.textContent='Selected side reply';other.messages.append(reply);select(reply);other.selectionAction.update();
   check(!other.selectionButton.disabled,'A side message has its own explicit selection action');
   other.selectionButton.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true}));other.selectionButton.click();
-  check(other.selectionMenu.menu.open,'Explicit side selection opens draft actions');
-  [...other.selectionMenu.menu.querySelectorAll('button')].find(button=>button.textContent==='添加到会话').click();await choose('chat');
+  check(wb.selectionTargets.dialog.open&&!document.querySelector('.chat-context-menu[open]'),'Explicit side selection opens the shared destination picker directly');await choose('chat');
   check($('message').value.includes('Selected side reply'),'Side chat text can be quoted back into the main draft');
   wb.select(second.id);select(reply);const nativeSide=BridgeSelection.capture();
   check(nativeSide.add&&!nativeSide.explain&&BridgeSelection.run('add',nativeSide.token),'The native selection API also routes a side message');await choose(first.id);

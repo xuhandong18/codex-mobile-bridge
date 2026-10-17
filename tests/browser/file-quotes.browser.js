@@ -11,9 +11,8 @@ async function runFileQuoteBrowserTests(gesture='mouse'){
       await new Promise(resolve=>setTimeout(resolve,200));const button=wb.current.files.find(tab=>tab.filePath==='src/demo.js').quoteButton;
       check(!button.disabled,'The file header offers an explicit selection quote action');button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true,pointerId:51}));button.click();return;
     }else code.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:80,clientY:120}));
-    await waitFor(()=>!!wb.fileSelection.menu.menu?.open);
-    check(wb.fileSelection.menu.menu.textContent.includes('引用到聊天'),'Selection exposes a file quote action');
-    wb.fileSelection.menu.menu.querySelector('button').click();
+    await waitFor(()=>!!wb.selectionTargets.dialog?.open);
+    check(!document.querySelector('.chat-context-menu[open]'),'File right-click opens the destination picker directly');
   };
   const chooseMain=async()=>{await waitFor(()=>!!document.querySelector('.file-quote-target[open]'));document.querySelector('.file-quote-target[open] [data-quote-target=chat]').click();};
   $('message').value='已有草稿';$('message').oninput();await preview();await menu();await chooseMain();

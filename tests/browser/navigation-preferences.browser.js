@@ -15,8 +15,8 @@ async function runNavigationPreferenceBrowserTests(){
   const node=document.querySelector('#messages .message-body');check(!!node,'message text exists');
   const range=document.createRange();range.selectNodeContents(node);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);selectedTextAction.update();
   check(!selectedTextAction.trigger.disabled,'selection enables explicit chat actions');
-  const text=selection.toString();selectedTextAction.trigger.click();[...document.querySelector('.chat-context-menu').querySelectorAll('button')].find(button=>button.textContent===BridgeI18n.t('在侧边聊天中了解更多')).click();await new Promise(resolve=>setTimeout(resolve,30));
-  const side=workbench.current.files.find(tab=>tab.id==='sidechat');check(side.sideChat.input.value.includes(text),'side chat receives selected text as a draft');
+  const text=selection.toString();selectedTextAction.trigger.click();document.querySelector('.file-quote-target[open] [data-quote-target="new-sidechat"]').click();await new Promise(resolve=>setTimeout(resolve,30));
+  const side=workbench.current.files.find(tab=>tab.id===workbench.current.active);check(side.sideChat.input.value.includes(text),'side chat receives selected text as a draft');
   check($('message').value==='keep this draft','side chat preserves the main draft');
   return checks;
 }
@@ -31,7 +31,7 @@ async function runSelectionActionBrowserTests(){
   document.getElementById('timeline').dispatchEvent(new Event('scroll'));await wait();
   check(!selectedTextAction.trigger.disabled,'Explicit selection actions remain usable after Android selection scrolls the page');
   const native=window.BridgeSelection.capture();
-  check(native.add&&native.explain&&typeof native.token==='string','Native selection menu receives supported actions and a selection token');
+  check(native.add&&!native.explain&&typeof native.token==='string','Native selection menu receives supported actions and a selection token');
   const selected=body.textContent;
   getSelection().removeAllRanges();document.dispatchEvent(new Event('selectionchange'));await wait();
   const original=$('message').value;
@@ -45,8 +45,9 @@ async function runSelectionActionBrowserTests(){
   select(text);await wait();
   check(selectedTextAction.selected()==='Public activity summary','Displayed activity text can be selected for follow-up questions');
   const summary=window.BridgeSelection.capture();
-  check(window.BridgeSelection.run('explain',summary.token)===true,'Native learn-more action opens a quoted side-chat draft');
-  check(workbench.current.files.find(tab=>tab.id==='sidechat').sideChat.input.value.includes(text.textContent),'Side chat receives the selected activity text');
+  check(window.BridgeSelection.run('add',summary.token)===true,'Native activity quoting opens the same destination picker');
+  document.querySelector('.file-quote-target[open] [data-quote-target="new-sidechat"]').click();
+  check(workbench.current.files.find(tab=>tab.id===workbench.current.active).sideChat.input.value.includes(text.textContent),'A new side chat receives the selected activity text');
   workbench.select('chat');select(body);const stale=window.BridgeSelection.capture();
   select(text);check(window.BridgeSelection.run('add',stale.token)===false,'An older menu cannot quote a newer, different selection');
   select(body);const current=window.BridgeSelection.capture();

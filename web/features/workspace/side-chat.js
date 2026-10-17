@@ -41,10 +41,8 @@ class SideChatPanel {
     this.fileQuotes=new FileQuoteDrafts({input:this.input,onChange:()=>this.controls()});this.fileQuotes.open(session.key+'|'+tab.id);
     this.selectionAction=new SelectedTextAction(this.messages,{available:()=>!this.disposed&&workbench.isVisible(session,tab),context:()=>session.key+'|'+tab.id+'|'+(this.state?.id||''),trigger:this.selectionButton,
       canAdd:()=>workbench.selectionTargets.available(session),canExplain:()=>false,add:text=>workbench.selectionTargets.addText(text,session),
-      openMenu:(snapshot,rect)=>this.selectionMenu.open(this.messages,rect.left,rect.top,snapshot)});
-    this.selectionMenu=new ChatContextMenu(this.messages,(_target,snapshot=this.selectionAction.captureMenu())=>snapshot?[
-      {label:'复制',copy:true,run:button=>window.BridgeClipboard.copy(()=>snapshot.text,button)},
-      {label:'添加到会话',run:()=>this.selectionAction.activate('add',snapshot.token)}]:[],{touch:false});
+      openMenu:snapshot=>this.selectionAction.activate('add',snapshot.token)});
+    this.selectionMenu=new ChatContextMenu(this.messages,()=>[],{touch:false,show:()=>{const snapshot=this.selectionAction.captureMenu();return !!snapshot&&this.selectionAction.activate('add',snapshot.token);}});
     this.attachments=new ChatAttachments({root:this.attachmentList,button:this.attachButton,input:this.fileInput,paste:this.input,drop:this.form,
       onChange:()=>this.controls(),preview:(key,id)=>this.uploadUrl(key,id,'preview'),
       upload:(key,id,file)=>this.uploadFile(this.uploadUrl(key,id)+'&name='+encodeURIComponent(file.name),file),

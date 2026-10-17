@@ -25,11 +25,6 @@ async function runSelectionGestureBrowserTests(){
     const trigger=label==='File'?workbench.current.files.find(tab=>tab.filePath==='src/demo.js').quoteButton:$('selection-button');
     check(!trigger.disabled,label+': explicit selection action is available outside the selected text');
     trigger.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true,pointerId:43}));trigger.click();
-    if(label!=='File'){
-      check(!!menu()?.open,label+': only an explicit action opens the quote menu');
-      getSelection().removeAllRanges();document.dispatchEvent(new Event('selectionchange'));await wait(220);
-      const buttons=[...menu().querySelectorAll('button')];buttons.find(button=>button.textContent===action).click();
-    }
     await wait(80);
     check(!!document.querySelector('.file-quote-target[open]'),label+': an explicit add offers the unified target picker');
     document.querySelector('.file-quote-target[open] [data-quote-target=chat]').click();await wait(80);

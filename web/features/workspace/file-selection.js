@@ -12,11 +12,10 @@ class FileSelectionAction {
     document.addEventListener('selectionchange',update);document.addEventListener('scroll',update,true);window.addEventListener('resize',update);
     document.addEventListener('pointerdown',event=>{if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;else if(event.pointerType==='mouse'&&(!window.matchMedia?.('(any-pointer: coarse)').matches||event.button===2))this.touchSelecting=false;if(this.touchSelecting)this.bar.hidden=true;},{passive:true,capture:true});
     window.visualViewport?.addEventListener('resize',update);window.visualViewport?.addEventListener('scroll',update);
-    this.menu=new ChatContextMenu(workbench.chat,target=>{
-      const selection=this.capture();if(!selection||!selection.content.contains(target))return [];
-      workbench.closePreviewFullscreen();
-      return [{label:'引用到聊天',run:()=>this.add(selection)}];
-    },{label:'文件引用',touch:false});
+    this.menu=new ChatContextMenu(workbench.chat,()=>[],{touch:false,show:target=>{
+      const selection=this.capture();if(!selection||!selection.content.contains(target))return false;
+      this.add(selection);return true;
+    }});
   }
   bindPreview(session,tab,actions){
     const button=tab.quoteButton=this.workbench.button('引用选区',()=>{const selection=this.triggerSnapshot||this.capture();this.triggerSnapshot=null;if(selection?.session===session&&selection.tab===tab)this.add(selection);},'引用选中文字');
