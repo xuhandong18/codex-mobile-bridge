@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from bridge.platforms.windows.projects import edit_project, ProjectUIError
+from bridge.platforms.windows.projects import create_project, edit_project, ProjectUIError
 
 
 class WindowsProjectUITests(unittest.TestCase):
@@ -36,6 +36,35 @@ class WindowsProjectUITests(unittest.TestCase):
              patch('bridge.platforms.windows.projects.subprocess.run') as run:
             with self.assertRaises(ValueError):edit_project(self.root/'Codex.exe','delete',self.project)
         run.assert_not_called()
+
+    def test_create_submits_exact_directory_to_guarded_native_dialog(self):
+        result = SimpleNamespace(returncode=0,stdout='{"phase":"submitted","pid":123}\n')
+        with patch('bridge.platforms.windows.projects.subprocess.run', return_value=result) as run:
+            self.assertEqual(create_project(self.root/'Codex.exe', 'New project', str(self.root)), {'submitted':True})
+        payload = __import__('json').loads(run.call_args.kwargs['input'])
+        self.assertEqual(payload['action'], 'create')
+        self.assertEqual(payload['path'], str(self.root.resolve()))
+        self.assertEqual(payload['name'], 'New project')
+        self.assertEqual(payload['pid'], 123)
+        self.assertEqual(payload['created'], self.snapshot['created'])
+
+    def test_create_invalid_directory_and_name_never_touch_native_ui(self):
+        with patch('bridge.platforms.windows.projects.subprocess.run') as run:
+            for name, directory in [('Test', self.root/'missing'), ('Test', 'relative'), ('',self.root), ('Bad\nName',self.root)]:
+                with self.subTest(name=name, directory=directory), self.assertRaises(ProjectUIError):
+                    create_project(self.root/'Codex.exe', name, directory)
+        run.assert_not_called()
+
+    def test_create_rejected_before_dispatch_is_safe_but_dispatch_timeout_is_unknown(self):
+        result = SimpleNamespace(returncode=1, stdout='{"phase":"failed","pid":123,"error":"dialog already open"}\n')
+        with patch('bridge.platforms.windows.projects.subprocess.run', return_value=result):
+            with self.assertRaises(ProjectUIError) as caught:
+                create_project(self.root/'Codex.exe', 'New', self.root)
+        self.assertFalse(caught.exception.unknown)
+        with patch('bridge.platforms.windows.projects.subprocess.run', side_effect=subprocess.TimeoutExpired('helper',60)):
+            with self.assertRaises(ProjectUIError) as caught:
+                create_project(self.root/'Codex.exe', 'New', self.root)
+        self.assertTrue(caught.exception.unknown)
 
     def test_dispatch_followed_by_failure_is_unknown_not_retryable(self):
         result=SimpleNamespace(returncode=1,stdout='{"phase":"dispatching","pid":123}\n{"phase":"unknown","pid":123,"error":"interrupted"}\n')

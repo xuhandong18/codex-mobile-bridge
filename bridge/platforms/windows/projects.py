@@ -22,7 +22,23 @@ def helper_path():
 def edit_project(executable, action, project, name=None):
     if action not in ('rename','delete'):
         raise ProjectUIError('不支持的项目操作')
-    executable, deadline = Path(executable).resolve(), time.monotonic()+BUDGET
+    return _project_dialog(executable, action, project, name)
+
+
+def create_project(executable, name, directory):
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 120 or any(ord(c) < 32 for c in name):
+        raise ProjectUIError('项目名称无效')
+    try:
+        path = Path(directory).resolve(strict=True)
+        if not Path(directory).is_absolute() or not path.is_dir():
+            raise ValueError()
+    except (OSError, ValueError, TypeError):
+        raise ProjectUIError('项目文件夹不存在或无法访问') from None
+    return _project_dialog(executable, 'create', {'label':name, 'path':str(path)})
+
+
+def _project_dialog(executable, action, project, name=None):
+    executable, deadline = Path(executable).resolve(), time.monotonic()+(60 if action == 'create' else BUDGET)
     try:
         original = _snapshot(executable, deadline)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
@@ -39,6 +55,8 @@ def edit_project(executable, action, project, name=None):
         raise ProjectUIError('Codex 运行实例已变化，尚未修改项目；请刷新后重试') from exc
     payload = {'pid':pid, 'created':original['created'], 'executable':str(executable),
                'action':action, 'name':project['label'], 'newName':name}
+    if action == 'create':
+        payload['path'] = project['path']
     try:
         result = subprocess.run([str(helper)], input=json.dumps(payload, ensure_ascii=False),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding='utf-8',

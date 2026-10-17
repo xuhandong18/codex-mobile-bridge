@@ -555,7 +555,7 @@ function openNewProject(){
   name.setAttribute('aria-label',t('项目名称'));path.setAttribute('aria-label',t('关联文件夹'));section.setAttribute('aria-label',t('所属分区'));
   section.append(new Option(t('不属于分区'),''));for(const row of sidebarData.sections||[])section.append(new Option(row.name,row.id));
   const browse=el('button','project-browse-button',t('浏览文件夹'));browse.type='button';pathRow.append(path,browse);
-  form.append(el('p','muted',t('项目由 Codex 桌面保存。文件夹须在当前桌面聊天已获准的目录内；首次使用可能需要在电脑确认信任。')));
+  form.append(el('p','muted',t('项目由 Codex 桌面保存。可以选择已有文件夹或新建文件夹，无需先为这个目录创建聊天；首次使用可能需要在电脑确认信任。')));
   const folderHint=el('p','muted',t('新建文件夹需要新版手机网关，请在电脑上重启手机网关后重新打开此窗口。'));folderHint.hidden=true;form.append(folderHint);
   let busy=false,attempt=null,metadataReady=false,directoryReady=false,uncertain=false;
   const folderBrowser=new ProjectFolderBrowser({button:browse,input:path,request:api,uuid,canCreate:()=>metadataReady&&directoryReady&&!busy&&!uncertain,

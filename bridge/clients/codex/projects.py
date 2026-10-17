@@ -26,15 +26,37 @@ def within(folder, root):
         return False
 
 
+def local_roots(result):
+    hosts = result.get('hosts')
+    if not isinstance(hosts, list) or any(not isinstance(h, dict) for h in hosts):
+        raise ToolError('无法核验当前聊天的目录权限')
+    local = [h for h in hosts if h.get('hostId') == 'local']
+    roots = local[0].get('workspaceRoots') if len(local) == 1 else None
+    if not isinstance(roots, list) or any(not isinstance(root, str) or not root or not Path(root).is_absolute() for root in roots):
+        raise ToolError('无法核验当前聊天的目录权限')
+    return roots
+
+
+def project_rows(native, *, unknown=False):
+    rows = native.call('list_projects', {}).get('projects')
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or
+            any(not isinstance(row.get(key), str) or not row[key] for key in ('projectId', 'label', 'path')) for row in rows):
+        raise ToolError('桌面项目列表无法核验，请检查 Codex 项目列表', unknown=unknown)
+    if len({row['projectId'] for row in rows}) != len(rows):
+        raise ToolError('桌面项目身份不唯一，请检查 Codex 项目列表', unknown=unknown)
+    return rows
+
+
 class NativeProjects:
-    def __init__(self, bridge):
+    def __init__(self, bridge, project_creator=None):
         self.bridge = bridge
+        self.project_creator = project_creator
 
     @property
     def available(self):
         return sys.platform == 'win32' and self.bridge.host == 'local'
 
-    def context(self, value):
+    def context(self, value, *, require_directory=True):
         identifier = value.get('contextId')
         if identifier:
             row = self.bridge.store.get(identifier)
@@ -42,10 +64,12 @@ class NativeProjects:
                 raise ToolError('请先选择一个本机 Codex 桌面聊天，再创建项目')
             return row['id']
         rows = self.bridge.store.list(limit=100, source='desktop')
-        row = next((r for r in rows if r.get('origin') == 'desktop' and r.get('host', 'local') == 'local'
-                    and within(value['cwd'], r.get('cwd') or '/invalid')), None)
+        local = [r for r in rows if r.get('origin') == 'desktop' and r.get('host', 'local') == 'local']
+        row = next((r for r in local if within(value['cwd'], r.get('cwd') or '/invalid')), None)
+        if row is None and not require_directory:
+            row = next(iter(local), None)
         if not row:
-            raise ToolError('请先打开一个关联目录的本机 Codex 桌面聊天，再创建项目')
+            raise ToolError('请先打开一个关联目录的本机 Codex 桌面聊天，再创建项目' if require_directory else '请先在 Codex 桌面打开一个本机聊天，再创建项目')
         return row['id']
 
     @contextmanager
@@ -63,13 +87,7 @@ class NativeProjects:
             native = DesktopTools.connect(executable, context_id,
                 {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'})
             try:
-                hosts = native.call('list_hosts', {}).get('hosts')
-                if not isinstance(hosts, list) or any(not isinstance(h, dict) for h in hosts):
-                    raise ToolError('无法核验当前聊天的目录权限')
-                local = [h for h in hosts if h.get('hostId') == 'local']
-                roots = local[0].get('workspaceRoots') if len(local) == 1 else None
-                if not isinstance(roots, list) or any(not isinstance(root, str) or not root or not Path(root).is_absolute() for root in roots):
-                    raise ToolError('无法核验当前聊天的目录权限')
+                roots = local_roots(native.call('list_hosts', {}))
                 allowed = [canonical(root) for root in roots if within(value['parent'], root)]
                 if not allowed:
                     raise ToolError('所选文件夹不在当前聊天已获准的目录内，请先在 Codex 桌面添加该目录')
@@ -83,28 +101,54 @@ class NativeProjects:
 
     def _create(self, value, progress):
         bridge = self.bridge
-        context_id = self.context(value)
+        context_id = self.context(value, require_directory=False)
         executable = bridge.accounts.index.get('desktopExecutable') or DesktopApp.scan(bridge.catalog_reader.executable, bridge.codex_home)
         native = DesktopTools.connect(executable, context_id,
                                       {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'})
         project = None
         creation_sent = False
         try:
-            hosts = native.call('list_hosts', {})
-            local = next((h for h in hosts.get('hosts', []) if h.get('hostId') == 'local'), {})
-            if not any(within(value['cwd'], root) for root in local.get('workspaceRoots', [])):
-                raise ToolError('所选文件夹不在当前聊天已获准的目录内，请先在 Codex 桌面添加该目录')
+            roots = local_roots(native.call('list_hosts', {}))
+            scoped = any(within(value['cwd'], root) for root in roots)
             # Recheck the section immediately before the first native write.
             if value['sectionId'] is not None and value['sectionId'] not in {s['id'] for s in bridge.hosts.sidebar()['sections']}:
                 raise ToolError('所选分区已不存在，请刷新后重试')
-            progress('creating', '请在 Codex 桌面确认文件夹信任提示；已有权限时会直接创建')
-            creation_sent = True
-            result = native.call('create_project', {'name':value['name'], 'sources':[value['cwd']], 'host':{'type':'local'}}, timeout=300)
+            if scoped:
+                progress('creating', '请在 Codex 桌面确认文件夹信任提示；已有权限时会直接创建')
+                creation_sent = True
+                result = native.call('create_project', {'name':value['name'], 'sources':[value['cwd']], 'host':{'type':'local'}}, timeout=300)
+            else:
+                rows = project_rows(native)
+                if any(row.get('path') and canonical(row['path']) == canonical(value['cwd']) for row in rows):
+                    raise ToolError('这个文件夹已经关联了项目，请使用已有项目')
+                creator = self.project_creator
+                if creator is None:
+                    from bridge.platforms.windows.projects import create_project
+                    creator = create_project
+                progress('creating', '正在由 Codex 原生窗口创建项目，请留意电脑上的确认提示')
+                creation_sent = True
+                try:
+                    receipt = creator(executable, value['name'], value['cwd'])
+                except Exception as exc:
+                    raise ToolError(str(exc), unknown=getattr(exc, 'unknown', True)) from exc
+                if not isinstance(receipt, dict) or receipt.get('submitted') is not True:
+                    raise ToolError('原生创建回执无法核验，请检查 Codex 项目列表，不要重复创建', unknown=True)
+                progress('creating', '正在等待 Codex 保存项目，请在电脑上确认文件夹信任提示')
+                deadline = time.monotonic()+300
+                while True:
+                    rows = project_rows(native, unknown=True)
+                    matches = [row for row in rows if row.get('path') and canonical(row['path']) == canonical(value['cwd']) and row.get('label') == value['name']]
+                    if len(matches) == 1:
+                        result = {'projectId':matches[0]['projectId'], 'rootPaths':[matches[0]['path']]}
+                        break
+                    if len(matches) > 1 or time.monotonic() >= deadline:
+                        raise ToolError('桌面创建结果无法核验，请检查 Codex 项目列表，不要重复创建', unknown=True)
+                    time.sleep(.2)
             identifier = result.get('projectId')
             roots = result.get('rootPaths')
-            if not isinstance(identifier, str) or not roots or canonical(roots[0]) != canonical(value['cwd']):
+            if not isinstance(identifier, str) or not isinstance(roots, list) or len(roots) != 1 or not isinstance(roots[0], str) or canonical(roots[0]) != canonical(value['cwd']):
                 raise ToolError('桌面创建结果无法核验，请检查 Codex 项目列表，不要重复创建', unknown=True)
-            rows = native.call('list_projects', {}).get('projects', [])
+            rows = project_rows(native, unknown=True)
             row = next((p for p in rows if p.get('projectId') == identifier), None)
             if not row or row.get('label') != value['name'] or not row.get('path') or canonical(row['path']) != canonical(value['cwd']):
                 raise ToolError('桌面项目尚未核验，请检查 Codex 项目列表，不要重复创建', unknown=True)

@@ -205,13 +205,69 @@ class NativeProjectDelegationTests(unittest.TestCase):
         self.assertTrue(within(str(self.folder),'\\\\?\\'+str(self.root)))
         self.assertFalse(within(str(self.root),'\\\\?\\'+str(self.folder)))
 
-    def test_native_permission_failure_never_sends_create(self):
+    def test_native_dialog_rejection_does_not_retry_as_a_scoped_tool_write(self):
+        from bridge.platforms.windows.projects import ProjectUIError
         native = Mock()
-        native.call.return_value = {'hosts':[{'hostId':'local','workspaceRoots':[str(self.folder/'unapproved')]}]}
-        with patch.object(DesktopTools,'connect',return_value=native), self.assertRaisesRegex(ToolError,'获准'):
-            NativeProjects(self.bridge)(self.request,Mock())
-        self.assertEqual([c.args[0] for c in native.call.call_args_list],['list_hosts'])
+        native.call.side_effect = [{'hosts':[{'hostId':'local','workspaceRoots':[]}]}, {'projects':[]}]
+        creator = NativeProjects(self.bridge, project_creator=Mock(side_effect=ProjectUIError('用户取消创建')))
+        with patch.object(DesktopTools,'connect',return_value=native), self.assertRaisesRegex(ToolError,'用户取消') as caught:
+            creator(self.request,Mock())
+        self.assertFalse(caught.exception.unknown)
+        self.assertEqual([c.args[0] for c in native.call.call_args_list],['list_hosts','list_projects'])
         native.close.assert_called_once()
+
+    def test_malformed_native_roots_or_projects_never_open_a_create_dialog(self):
+        for results in ([{'hosts':None}], [{'hosts':[{'hostId':'local','workspaceRoots':'invalid'}]}],
+                        [{'hosts':[{'hostId':'local','workspaceRoots':[]}]}, {'projects':None}],
+                        [{'hosts':[{'hostId':'local','workspaceRoots':[]}]}, {'projects':[{'projectId':'missing-path'}]}]):
+            native, ui = Mock(), Mock()
+            native.call.side_effect = results
+            with self.subTest(results=results), patch.object(DesktopTools, 'connect', return_value=native), self.assertRaises(ToolError):
+                NativeProjects(self.bridge, project_creator=ui)(self.request, Mock())
+            ui.assert_not_called()
+            native.close.assert_called_once()
+
+    def test_unconfirmed_native_create_receipt_is_unknown_and_never_assigned(self):
+        native = Mock()
+        native.call.side_effect = [{'hosts':[{'hostId':'local','workspaceRoots':[]}]}, {'projects':[]}]
+        ui = Mock(return_value=None)
+        with patch.object(DesktopTools, 'connect', return_value=native), self.assertRaises(ToolError) as caught:
+            NativeProjects(self.bridge, project_creator=ui)(self.request, Mock())
+        self.assertTrue(caught.exception.unknown)
+        self.assertEqual([call.args[0] for call in native.call.call_args_list], ['list_hosts','list_projects'])
+        ui.assert_called_once()
+
+    def test_project_list_creation_uses_native_project_dialog_without_a_matching_chat(self):
+        self.bridge.store.list = lambda **kwargs:[{'id':str(uuid.uuid4()), 'origin':'desktop', 'host':'local', 'cwd':str(self.folder/'other-project')}]
+        native = Mock()
+        native.call.side_effect = [
+            {'hosts':[{'hostId':'local','workspaceRoots':[]}]},
+            {'projects':[]}, {'projects':[self.row]}, {'projects':[self.row]}, {},
+            {'sections':[{'sectionId':'threads','itemKeys':['codex:project:'+self.identifier]}]}]
+        creator = NativeProjects(self.bridge)
+        creator.project_creator = Mock(return_value={'submitted':True})
+        with patch.object(DesktopTools, 'connect', return_value=native):
+            result = creator(self.request, Mock())
+        self.assertEqual(result, self.project)
+        creator.project_creator.assert_called_once_with('Codex.exe', self.request['name'], self.request['cwd'])
+        self.assertNotIn('create_project', [call.args[0] for call in native.call.call_args_list])
+        self.assertEqual([call.args[0] for call in native.call.call_args_list], ['list_hosts','list_projects','list_projects','list_projects','move_project_to_sidebar_section','list_threads'])
+
+    def test_new_directory_project_finishes_only_after_custom_section_is_saved(self):
+        section_id = str(uuid.uuid4())
+        self.request['sectionId'] = section_id
+        section = {'id':section_id, 'name':'学习', 'itemKeys':['codex:project:'+self.identifier]}
+        self.bridge.hosts.sidebar = lambda:{'sections':[section], 'projects':[self.project]}
+        native = Mock()
+        native.call.side_effect = [
+            {'hosts':[{'hostId':'local','workspaceRoots':[]}]}, {'projects':[]},
+            {'projects':[self.row]}, {'projects':[self.row]}, {},
+            {'sections':[{'sectionId':section_id,'itemKeys':section['itemKeys']}]}]
+        ui = Mock(return_value={'submitted':True})
+        with patch.object(DesktopTools, 'connect', return_value=native):
+            self.assertEqual(NativeProjects(self.bridge, project_creator=ui)(self.request, Mock()), self.project)
+        native.call.assert_any_call('move_project_to_sidebar_section', {'projectId':self.identifier, 'sectionId':section_id})
+        ui.assert_called_once()
 
     def test_success_requires_native_project_and_section_then_persisted_readback(self):
         native = Mock()
@@ -225,6 +281,26 @@ class NativeProjectDelegationTests(unittest.TestCase):
         writes=[c for c in native.call.call_args_list if c.args[0]=='create_project']
         self.assertEqual(len(writes),1)
         self.assertEqual(writes[0].args[1],{'name':'Native','sources':[str(self.folder)],'host':{'type':'local'}})
+
+    def test_native_dialog_allows_time_for_manual_trust_without_resubmitting_creation(self):
+        clock = [0.0]
+        def call(method, arguments):
+            if method == 'list_hosts':
+                return {'hosts':[{'hostId':'local', 'workspaceRoots':[]}]}
+            if method == 'list_projects':
+                return {'projects':[self.row] if clock[0] >= 20 else []}
+            if method == 'list_threads':
+                return {'sections':[{'sectionId':'threads','itemKeys':['codex:project:'+self.identifier]}]}
+            return {}
+        native, ui = Mock(), Mock(return_value={'submitted':True})
+        native.call.side_effect = call
+        with patch.object(DesktopTools,'connect',return_value=native), \
+                patch('bridge.clients.codex.projects.time.monotonic', side_effect=lambda:clock[0]), \
+                patch('bridge.clients.codex.projects.time.sleep', side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+            result = NativeProjects(self.bridge, project_creator=ui)(self.request, Mock())
+        self.assertEqual(result, self.project)
+        ui.assert_called_once()
+        self.assertGreaterEqual(clock[0], 20)
 
 
 class ToolProtocolTests(unittest.TestCase):
