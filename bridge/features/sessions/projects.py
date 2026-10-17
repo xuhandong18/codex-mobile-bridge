@@ -86,7 +86,7 @@ class Projects:
                 if prior['fingerprint'] != fingerprint:
                     raise ValueError('同一个文件夹创建请求不能修改内容')
                 return self._directory_receipt(prior)
-            if not self.can_create or not callable(getattr(self.native_creator, 'directory_scope', None)):
+            if not self.can_create_directory:
                 raise ValueError('尚未接通 Codex 桌面的原生目录授权接口，请先在桌面端创建文件夹')
             # Resolve only the existing parent for target identity (including
             # Windows short-name aliases). The worker still walks the original
@@ -148,6 +148,10 @@ class Projects:
     @property
     def can_create(self):
         return self.native_creator is not None and bool(getattr(self.native_creator, 'available', True))
+
+    @property
+    def can_create_directory(self):
+        return self.can_create and callable(getattr(self.native_creator, 'directory_scope', None))
 
     def operation(self, identifier):
         with self.lock:

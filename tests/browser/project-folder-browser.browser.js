@@ -53,3 +53,15 @@ async function runProjectFolderBrowserTests(){
   projectDialog.close();
   return {checks};
 }
+
+// Run with legacy metadata (no canCreateDirectory) or an explicit false capability.
+function runProjectFolderCreationCompatibilityChecks(){
+  const {picker,projectDialog,pathInput}=window.projectFolderFixture;
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  check(picker.dialog.open&&!picker.loading,'Folder browsing works with an older gateway');
+  check(picker.newFolderButton.disabled,'Unsupported creation is disabled before any write');
+  check(picker.status.textContent.includes('重启手机网关'),'The required restart is explained inside the folder dialog');
+  check(!picker.selectButton.disabled&&picker.list.querySelectorAll('.pf-folder-row').length>0,'Existing folders can still be browsed and selected');
+  check(pathInput.value==='','Checking compatibility leaves the project path untouched');
+  picker.cancelButton.click();projectDialog.close();return {checks};
+}

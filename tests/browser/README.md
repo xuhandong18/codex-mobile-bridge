@@ -30,6 +30,8 @@
 
 `project-folder-browser.browser.js` 的 `runProjectFolderBrowserTests()` 使用合成的 `D:\Workspace` 目录和项目表单，检查文件夹弹窗、常用位置、面包屑、地址输入、搜索、空目录和错误状态。驱动提供 `window.projectFolderFixture`，在电脑、手机、平板和横屏尺寸实际调用；新建目录先返回处理中回执再经只读轮询完成，碰撞不覆盖，仅显式确认回填路径，不能调用原生项目创建或聊天写接口。`project-folder-browser.test.cjs` 另外覆盖未知回执、断线和旧请求，不自动重放创建。
 
+同一夹具的 `runProjectFolderCreationCompatibilityChecks()` 由驱动分别省略 `canCreateDirectory` 和将其设为 `false`，检查旧网关仍可浏览和选择已有目录、新建按钮禁用且弹窗内明确提示重启；驱动同时验证没有目录写请求。创建或回执接口返回 404 的区别由 Node 回归覆盖，已接受写入后的查询失败保持未知状态。
+
 `timeline.browser.js` 还提供 `runReasoningSummaryTests()`，检查无公开摘要的记录隐藏、不读取空记录，以及后续公开摘要到达后显示并加载正文。
 
 `navigation-preferences.browser.js` 的 `runSelectionActionBrowserTests()` 检查选词后的滚动、当前输入框引用、侧边聊天草稿、活动正文选词，以及原生菜单消费选区凭证时的单次消费和会话隔离；只在合成聊天中执行。

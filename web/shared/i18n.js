@@ -2,6 +2,8 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"新建文件夹需要新版手机网关，请在电脑上重启手机网关后重新打开此窗口。":"Creating folders requires an updated mobile gateway. Restart the gateway on your computer, then reopen this window.",
+"当前运行的手机网关缺少文件夹创建接口，请在电脑上重启手机网关后重新打开此窗口。":"The running mobile gateway has no folder creation endpoint. Restart the gateway on your computer, then reopen this window.",
 "引用到聊天":"Quote in chat",
 "文件引用":"File excerpt",
 "查看文件引用":"View file excerpt",

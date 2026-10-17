@@ -556,8 +556,10 @@ function openNewProject(){
   section.append(new Option(t('不属于分区'),''));for(const row of sidebarData.sections||[])section.append(new Option(row.name,row.id));
   const browse=el('button','project-browse-button',t('浏览文件夹'));browse.type='button';pathRow.append(path,browse);
   form.append(el('p','muted',t('项目由 Codex 桌面保存。文件夹须在当前桌面聊天已获准的目录内；首次使用可能需要在电脑确认信任。')));
-  let busy=false,attempt=null,metadataReady=false,uncertain=false;
-  const folderBrowser=new ProjectFolderBrowser({button:browse,input:path,request:api,uuid,canCreate:()=>metadataReady&&!busy&&!uncertain,
+  const folderHint=el('p','muted',t('新建文件夹需要新版手机网关，请在电脑上重启手机网关后重新打开此窗口。'));folderHint.hidden=true;form.append(folderHint);
+  let busy=false,attempt=null,metadataReady=false,directoryReady=false,uncertain=false;
+  const folderBrowser=new ProjectFolderBrowser({button:browse,input:path,request:api,uuid,canCreate:()=>metadataReady&&directoryReady&&!busy&&!uncertain,
+    creationHint:()=>metadataReady&&!directoryReady?'新建文件夹需要新版手机网关，请在电脑上重启手机网关后重新打开此窗口。':'',
     context:()=>({key:chatKey()+'|'+modelCatalogGeneration,cwd:state?.cwd||'',...(currentId&&currentHost==='local'&&state?.origin==='desktop'?{contextId:currentId}:{})}),
     onSelect:cwd=>{if(!name.value.trim())name.value=ProjectFolderBrowser.trail(cwd).at(-1)?.name||'';}});
   browse.prepend(folderBrowser.icon('folder'));dialog.addEventListener('close',()=>{folderBrowser.close();folderBrowser.dialog?.remove();});
@@ -597,7 +599,8 @@ function openNewProject(){
     if(!dialog.open)return;
     section.replaceChildren(new Option(t('不属于分区'),''));
     for(const row of value.sections||[])section.append(new Option(row.name,row.id));
-    metadataReady=value.canCreateProject===true;section.disabled=false;submit.disabled=!metadataReady;
+    metadataReady=value.canCreateProject===true;directoryReady=value.canCreateDirectory===true;folderHint.hidden=!metadataReady||directoryReady;section.disabled=false;submit.disabled=!metadataReady;
+    if(folderBrowser.dialog?.open)folderBrowser.renderControls();
     if(!metadataReady)error.textContent=t('尚未接通 Codex 桌面的原生项目创建接口，请先在桌面端添加项目；不会保存为网关项目');
   }).catch(failure=>{if(dialog.open)error.textContent=t(failure.message);});
 }

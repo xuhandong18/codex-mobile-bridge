@@ -40,6 +40,19 @@ class ProjectsHttpTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertEqual([row['name'] for row in body['directories']],['child'])
 
+    def test_metadata_advertises_directory_creation_only_when_the_handler_is_available(self):
+        registry = self.server.bridge.project_registry
+        headers = self.login()
+        for creator, project, directory in ((None, False, False),
+                (SimpleNamespace(available=True), True, False),
+                (directory_support.DirectoryCreator(self.folder), True, True),
+                (SimpleNamespace(available=False, directory_scope=lambda value:None), False, False)):
+            registry.native_creator = creator
+            status, _, body = self.request('GET', '/api/projects?metadata=1', headers=headers)
+            self.assertEqual(status, 200)
+            self.assertIs(body['canCreateProject'], project)
+            self.assertIs(body['canCreateDirectory'], directory)
+
     def test_relay_allows_exact_project_and_directory_operation_routes(self):
         from relay.protocol import validate
         validate('POST','/api/projects',100)

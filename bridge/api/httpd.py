@@ -621,7 +621,8 @@ class Handler(BaseHTTPRequestHandler):
             if not write and path == '/api/projects':
                 if query.get('metadata', [''])[0] == '1':
                     return self.output(200, {**self.server.bridge.hosts.sidebar(),
-                        'canCreateProject':self.server.bridge.project_registry.can_create})
+                        'canCreateProject':self.server.bridge.project_registry.can_create,
+                        'canCreateDirectory':self.server.bridge.project_registry.can_create_directory})
                 return self.output(200, {'projects': self.server.bridge.projects()})
             if write and path == '/api/projects':
                 bridge = self.server.bridge

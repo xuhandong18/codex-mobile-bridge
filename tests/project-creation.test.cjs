@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 
-function fixture(responses){
+function fixture(responses,metadata={canCreateProject:true,canCreateDirectory:true,sections:[]}){
   const nodes=[],timers=[],requests=[],toasts=[];
   const node=tag=>{
     const n={tagName:tag.toUpperCase(),children:[],dataset:{},textContent:'',value:'',disabled:false,open:false,
@@ -19,20 +19,34 @@ function fixture(responses){
     $:id=>controls[id],loadList:async()=>{},toast:s=>toasts.push(s),
     setTimeout:fn=>timers.push(fn),api:async(route,body)=>{
       requests.push({route,body});
-      if(route.includes('metadata'))return {canCreateProject:true,sections:[]};
+      if(route.includes('metadata'))return metadata;
       const response=responses.shift();if(response instanceof Error)throw response;return response;
     }});
   const source=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');
   const start=source.indexOf('function openNewProject(){'),end=source.indexOf('let applyingNewChat=',start);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/features/chat/project-folder-browser.js'),'utf8'),context);
+  vm.runInContext('ProjectFolderBrowser=class extends ProjectFolderBrowser{constructor(options){super(options);globalThis.fixtureFolderBrowser=this;}};',context);
   vm.runInContext(source.slice(start,end)+'\nopenNewProject();',context);
   const form=nodes.find(n=>n.tagName==='FORM'),inputs=nodes.filter(n=>n.tagName==='INPUT').slice(-2),submit=nodes.find(n=>n.textContent==='创建项目');
   inputs[0].value='Native';inputs[1].value='D:/workspace/child';
   const flush=()=>new Promise(setImmediate);
-  return {dialog,form,submit,requests,toasts,timers,flush,
+  return {dialog,form,submit,requests,toasts,timers,flush,nodes,folderBrowser:context.fixtureFolderBrowser,
     async submitForm(){const pending=form.onsubmit({preventDefault(){}});await flush();return {pending};},
     async tick(){assert.ok(timers.length);timers.shift()();await flush();}};
 }
+
+test('older gateway metadata keeps folder browsing available and explains the required restart before creation',async()=>{
+  const f=fixture([],{canCreateProject:true,sections:[]});await f.flush();
+  assert.equal(f.folderBrowser.canCreate(),false);assert.equal(f.folderBrowser.button.disabled,false);assert.equal(f.submit.disabled,false);
+  assert.match(f.folderBrowser.creationHint(),/重启.*手机网关/);
+  const hint=f.nodes.find(node=>node.textContent.includes('新建文件夹需要新版手机网关'));assert.ok(hint);assert.equal(hint.hidden,false);
+  assert.equal(f.requests.filter(entry=>entry.body).length,0);
+});
+
+test('a gateway that advertises folder creation enables the action without a restart warning',async()=>{
+  const f=fixture([]);await f.flush();assert.equal(f.folderBrowser.canCreate(),true);
+  assert.equal(f.nodes.find(node=>node.textContent.includes('新建文件夹需要新版手机网关')).hidden,true);
+});
 
 test('native creation keeps the dialog pending and only reports success after verified completion',async()=>{
   const f=fixture([{id:'request-uuid',status:'creating',message:'Confirm on desktop'},

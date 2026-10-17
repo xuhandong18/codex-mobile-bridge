@@ -161,6 +161,31 @@ test('invalid directory lists show an error and an explicit refresh can recover'
   f.handle((entry,listing)=>listing(entry.route));await b.refreshButton.onclick();assert.equal(b.currentPath,parent);assert.equal(b.error.textContent,'');
 });
 
+test('a missing folder creation route explains that the running gateway needs a restart',async()=>{
+  const f=fixture(),b=f.browser;await b.open();b.showCreateForm();f.typeName('New folder');
+  f.handle((entry,listing)=>{if(entry.method==='POST')throw Object.assign(Error('页面不存在'),{status:404});return listing(entry.route);});
+  await b.createDirectory();assert.match(b.createStatus.textContent,/重启.*手机网关/);
+  assert.doesNotMatch(b.createStatus.textContent,/页面不存在/);assert.equal(f.writes().length,1);assert.equal(f.timers.size,0);assert.equal(b.writing,false);
+});
+
+test('an unavailable creation capability explains the restart inside the folder dialog while browsing remains usable',async()=>{
+  const f=fixture({canCreate:()=>false}),b=f.browser;b.creationHint=()=> '请重启电脑上的手机网关';await b.open();
+  assert.equal(b.newFolderButton.disabled,true);assert.match(b.status.textContent,/重启.*手机网关/);
+  assert.equal(b.selectButton.disabled,false);assert.ok(rowPaths(b).length);assert.equal(f.writes().length,0);
+});
+
+test('a missing receipt route keeps a submitted creation unknown and only allows GET verification',async()=>{
+  const f=fixture(),b=f.browser;await b.open();b.showCreateForm();f.typeName('New folder');
+  f.handle((entry,listing)=>{
+    if(entry.method==='POST')return receipt(entry,'pending');
+    if(entry.route.startsWith('/api/project-directory-operations?'))throw Object.assign(Error('页面不存在'),{status:404});
+    return listing(entry.route);
+  });
+  const pending=b.createDirectory();await f.tick();await pending;assert.match(b.createStatus.textContent,/重启.*手机网关/);
+  assert.match(b.createStatus.textContent,/尚未确认/);assert.equal(b.folderCreate.disabled,true);assert.equal(b.checkButton.hidden,false);
+  await b.checkAttempt();assert.equal(f.writes().length,1);assert.equal(f.operations().length,2);assert.equal(JSON.parse([...f.saved.values()][0]).status,'unknown');
+});
+
 test('only confirmation writes the parent input, dispatches input and calls onSelect; cancel changes nothing',async()=>{
   const f=fixture(),b=f.browser,events=[];b.input.addEventListener('input',event=>events.push(event));await b.open();
   await b.navigate(parent+'/Alpha');b.cancelButton.onclick();assert.equal(b.dialog.open,false);assert.equal(b.input.value,parent);assert.deepEqual(f.selected,[]);assert.equal(events.length,0);

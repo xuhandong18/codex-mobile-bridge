@@ -3,8 +3,8 @@
 class ProjectFolderBrowser {
   static sequence=0;
   static attempts=new Map();
-  constructor({button,input,request,context=()=>({key:'project'}),uuid,canCreate=()=>true,onSelect=()=>{}}){
-    Object.assign(this,{button,input,request,context,uuid,canCreate,onSelect});
+  constructor({button,input,request,context=()=>({key:'project'}),uuid,canCreate=()=>true,creationHint=()=>'',onSelect=()=>{}}){
+    Object.assign(this,{button,input,request,context,uuid,canCreate,creationHint,onSelect});
     this.generation=0;this.directories=[];this.roots=[];this.currentPath='';this.currentParent=null;
     button.onclick=()=>this.open();
   }
@@ -155,6 +155,7 @@ class ProjectFolderBrowser {
     const busy=this.loading||this.writing||this.locked;
     this.upButton.disabled=busy||this.currentParent===null;this.refreshButton.disabled=busy;this.editButton.disabled=busy;this.goButton.disabled=busy;this.search.disabled=busy;
     this.newFolderButton.disabled=busy||this.failed||!this.currentPath||!this.canCreate();this.selectButton.disabled=busy||this.failed||!this.currentPath;
+    if(!busy&&!this.failed&&this.currentPath&&!this.canCreate()&&this.creationHint())this.status.textContent=this.t(this.creationHint());
     this.selectedPath.textContent=this.currentPath||this.t('尚未选择文件夹');this.selectedPath.title=this.currentPath;
     for(const button of this.shortcuts.children)if(button.tagName==='BUTTON')button.disabled=!!busy;
     for(const button of this.breadcrumbs.children)if(button.tagName==='BUTTON')button.disabled=!!busy;
@@ -192,10 +193,11 @@ class ProjectFolderBrowser {
     return this.runAttempt(attempt,false);
   }
   async runAttempt(attempt,submit){
-    const generation=this.generation;this.writing=true;this.activeAttempt=attempt;this.renderControls();this.renderCreate();this.renderList();this.createStatus.textContent=this.t(submit?'正在创建文件夹…':'正在核对创建结果…');
+    const generation=this.generation;let accepted=!submit;this.writing=true;this.activeAttempt=attempt;this.renderControls();this.renderCreate();this.renderList();this.createStatus.textContent=this.t(submit?'正在创建文件夹…':'正在核对创建结果…');
     try{
       const body={id:attempt.id,parent:attempt.parent,name:attempt.name,...(attempt.contextId?{contextId:attempt.contextId}:{})};
       let result=await this.request(submit?'/api/project-directories':'/api/project-directory-operations?id='+encodeURIComponent(attempt.id),submit?body:undefined);
+      accepted=true;
       while(true){
         if(!result||result.id!==attempt.id||!['pending','creating','completed','failed','unknown'].includes(result.status))throw Error(this.t('文件夹创建回执无效，无法确认结果。'));
         attempt.status=result.status;attempt.message=result.message||'';this.remember(attempt);
@@ -212,8 +214,10 @@ class ProjectFolderBrowser {
         if(this.current()&&this.generation===navigationGeneration){this.status.textContent=this.t('文件夹已创建，可以选择此文件夹。');this.selectButton.focus();}
       }else this.createStatus.textContent=this.t(result.message||'创建结果尚未确认，请核对结果或刷新目录，不要重复创建。');
     }catch(error){
-      attempt.status=submit&&[400,401,403,404,409].includes(error.status)?'failed':'unknown';attempt.message=error.message;this.remember(attempt);
-      if(this.current()&&generation===this.generation)this.createStatus.textContent=this.t(error.message)+(attempt.status==='unknown'?' '+this.t('创建结果尚未确认，请核对结果或刷新目录，不要重复创建。'):'');
+      // A failed receipt lookup does not prove an accepted write was rejected.
+      attempt.status=!accepted&&submit&&[400,401,403,404,409].includes(error.status)?'failed':'unknown';attempt.message=error.message;this.remember(attempt);
+      const message=error.status===404?'当前运行的手机网关缺少文件夹创建接口，请在电脑上重启手机网关后重新打开此窗口。':error.message;
+      if(this.current()&&generation===this.generation)this.createStatus.textContent=this.t(message)+(attempt.status==='unknown'?' '+this.t('创建结果尚未确认，请核对结果或刷新目录，不要重复创建。'):'');
     }finally{
       if(generation===this.generation){this.writing=false;this.activeAttempt=null;if(this.current()){this.renderControls();this.renderCreate({preserveMessage:true});this.renderList();}}
     }
