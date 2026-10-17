@@ -168,6 +168,15 @@ test('a missing folder creation route explains that the running gateway needs a 
   assert.doesNotMatch(b.createStatus.textContent,/页面不存在/);assert.equal(f.writes().length,1);assert.equal(f.timers.size,0);assert.equal(b.writing,false);
 });
 
+test('folder creation carries the parent selection from browsing and refresh replaces it',async()=>{
+  const f=fixture({target:{key:'project-list'}}),b=f.browser;let selectionId='a'.repeat(64);
+  f.handle((entry,listing)=>entry.method==='POST'?receipt(entry):{...listing(entry.route),selectionId});
+  await b.open();b.showCreateForm();f.typeName('first');await b.createDirectory();
+  assert.equal(f.writes()[0].body.selectionId,'a'.repeat(64));assert.equal(f.writes()[0].body.contextId,undefined);
+  selectionId='b'.repeat(64);await b.navigate(parent);b.showCreateForm();f.typeName('second');await b.createDirectory();
+  assert.equal(f.writes()[1].body.selectionId,'b'.repeat(64));assert.equal(f.writes()[1].body.parent,parent);
+});
+
 test('an unavailable creation capability explains the restart inside the folder dialog while browsing remains usable',async()=>{
   const f=fixture({canCreate:()=>false}),b=f.browser;b.creationHint=()=> '请重启电脑上的手机网关';await b.open();
   assert.equal(b.newFolderButton.disabled,true);assert.match(b.status.textContent,/重启.*手机网关/);

@@ -14,6 +14,16 @@ class ProjectsHttpTests(unittest.TestCase):
     request = test_bridge.HttpTests.request
     login = test_bridge.HttpTests.login
 
+    def wait_selected_directory(self, identifier, headers):
+        import time
+        for _ in range(100):
+            status, _, body = self.request('GET', '/api/project-directory-operations?id='+identifier, headers=headers)
+            self.assertEqual(status, 200)
+            if body['status'] not in ('pending', 'creating'):
+                return body
+            time.sleep(.01)
+        self.fail('Directory creation did not finish')
+
     def setUp(self):
         test_bridge.HttpTests.setUp(self)
         self.temp = tempfile.TemporaryDirectory()
@@ -40,6 +50,24 @@ class ProjectsHttpTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertEqual([row['name'] for row in body['directories']],['child'])
 
+    def test_folder_browser_creates_a_project_sibling_without_a_matching_chat(self):
+        from urllib.parse import urlencode
+        from unittest.mock import Mock
+        creator = SimpleNamespace(available=True, directory_scope=Mock(side_effect=ValueError('请先打开一个关联目录的本机 Codex 桌面聊天，再创建项目')))
+        registry = self.server.bridge.project_registry
+        registry.native_creator = creator
+        headers = self.login()
+        status, _, listing = self.request('GET', '/api/project-directories?'+urlencode({'path':str(self.folder.parent)}), headers=headers)
+        self.assertEqual(status, 200)
+        self.assertIn('selectionId', listing, 'Browsing the selected parent must authorize only single-folder creation there, without a chat lookup')
+        value = {'id':str(uuid.uuid4()), 'parent':listing['path'], 'name':'LearningBitcoin', 'selectionId':listing['selectionId']}
+        status, _, _ = self.request('POST', '/api/project-directories', value, headers)
+        self.assertEqual(status, 202)
+        result = self.wait_selected_directory(value['id'], headers)
+        self.assertEqual(result['status'], 'completed', result)
+        self.assertTrue((self.folder.parent/'LearningBitcoin').is_dir())
+        creator.directory_scope.assert_not_called()
+
     def test_metadata_advertises_directory_creation_only_when_the_handler_is_available(self):
         registry = self.server.bridge.project_registry
         headers = self.login()
@@ -52,6 +80,50 @@ class ProjectsHttpTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIs(body['canCreateProject'], project)
             self.assertIs(body['canCreateDirectory'], directory)
+
+    def test_parent_selection_is_bound_to_login_path_and_csrf(self):
+        from urllib.parse import urlencode
+        registry = self.server.bridge.project_registry
+        registry.native_creator = directory_support.DirectoryCreator(self.folder)
+        first, second = self.login(), self.login()
+        listing = self.request('GET', '/api/project-directories?'+urlencode({'path':str(self.folder)}), headers=first)[2]
+        value = {'id':str(uuid.uuid4()), 'parent':listing['path'], 'name':'Selected', 'selectionId':listing['selectionId']}
+        for headers, body, status in (({'Cookie':first['Cookie']}, value, 403),
+                (second, value, 403), (first, {**value, 'parent':str(self.folder.parent)}, 403),
+                (first, {**value, 'selectionId':'f'*64}, 403)):
+            self.assertEqual(self.request('POST', '/api/project-directories', body, headers)[0], status)
+        self.assertFalse(registry.directory_operations_path.exists())
+        self.assertEqual(self.request('POST', '/api/project-directories', value, first)[0], 202)
+        self.assertEqual(self.wait_selected_directory(value['id'], first)['status'], 'completed')
+        self.assertEqual(self.request('GET', '/api/project-directory-operations?id='+value['id'], headers=second)[0], 403)
+        self.assertEqual(self.request('POST', '/api/project-directories', value, second)[0], 403)
+        self.assertEqual(self.request('POST', '/api/project-directories', value, first)[2]['status'], 'completed')
+
+    def test_expired_or_restarted_selection_requires_browsing_again(self):
+        from urllib.parse import urlencode
+        registry = self.server.bridge.project_registry
+        registry.native_creator = directory_support.DirectoryCreator(self.folder)
+        headers = self.login()
+        listing = self.request('GET', '/api/project-directories?'+urlencode({'path':str(self.folder)}), headers=headers)[2]
+        value = {'id':str(uuid.uuid4()), 'parent':listing['path'], 'name':'Selected', 'selectionId':listing['selectionId']}
+        registry.directory_selections[listing['selectionId']]['expires'] = 0
+        self.assertEqual(self.request('POST', '/api/project-directories', value, headers)[0], 403)
+        registry.directory_selections.clear()
+        self.assertEqual(self.request('POST', '/api/project-directories', value, headers)[0], 403)
+        self.assertFalse((self.folder/'Selected').exists())
+
+    def test_parent_replaced_after_browsing_is_rejected_without_creating_anywhere(self):
+        from urllib.parse import urlencode
+        registry = self.server.bridge.project_registry
+        registry.native_creator = directory_support.DirectoryCreator(self.folder)
+        headers = self.login()
+        listing = self.request('GET', '/api/project-directories?'+urlencode({'path':str(self.folder)}), headers=headers)[2]
+        moved = self.folder.with_name('moved'); self.folder.rename(moved); self.folder.mkdir()
+        value = {'id':str(uuid.uuid4()), 'parent':listing['path'], 'name':'Selected', 'selectionId':listing['selectionId']}
+        self.assertEqual(self.request('POST', '/api/project-directories', value, headers)[0], 202)
+        result = self.wait_selected_directory(value['id'], headers)
+        self.assertEqual(result['status'], 'failed'); self.assertIn('父文件夹已发生变化', result['message'])
+        self.assertFalse((moved/'Selected').exists()); self.assertFalse((self.folder/'Selected').exists())
 
     def test_relay_allows_exact_project_and_directory_operation_routes(self):
         from relay.protocol import validate

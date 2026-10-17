@@ -1,10 +1,13 @@
-"""Project validation and folder browsing; creation must be owned by the desktop."""
+"""Project validation and scoped folder creation; the desktop owns project records."""
 import json
 import os
 import re
 import threading
 import uuid
 import hashlib
+import secrets
+import time
+from contextlib import nullcontext
 from pathlib import Path
 from bridge.features.notifications.channels import read_json, write_json
 from bridge.features.workspace.workspace import Workspace
@@ -15,6 +18,7 @@ class Projects:
         self.path = Path(data_dir)/'projects.json'
         self.lock = threading.RLock()
         self.native_creator = native_creator
+        self.directory_selections = {}
         self.operations_path = Path(data_dir)/'project-operations.json'
         self.operations = read_json(self.operations_path, {})
         for operation in self.operations.values():
@@ -37,7 +41,7 @@ class Projects:
             result['directory'] = dict(operation['directory'])
         return result
 
-    def directory_operation(self, identifier):
+    def directory_operation(self, identifier, owner=None):
         try:
             identifier = str(uuid.UUID(identifier))
         except (ValueError, TypeError, AttributeError):
@@ -45,14 +49,36 @@ class Projects:
         with self.lock:
             if identifier not in self.directory_operations:
                 raise ValueError('找不到文件夹创建记录')
+            if self.directory_operations[identifier].get('owner') not in (None, owner):
+                raise PermissionError('此文件夹创建记录不属于当前登录')
             return self._directory_receipt(self.directory_operations[identifier])
+
+    def _select_directory(self, parent, owner):
+        identity = Workspace(parent).directory_identity()
+        now = time.monotonic()
+        with self.lock:
+            self.directory_selections = {key:value for key,value in self.directory_selections.items() if value['expires'] > now}
+            while len(self.directory_selections) >= 256:
+                self.directory_selections.pop(next(iter(self.directory_selections)))
+            token = secrets.token_hex(32)
+            self.directory_selections[token] = {'parent':parent, 'owner':owner, 'identity':identity, 'expires':now+600}
+            return token
+
+    def _directory_selection(self, value, owner):
+        selection = self.directory_selections.get(value['selectionId'])
+        if (not owner or not selection or selection['owner'] != owner or selection['parent'] != value['parent']
+                or selection['expires'] <= time.monotonic()):
+            raise PermissionError('文件夹选择已失效，请刷新父目录后重新创建')
+        return dict(selection)
 
     @staticmethod
     def _directory_request(value):
-        if (not isinstance(value, dict) or set(value)-{'id', 'parent', 'name', 'contextId'}
+        if (not isinstance(value, dict) or set(value)-{'id', 'parent', 'name', 'contextId', 'selectionId'}
                 or not {'id', 'parent', 'name'} <= set(value)):
             raise ValueError('新建文件夹请求无效')
         result = dict(value)
+        if 'selectionId' in value and (not isinstance(value['selectionId'], str) or not re.fullmatch(r'[a-f0-9]{64}', value['selectionId'])):
+            raise ValueError('文件夹选择标识无效，请刷新父目录后重新创建')
         for key in ('id', 'contextId'):
             if key == 'contextId' and key not in value:
                 continue
@@ -74,7 +100,7 @@ class Projects:
         Workspace.directory_name(value['name'])
         return result
 
-    def submit_directory(self, value):
+    def submit_directory(self, value, owner=None):
         value = self._directory_request(value)
         identifier = value['id']
         fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -83,11 +109,14 @@ class Projects:
         with self.lock:
             if identifier in self.directory_operations:
                 prior = self.directory_operations[identifier]
+                if prior.get('owner') not in (None, owner):
+                    raise PermissionError('此文件夹创建记录不属于当前登录')
                 if prior['fingerprint'] != fingerprint:
                     raise ValueError('同一个文件夹创建请求不能修改内容')
                 return self._directory_receipt(prior)
             if not self.can_create_directory:
                 raise ValueError('尚未接通 Codex 桌面的原生目录授权接口，请先在桌面端创建文件夹')
+            selection = self._directory_selection(value, owner) if 'selectionId' in value else None
             # Resolve only the existing parent for target identity (including
             # Windows short-name aliases). The worker still walks the original
             # path without following links; this is not an authorization check.
@@ -96,10 +125,12 @@ class Projects:
             if any(op.get('target') == target and op['status'] != 'failed' for op in self.directory_operations.values()):
                 raise ValueError('这个文件夹已有创建请求，请先核对实际目录，不要重复创建')
             self.directory_operations[identifier] = {'id':identifier, 'fingerprint':fingerprint, 'target':target,
-                'status':'pending', 'message':'正在核验 Codex 桌面目录权限'}
+                'status':'pending', 'message':'正在核验所选父文件夹' if selection else '正在核验 Codex 桌面目录权限'}
+            if selection:
+                self.directory_operations[identifier]['owner'] = owner
             # No filesystem mutation can start until the pending receipt is saved.
             write_json(self.directory_operations_path, self.directory_operations)
-            threading.Thread(target=self._run_directory, args=(value,), daemon=True).start()
+            threading.Thread(target=self._run_directory, args=(value, selection), daemon=True).start()
             return self._directory_receipt(self.directory_operations[identifier])
 
     def _directory_progress(self, identifier, status, message, directory=None):
@@ -110,12 +141,15 @@ class Projects:
                 operation['directory'] = directory
             write_json(self.directory_operations_path, self.directory_operations)
 
-    def _run_directory(self, value):
+    def _run_directory(self, value, selection=None):
         attempted = False
         directory = None
         try:
-            # NativeProjects holds accounts.gate through authorization and mkdir.
-            with self.native_creator.directory_scope(value) as root:
+            # A browser selection authorizes one-level mkdir only under that
+            # exact parent, bound to this login and its observed directory identity.
+            # Legacy callers retain the native chat-root authorization path.
+            scope = nullcontext(selection['parent']) if selection else self.native_creator.directory_scope(value)
+            with scope as root:
                 workspace = Workspace(root)
                 try:
                     relative = Path(value['parent']).relative_to(workspace.root).as_posix()
@@ -125,7 +159,7 @@ class Projects:
                     relative = ''
                 self._directory_progress(value['id'], 'creating', '正在创建文件夹')
                 attempted = True
-                directory = workspace.mkdir(relative, value['name'])
+                directory = workspace.mkdir(relative, value['name'], expected_parent=selection['identity']) if selection else workspace.mkdir(relative, value['name'])
                 directory['parent'] = value['parent']
             self._directory_progress(value['id'], 'completed', '文件夹已创建', directory)
         except Exception as exc:
@@ -227,7 +261,7 @@ class Projects:
             raise ValueError('文件夹不存在或无法访问') from None
         return path
 
-    def browse(self, value):
+    def browse(self, value, owner=None):
         if not value:
             roots = [Path.home(), Path.cwd().anchor]
             if os.name == 'nt':
@@ -246,8 +280,11 @@ class Projects:
                 raise ValueError('子文件夹过多，请输入更具体的路径')
         except OSError:
             raise ValueError('没有权限浏览此文件夹') from None
-        return {'path':str(path), 'parent':str(path.parent) if path.parent != path else '',
-                'directories':sorted(children, key=lambda row:row['name'].casefold())}
+        result = {'path':str(path), 'parent':str(path.parent) if path.parent != path else '',
+                  'directories':sorted(children, key=lambda row:row['name'].casefold())}
+        if owner and self.can_create_directory:
+            result['selectionId'] = self._select_directory(str(path), owner)
+        return result
 
     def create(self, value, native_projects, sections, validate_only=False):
         if not self.can_create:

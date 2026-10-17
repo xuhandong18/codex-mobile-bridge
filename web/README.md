@@ -99,7 +99,9 @@ Codex 列表支持触屏长按、电脑右键，通过“复制会话路径”�
 
 新建项目的“浏览文件夹”打开独立选择器，包含用户目录/磁盘/当前项目快捷位置、面包屑、完整路径输入、当前目录搜索，以及空目录和读取失败提示。窄屏快捷位置改为横向排列，目录列表独立滚动。浏览、取消或新建目录不会提前改写项目表单；点击“选择此文件夹”才回填完整路径，并在项目名称为空时建议使用文件夹名。
 
-“新建文件夹”在当前目录内创建单层子目录，完成后进入该目录供选择。`POST /api/project-directories` 接受 `{id,parent,name,contextId?}`，以 `GET /api/project-directory-operations?id=UUID` 只读核对；回执独立保存在 `project-directory-operations.json`，不会与项目创建记录互相占用。服务端即时检查原生 `list_hosts.workspaceRoots`，持有账号锁及防替换父目录句柄后创建；拒绝系统保留名、路径穿越、符号链接/junction 和重名覆盖。结果未知或重启遗留请求只能核对，不自动重新提交；新建目录本身不创建原生项目或聊天。
+“新建文件夹”在当前目录内创建单层子目录，完成后进入该目录供选择，无需先打开关联聊天。已登录的目录浏览返回有效期 10 分钟的 `selectionId`，绑定当前登录、父目录完整路径及目录身份；`POST /api/project-directories` 接受 `{id,parent,name,selectionId,contextId?}`，只在该父目录内创建一层子目录。创建前持有防替换目录句柄并重新核验身份，拒绝系统保留名、路径穿越、符号链接/junction 和重名覆盖；过期、重启或目录被替换时须重新浏览。旧版未携带 `selectionId` 的调用继续执行原生聊天的 `list_hosts.workspaceRoots` 授权规则。
+
+创建后以 `GET /api/project-directory-operations?id=UUID` 只读核对；回执独立保存在 `project-directory-operations.json`，不会与项目创建记录互相占用。选择目录的新请求及其回执绑定提交时的登录身份。结果未知或重启遗留请求只能核对，不自动重新提交；新建目录本身不创建原生项目或聊天，也不扩大聊天 workspace 接口的访问范围。
 
 `GET /api/projects?metadata=1` 分别返回 `canCreateProject` 和 `canCreateDirectory`。网页只在运行中的服务明确支持目录创建时开放按钮；旧服务仍可浏览和选择已有目录，并提示重启电脑端手机网关。仅刷新网页不会重载 Python 接口。接口不存在时显示具体重启提示，若创建已提交但回执接口不可用，仍保留未知状态并只读核对，不重放写入。
 

@@ -216,13 +216,23 @@ class Workspace:
         else:
             raise PermissionError('当前系统无法安全创建文件夹')
 
-    def mkdir(self, path, name):
+    def directory_identity(self):
+        """Observe a real parent while holding the same guard used by mkdir."""
+        with self._mkdir_directory([]) as (parent, fd):
+            info = os.fstat(fd) if fd is not None else parent.lstat()
+            return (info.st_dev, info.st_ino)
+
+    def mkdir(self, path, name, *, expected_parent=None):
         """Create exactly one directory under an existing, pinned parent."""
         parts = self.parts(path)
         name = self.directory_name(name)
         created = False
         try:
             with self._mkdir_directory(parts) as (parent, fd):
+                if expected_parent is not None:
+                    info = os.fstat(fd) if fd is not None else parent.lstat()
+                    if (info.st_dev, info.st_ino) != tuple(expected_parent):
+                        raise PermissionError('父文件夹已发生变化，请刷新目录后重新创建')
                 if fd is not None:
                     os.mkdir(name, mode=0o700, dir_fd=fd)
                 else:

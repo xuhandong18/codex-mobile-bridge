@@ -109,7 +109,7 @@ class ProjectFolderBrowser {
       const value=await this.request('/api/project-directories?path='+encodeURIComponent(path),undefined,controller.signal);
       if(!this.current()||generation!==this.generation)return;
       if(typeof value.path!=='string'||!Array.isArray(value.directories))throw Error(this.t('文件夹列表返回无效'));
-      this.currentPath=value.path;this.currentParent=value.parent;this.directories=value.directories;
+      this.currentPath=value.path;this.currentParent=value.parent;this.directories=value.directories;this.selectionId=value.selectionId||null;
       if(!value.path)this.roots=value.directories;
       this.address.value=value.path;this.addressRow.hidden=true;this.renderShortcuts();this.renderBreadcrumbs();
     }catch(error){if(this.current()&&generation===this.generation&&error.name!=='AbortError'){this.failed=true;this.error.textContent=this.t(error.message);}}
@@ -184,6 +184,7 @@ class ProjectFolderBrowser {
     if(prior&&['pending','creating','unknown','completed'].includes(prior.status))return this.checkAttempt(prior);
     if(/[<>:"/\\|?*\x00-\x1f]/.test(name)||['.','..'].includes(name)||name.endsWith('.')||name.length>120){this.createStatus.textContent=this.t('请输入有效的单层文件夹名称。');return;}
     const attempt={id:this.uuid(),parent:this.currentPath,name,status:'pending'};
+    if(this.selectionId)attempt.selectionId=this.selectionId;
     if(this.target.contextId)attempt.contextId=this.target.contextId;
     this.remember(attempt);return this.runAttempt(attempt,true);
   }
@@ -195,7 +196,7 @@ class ProjectFolderBrowser {
   async runAttempt(attempt,submit){
     const generation=this.generation;let accepted=!submit;this.writing=true;this.activeAttempt=attempt;this.renderControls();this.renderCreate();this.renderList();this.createStatus.textContent=this.t(submit?'正在创建文件夹…':'正在核对创建结果…');
     try{
-      const body={id:attempt.id,parent:attempt.parent,name:attempt.name,...(attempt.contextId?{contextId:attempt.contextId}:{})};
+      const body={id:attempt.id,parent:attempt.parent,name:attempt.name,...(attempt.selectionId?{selectionId:attempt.selectionId}:{}),...(attempt.contextId?{contextId:attempt.contextId}:{})};
       let result=await this.request(submit?'/api/project-directories':'/api/project-directory-operations?id='+encodeURIComponent(attempt.id),submit?body:undefined);
       accepted=true;
       while(true){

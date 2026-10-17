@@ -636,16 +636,16 @@ class Handler(BaseHTTPRequestHandler):
             if not write and path == '/api/sidebar-operations':
                 return self.output(200, self.server.bridge.sidebar_management.operation(query.get('id', [''])[0]))
             if not write and path == '/api/project-directories':
-                return self.output(200, self.server.bridge.project_registry.browse(query.get('path', [''])[0]))
+                return self.output(200, self.server.bridge.project_registry.browse(query.get('path', [''])[0], self.server.auth.key(self.token())))
             if write and path == '/api/project-directories':
                 if urlsplit(self.path).query:
                     raise ValueError('新建文件夹只接受 JSON 请求字段')
-                return self.output(202, self.server.bridge.project_registry.submit_directory(self.read_json()))
+                return self.output(202, self.server.bridge.project_registry.submit_directory(self.read_json(), self.server.auth.key(self.token())))
             if not write and path == '/api/project-directory-operations':
                 query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
                 if set(query) != {'id'} or len(query['id']) != 1:
                     raise ValueError('文件夹回执查询只接受一个请求标识')
-                return self.output(200, self.server.bridge.project_registry.directory_operation(query['id'][0]))
+                return self.output(200, self.server.bridge.project_registry.directory_operation(query['id'][0], self.server.auth.key(self.token())))
             if not write and path == '/api/new-chat-models':
                 return self.output(200, self.server.bridge.new_chat_models(query.get('project', [''])[0], query.get('kind', ['desktop'])[0]))
             if write and path == '/api/activity':
