@@ -109,7 +109,7 @@ Path(config['calls_path']).write_text(json.dumps(calls))
                 self.create()
 
     def test_unsaved_thread_stays_uncertain_after_runtime_exits(self):
-        for options in ({'persist': False}, {'include_path': False}):
+        for options in ({'persist': False}, {'include_path': False}, {'error': None, 'persist': False}, {'error': None, 'include_path': False}):
             with self.subTest(options=options), self.runtime(**options):
                 with self.assertRaisesRegex(CreationError, '尚未确认保存'):
                     self.create()

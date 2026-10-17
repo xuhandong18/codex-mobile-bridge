@@ -342,3 +342,42 @@ test('list entry acknowledges only the displayed provider snapshot, once per vis
  assert.equal(calls.length,1);assert.equal(calls[0].body.provider,'claude');assert.equal(calls[0].body.through,12);
  await nav.choose('deepseek');nav.acknowledgeList('deepseek',value);assert.equal(calls.length,2);
 });
+
+function toolbarHelpers(){
+ const context=vm.createContext({Event:class{constructor(type){this.type=type;}},Date,document:{querySelector:()=>null}});
+ vm.runInContext(fs.readFileSync('web/features/clients/client-navigation.js','utf8'),context);
+ return {wait:vm.runInContext('waitForCreatedChat',context),swipe:vm.runInContext('bindListModeSwipe',context)};
+}
+test('new chat waits for discovery without retrying authorization or server errors',async()=>{
+ const {wait}=toolbarHelpers();let reads=0,pauses=0;
+ assert.equal(await wait(async()=>{if(++reads<3)throw Object.assign(Error('找不到这个会话'),{status:404});return 'ready';},{pause:async()=>pauses++}),'ready');
+ assert.equal(reads,3);assert.equal(pauses,2);
+ for(const status of [401,403,500]){reads=0;await assert.rejects(wait(async()=>{reads++;throw Object.assign(Error('failure'),{status});},{pause:async()=>{}}));assert.equal(reads,1);}
+ reads=0;await assert.rejects(wait(async()=>{reads++;throw Object.assign(Error('missing'),{status:404});},{attempts:3,pause:async()=>{}}));assert.equal(reads,3);
+});
+test('list body swipe changes list modes and preserves vertical scrolling and boundaries',()=>{
+ const {swipe}=toolbarHelpers(),handlers={},changes=[];
+ const toolbar={addEventListener:(type,handler)=>handlers[type]=handler};
+ const select={value:'codex',options:['codex','recent','project'].map(value=>({value})),dispatchEvent:event=>changes.push(event.type)};
+ swipe(toolbar,select);
+ function drag(dx,dy=0,control=false){
+  const target={closest:()=>control?{closest:()=>null}:null},touch={identifier:1,clientX:200,clientY:100};
+  handlers.touchstart({touches:[touch],target});
+  const end={...touch,clientX:200+dx,clientY:100+dy};
+  handlers.touchmove({touches:[end],cancelable:true,preventDefault(){}});
+  handlers.touchend({touches:[],changedTouches:[end],cancelable:true,preventDefault(){}});
+ }
+ drag(-80);assert.equal(select.value,'recent');drag(-80);assert.equal(select.value,'project');
+ drag(-80);assert.equal(select.value,'project');drag(80);assert.equal(select.value,'recent');
+ drag(-80,100);assert.equal(select.value,'recent');drag(-80,0,true);assert.equal(select.value,'recent');
+ assert.deepEqual(changes,['change','change','change']);
+});
+
+test('display-mode gestures bind only to the list bodies, with no app-switch handlers',()=>{
+ const context=vm.createContext({document:{getElementById:id=>id}});
+ vm.runInContext(fs.readFileSync('web/features/clients/client-navigation.js','utf8'),context);
+ const bindings=[];context.bindListModeSwipe=(root,select)=>bindings.push([root,select]);
+ const C=vm.runInContext('ClientNavigation',context),nav=Object.create(C.prototype);
+ nav.view={rowsRoot:'provider-rows',listMode:'provider-mode'};nav.bindListGestures();
+ assert.deepEqual(bindings,[['sessions','list-mode'],['provider-rows','provider-mode']]);
+});

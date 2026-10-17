@@ -523,8 +523,17 @@ $('archived').onchange=()=>loadList(true).catch(e=>toast(e.message));
 const listSync=window.BridgeListSync=new ListSync({root:$('sessions'),status:$('list-sync'),refresh:()=>loadList(true),visible:()=>!$('app').hidden&&clientNavigation.provider==='codex',ready:()=>!listLoading&&document.activeElement!==$('search')});
 const contextUsageControl=new ContextUsageControl();$('permissions-button').after(contextUsageControl.button);
 let newChatProjects=[],creatingChat=false,approvalBusy=0;
-const newProjectButton=el('button','plain project-new',t('新建项目'));newProjectButton.type='button';newProjectButton.id='new-project';newProjectButton.dataset.i18n='新建项目';($('new-chat').closest('.list-heading')||$('new-chat')).after(newProjectButton);
-newProjectButton.onclick=()=>openNewProject();
+const sidebarManagement=typeof SidebarManagementUI==='function'?new SidebarManagementUI({request:api,dialog:title=>desktopSessions.dialog(title),snapshot:()=>sidebarData,
+  context:()=>currentId&&currentHost==='local'&&state?.origin==='desktop'?currentId:null,uuid,notify:toast,
+  refresh:async body=>{
+    if(body?.kind==='project'){
+      const project=(sidebarData.projects||[]).find(p=>p.key===body.targetId);
+      if(project)sidebarPlacements.set(sidebarEntry('project',project),'native',(sidebarData.sections||[]).map(s=>s.id));
+    }
+    $('list-mode').value='codex';try{localStorage.setItem('list-mode','codex');}catch{}
+    await loadList(true);
+  }}):null;
+if(typeof bindListActions==='function')bindListActions(document.querySelector('#sidebar .chat-list-toolbar'),$('archived'),sidebarManagement?sidebarManagement.topActions(()=>openNewProject()):[{label:'新建项目',run:()=>openNewProject()}]);
 function openNewProject(){
   const dialog=desktopSessions.dialog('新建项目'),form=el('form'),error=el('p','error');
   const field=(text,node)=>{const label=el('label','',t(text));label.append(node);form.append(label);return node;};
@@ -658,7 +667,7 @@ $('new-chat-form').onsubmit=async event=>{
     try{
       const settingErrors=[];
       // The owner validates settings independently of the browser history read.
-      try{await openChat(result.id,result.host);}catch(error){settingErrors.push(t(error.message));}
+      try{await waitForCreatedChat(()=>api(sessionUrl(result.id,'',result.host)));await openChat(result.id,result.host);}catch(error){settingErrors.push(t(error.message));}
       const applySetting=async(action,body,label)=>{
         try{
           const applied=await api(sessionUrl(result.id,action,result.host),body);
@@ -683,6 +692,7 @@ $('new-chat-form').onsubmit=async event=>{
 const messageActions=new MessageActions({request:api,openChat,refresh:()=>loadList(true).catch(e=>toast(e.message)),uuid,notify:toast,busy:value=>{approvalBusy+=value?1:-1;setLanguageBusy();}});
 document.addEventListener('bridge-message-error',event=>toast(event.detail));
 new ChatContextMenu($('sessions'),target=>{
+  const nativeActions=sidebarManagement?.items(target);if(nativeActions!==null&&nativeActions!==undefined)return nativeActions;
   const button=target.closest('.session');
   if(!button){
     const summary=target.closest('summary[data-project-key]');

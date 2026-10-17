@@ -46,7 +46,8 @@ SSH_SOURCES = {
 CONNECTORS = {'bridge/clients/claude/connector.js', 'bridge/clients/deepseek/host.mjs'}
 NATIVE_SOURCES = {'bridge/platforms/macos/claude-helper.swift',
                   'bridge/platforms/windows/claude-helper.cs',
-                  'bridge/platforms/windows/codex-quit-helper.cs'}
+                  'bridge/platforms/windows/codex-quit-helper.cs',
+                  'bridge/platforms/windows/codex-project-helper.cs'}
 
 ISOLATED_DEFINITIONS = r'''
 import importlib.util, json, pathlib, shutil, sys

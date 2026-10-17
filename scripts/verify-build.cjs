@@ -12,7 +12,7 @@ module.exports=async context=>{
   const executable=path.join(root,'dist/gateway',platform==='win32'?'codex-mobile-gateway.exe':'codex-mobile-gateway');
   fs.accessSync(executable,fs.constants.R_OK);
   if(platform==='win32'){
-    for(const name of ['claude-bridge-helper.exe','codex-quit-helper.exe']){
+    for(const name of ['claude-bridge-helper.exe','codex-quit-helper.exe','codex-project-helper.exe']){
       fs.accessSync(path.join(root,'dist/gateway/_internal/client-helpers',name),fs.constants.R_OK);
     }
   }

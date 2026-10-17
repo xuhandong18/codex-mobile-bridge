@@ -138,6 +138,8 @@ class Bridge:
         from bridge.features.sessions.projects import Projects
         from bridge.clients.codex.projects import NativeProjects
         self.project_registry = Projects(data_dir, NativeProjects(self))
+        from bridge.features.sessions.sidebar import SidebarManagement
+        self.sidebar_management = SidebarManagement(self)
         self.hosts = AppHosts(codex_home)
         self.remote_bridges = {}
         self.host_errors = []

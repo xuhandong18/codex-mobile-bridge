@@ -247,8 +247,9 @@ calls=[]
 for line in sys.stdin:
  r=json.loads(line);calls.append(r)
  if 'id' not in r:continue
- result={'thread':{'id':''' + repr(self.tid) + '''}} if r['method']=='thread/start' else {}
+ result={'thread':{'id':''' + repr(self.tid) + ''', 'path':str(Path('rollout.jsonl').resolve())}} if r['method'] in ('thread/start','thread/read') else {}
  print(json.dumps({'id':r['id'],'result':result}),flush=True)
+Path('rollout.jsonl').write_text('{}')
 Path(''' + repr(str(log)) + ''').write_text(json.dumps(calls))
 ''',encoding='utf-8')
         real_popen=subprocess.Popen

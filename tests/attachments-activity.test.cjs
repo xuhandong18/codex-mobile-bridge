@@ -26,7 +26,7 @@ test('sidebar context menu marks the selected host-qualified chat unread without
  const end=source.indexOf("},{label:'侧栏操作'});",start);
  let menu,marked,renders=0;
  const row={id:'a',host:'ssh',access:{}},button={dataset:{id:'a',host:'ssh'}};
- const ctx=vm.createContext({ChatContextMenu:class{constructor(root,items){menu=items;}},$:()=>({}),listRows:[row],
+ const ctx=vm.createContext({sidebarManagement:null,ChatContextMenu:class{constructor(root,items){menu=items;}},$:()=>({}),listRows:[row],
   window:{BridgeClipboard:{}},chatKey:(id,host)=>host+'|'+id,sessionActivity:{markUnread:key=>marked=key},renderActivity:()=>renders++,
   sidebarPlacementActions:()=>[],sidebarEntry:()=>({}),projectChatRows:()=>['a'],sessionAccess:()=>({source:'cli'})});
  vm.runInContext(source.slice(start,end)+"},{label:'侧栏操作'});",ctx);

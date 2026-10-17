@@ -8,17 +8,24 @@ class ChatMessageMap {
     const signal=this.abort.signal;
     this.root=document.createElement('nav');this.root.className='chat-message-map';
     this.root.setAttribute('aria-label',timelineText('我的消息导航'));
+    this.rail=document.createElement('div');this.rail.className='chat-message-map-rail';
+    this.panel=document.createElement('div');this.panel.className='chat-message-map-panel';
     this.list=document.createElement('div');this.list.className='chat-message-map-list';
     this.earlier=document.createElement('button');this.earlier.type='button';this.earlier.className='chat-message-map-earlier';
     this.earlier.onclick=()=>timeline.loadOlder(100);
-    this.root.append(this.list,this.earlier);timeline.viewport.parentElement.append(this.root);
+    this.panel.append(this.list,this.earlier);this.root.append(this.rail,this.panel);timeline.viewport.parentElement.append(this.root);
+    // Keep the rail stationary so moving to the corner panel cannot lose the first click.
+    this.root.addEventListener('pointerenter',event=>{if(event.pointerType==='mouse')this.root.classList.add('is-open');},{signal});
     document.addEventListener('pointerdown',event=>{if(!this.root.contains(event.target))this.close();},{signal});
     this.root.addEventListener('keydown',event=>{if(event.key==='Escape'){this.close();document.activeElement?.blur();event.stopPropagation();}},{signal});
     this.position=()=>{
       const rect=timeline.viewport.getBoundingClientRect();
       this.root.hidden=!this.list.children.length||!rect.width||!rect.height;
       this.root.style.top=(rect.top+rect.height/2)+'px';this.root.style.right=Math.max(0,window.innerWidth-rect.right+4)+'px';
-      this.root.style.setProperty('--map-height',Math.max(44,Math.min(320,rect.height-24))+'px');
+      this.root.style.setProperty('--map-right',Math.max(0,window.innerWidth-rect.right+4)+'px');
+      this.root.style.setProperty('--map-bottom',Math.max(8,window.innerHeight-rect.bottom+8)+'px');
+      this.root.style.setProperty('--map-width',Math.max(22,Math.min(280,rect.width-24))+'px');
+      this.root.style.setProperty('--map-height',Math.max(44,Math.min(320,rect.height-80))+'px');
     };
     this.resize=new ResizeObserver(this.position);this.resize.observe(timeline.viewport);
     window.addEventListener('resize',this.position,{signal});
@@ -31,7 +38,9 @@ class ChatMessageMap {
     const rows=[...timeline.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order);
     const keep=new Set(rows.map(row=>row.key));
     for(const button of [...this.list.children])if(!keep.has(button.dataset.key))button.remove();
+    for(const button of [...this.rail.children])if(!keep.has(button.dataset.key))button.remove();
     const buttons=new Map([...this.list.children].map(button=>[button.dataset.key,button]));
+    const markers=new Map([...this.rail.children].map(button=>[button.dataset.key,button]));
     rows.forEach((row,index)=>{
       let button=buttons.get(row.key);
       if(!button){
@@ -50,6 +59,9 @@ class ChatMessageMap {
       const label=(index+1)+'. '+summary;
       button.lastChild.textContent=label;button.setAttribute('aria-label',label);button.title=label;
       this.list.append(button);
+      let marker=markers.get(row.key);
+      if(!marker){marker=document.createElement('button');marker.type='button';marker.dataset.key=row.key;marker.append(document.createElement('i'));}
+      marker.setAttribute('aria-label',label);marker.title=label;marker.onclick=button.onclick;this.rail.append(marker);
     });
     this.earlier.hidden=!timeline.hasMore;this.earlier.disabled=timeline.busy;
     this.earlier.textContent=timelineText('查看更早内容');this.position();

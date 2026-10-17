@@ -629,6 +629,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(202, result)
             if not write and path == '/api/project-operations':
                 return self.output(200, self.server.bridge.project_registry.operation(query.get('id', [''])[0]))
+            if write and path == '/api/sidebar-management':
+                import asyncio
+                return self.output(202, asyncio.run(self.server.bridge.sidebar_management.submit(self.read_json())))
+            if not write and path == '/api/sidebar-operations':
+                return self.output(200, self.server.bridge.sidebar_management.operation(query.get('id', [''])[0]))
             if not write and path == '/api/project-directories':
                 return self.output(200, self.server.bridge.project_registry.browse(query.get('path', [''])[0]))
             if not write and path == '/api/new-chat-models':

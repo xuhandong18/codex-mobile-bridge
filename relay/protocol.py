@@ -53,7 +53,7 @@ def validate(method, path, size=0):
         return
     if p.path == '/api/sessions' or (p.path in ('/api/projects', '/api/mobile/events') and method == 'GET') or (p.path in ('/api/activity', '/api/mobile/events/read') and method == 'POST'):
         return
-    if (p.path == '/api/projects' and method == 'POST') or (p.path in ('/api/project-directories', '/api/project-operations') and method == 'GET'):
+    if (p.path in ('/api/projects', '/api/sidebar-management') and method == 'POST') or (p.path in ('/api/project-directories', '/api/project-operations', '/api/sidebar-operations') and method == 'GET'):
         return
     # /api/clients permits explicit disable, native quit, and confirmed Windows
     # forceDesktop; the gateway still enforces auth, CSRF and target verification.

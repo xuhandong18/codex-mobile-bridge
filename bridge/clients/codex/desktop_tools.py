@@ -16,7 +16,8 @@ class ToolError(ValueError):
 
 
 class DesktopTools:
-    METHODS = {'list_hosts', 'list_projects', 'list_threads', 'create_project', 'move_project_to_sidebar_section'}
+    METHODS = {'list_hosts', 'list_projects', 'list_threads', 'create_project', 'move_project_to_sidebar_section',
+               'create_sidebar_section', 'rename_sidebar_section', 'delete_sidebar_section', 'reorder_sidebar_sections'}
     MAX_FRAME = 8 * 1024 * 1024
 
     def __init__(self, stream, context_id):

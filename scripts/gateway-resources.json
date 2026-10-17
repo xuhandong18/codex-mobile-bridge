@@ -9,6 +9,7 @@
   "bridge/platforms/posix/terminal.py",
   "bridge/platforms/windows/claude-helper.cs",
   "bridge/platforms/windows/codex-quit-helper.cs",
+  "bridge/platforms/windows/codex-project-helper.cs",
   "bridge/clients/claude/connector.js",
   "bridge/clients/claude/remote_worker.py",
   "bridge/clients/deepseek/host.mjs",

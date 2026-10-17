@@ -12,11 +12,11 @@ test('message map orders user markers, jumps on a single click without intercept
     addEventListener(name,fn){this.events[name]=fn;}
     setAttribute(key,value){this.attrs[key]=value;}
     removeAttribute(key){delete this.attrs[key];}
-    getBoundingClientRect(){return {top:50,right:400,width:400,height:300};}
+    getBoundingClientRect(){return {top:50,bottom:350,right:400,width:400,height:300};}
     blur(){}
   }
   const document={createElement:()=>new Element(),addEventListener(){}};
-  const context=vm.createContext({document,window:{innerWidth:400,addEventListener(){}},AbortController,ResizeObserver:class{observe(){}disconnect(){this.disconnected=true;}}});
+  const context=vm.createContext({document,window:{innerWidth:400,innerHeight:800,addEventListener(){}},AbortController,ResizeObserver:class{observe(){}disconnect(){this.disconnected=true;}}});
   vm.runInContext(fs.readFileSync('web/features/chat/timeline.js','utf8')+'\nthis.MapView=ChatMessageMap;',context);
   const viewport=new Element();viewport.scrollTop=0;new Element().append(viewport);
   const row=(key,order,role='user')=>({row:{key,order,role,text:key}});

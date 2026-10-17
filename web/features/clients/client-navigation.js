@@ -1,4 +1,48 @@
 'use strict';
+// Retry only discovery reads; creation and settings writes are never replayed.
+async function waitForCreatedChat(read,{attempts=20,pause=()=>new Promise(resolve=>setTimeout(resolve,500))}={}){
+  for(let attempt=0;;attempt++){
+    try{return await read();}
+    catch(error){if(error.status!==404||attempt>=attempts-1)throw error;await pause();}
+  }
+}
+function bindListModeSwipe(list,select){
+  let gesture=null,suppressUntil=0;
+  list.addEventListener('touchstart',event=>{
+    const touch=event.touches[0];
+    const control=event.target.closest('input,select,button,a,textarea,[contenteditable="true"]');
+    gesture=event.touches.length===1&&!document.querySelector('dialog[open]')&&!(control&&!control.closest('.session'))?{id:touch.identifier,x:touch.clientX,y:touch.clientY,mode:select.value}:null;
+  },{passive:true});
+  list.addEventListener('touchmove',event=>{
+    if(!gesture)return;
+    const touch=[...event.touches].find(touch=>touch.identifier===gesture.id);
+    if(event.touches.length!==1||!touch){gesture=null;return;}
+    const dx=touch.clientX-gesture.x,dy=touch.clientY-gesture.y;
+    if(Math.abs(dy)>10&&Math.abs(dy)>=Math.abs(dx)){gesture=null;return;}
+    if(Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)*1.5&&event.cancelable)event.preventDefault();
+  },{passive:false});
+  list.addEventListener('touchend',event=>{
+    const start=gesture;gesture=null;if(!start||event.touches.length||start.mode!==select.value||document.querySelector('dialog[open]'))return;
+    const touch=[...event.changedTouches].find(touch=>touch.identifier===start.id);if(!touch)return;
+    const dx=touch.clientX-start.x,dy=touch.clientY-start.y;
+    if(Math.abs(dx)<50||Math.abs(dx)<=Math.abs(dy)*1.5)return;
+    const options=[...select.options].filter(option=>!option.disabled),index=options.findIndex(option=>option.value===select.value),next=options[index+(dx<0?1:-1)];
+    suppressUntil=Date.now()+400;if(event.cancelable)event.preventDefault();
+    if(next){select.value=next.value;select.dispatchEvent(new Event('change',{bubbles:true}));}
+  },{passive:false});
+  list.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
+  list.addEventListener('click',event=>{if(Date.now()<suppressUntil){event.preventDefault();event.stopImmediatePropagation();}},true);
+}
+function bindListActions(toolbar,archive,actions=[]){
+  const label=archive.closest('label'),button=document.createElement('button');
+  button.type='button';button.className='plain list-actions-more';button.textContent='⋯';button.setAttribute('aria-label',BridgeI18n.t('侧栏操作'));button.dataset.i18nAriaLabel='侧栏操作';
+  label.replaceWith(button);
+  const menu=new ChatContextMenu(button,()=>[...actions,{label:(archive.checked?'✓ ':'')+BridgeI18n.t('已归档'),run:()=>{archive.checked=!archive.checked;archive.dispatchEvent(new Event('change',{bubbles:true}));}}],{touch:false,label:'侧栏操作'});
+  button.onclick=()=>{const rect=button.getBoundingClientRect();menu.open(button,rect.right,rect.bottom);};
+  // Keep the existing checkbox as the single source of filter state.
+  label.hidden=true;label.style.display='none';toolbar.append(label);
+  return button;
+}
 function bindChatListToolbar(toolbar){
   const selects=[...toolbar.querySelectorAll('select')];
   const measure=document.createElement('span');
@@ -48,7 +92,7 @@ class ClientNavigation {
     const settings=document.getElementById('appearance-dialog');this.settingsActions=document.createElement('div');this.settingsActions.className='settings-action-row';settings.querySelector('.picker-head').after(this.settingsActions);this.settingsActions.append(this.switchToggle);
     const switchPreferences=document.createElement('fieldset');switchPreferences.className='appearance-section';const switchTitle=document.createElement('legend');switchTitle.dataset.i18n='底部应用切换';switchTitle.textContent=BridgeI18n.t('底部应用切换');switchPreferences.append(switchTitle);
     for(const [id,name] of [['codex','Codex'],['claude','Claude'],['deepseek','DeepSeek Harness']]){const row=document.createElement('label'),box=document.createElement('input'),caption=document.createElement('span');row.className='display-option';box.type='checkbox';box.id='appearance-switch-'+id;box.checked=this.preference('switch:'+id);box.onchange=()=>{this.preference('switch:'+id,box.checked);this.paint();};caption.textContent=name;row.append(caption,box);switchPreferences.append(row);}const switchHint=document.createElement('p');switchHint.className='muted';switchHint.dataset.i18n='隐藏图标不关闭应用，仍可在应用管理中打开聊天。';switchHint.textContent=BridgeI18n.t('隐藏图标不关闭应用，仍可在应用管理中打开聊天。');switchPreferences.append(switchHint);preferences.after(switchPreferences);
-    const swipeRow=document.createElement('label'),swipeBox=document.createElement('input'),swipeCaption=document.createElement('span');swipeRow.className='display-option';swipeBox.type='checkbox';swipeBox.id='appearance-swipe-clients';swipeBox.checked=this.preference('swipe-clients',undefined,true);swipeBox.onchange=()=>{this.preference('swipe-clients',swipeBox.checked);this.cancelListSwipe();};swipeCaption.dataset.i18n='左右滑动切换应用';swipeCaption.textContent=BridgeI18n.t('左右滑动切换应用');swipeRow.append(swipeCaption,swipeBox);switchPreferences.append(swipeRow);this.bindListGestures();
+    this.bindListGestures();
     const language=document.getElementById('language');if(language)preferences.append(language.closest('label'));
     const applications=make('应用管理',()=>{settings.close();this.openManager();});applications.dataset.i18nAriaLabel='应用管理';applications.setAttribute('aria-label',BridgeI18n.t('应用管理'));this.settingsNotifications=make('第三方通知',()=>{if(window.BridgeSharedRelay)return;settings.close();this.notifications.click();});this.settingsNotifications.removeAttribute('data-i18n');this.settingsNotifications.dataset.i18nAriaLabel='第三方通知';this.settingsNotifications.setAttribute('aria-label',BridgeI18n.t('第三方通知'));this.settingsActions.append(applications,this.settingsNotifications,document.getElementById('open-session-diagnostics'));
     this.account=document.getElementById('accounts-button');this.notifications=document.getElementById('pushplus-settings');
@@ -78,16 +122,9 @@ class ClientNavigation {
   preference(key,value,fallback=true){if(value!==undefined)localStorage.setItem('navigation:'+key,String(value));const saved=localStorage.getItem('navigation:'+key);return saved==null?fallback:saved!=='false';}
   bindListGestures(){
     this.swipeSnapshots=new Map();
-    window.addEventListener('resize',()=>this.cancelListSwipe());
-    document.addEventListener('visibilitychange',()=>this.cancelListSwipe());
-    new MutationObserver(()=>{if(document.getElementById('app').hidden){this.cancelListSwipe();this.swipeSnapshots.clear();}}).observe(document.getElementById('app'),{attributes:true,attributeFilter:['hidden']});
-    for(const list of [this.sidebar,this.view.list]){
-      list.addEventListener('touchstart',event=>this.listTouch('start',event,list),{passive:true});
-      list.addEventListener('touchmove',event=>this.listTouch('move',event,list),{passive:false});
-      list.addEventListener('touchend',event=>this.listTouch('end',event,list),{passive:false});
-      list.addEventListener('touchcancel',()=>this.cancelListSwipe(),{passive:true});
-      list.addEventListener('click',event=>{if(Date.now()<(this.suppressListClickUntil||0)){event.preventDefault();event.stopImmediatePropagation();}},true);
-    }
+    // The list body owns display-mode swipes; switching apps uses the dock.
+    bindListModeSwipe(document.getElementById('sessions'),document.getElementById('list-mode'));
+    bindListModeSwipe(this.view.rowsRoot,this.view.listMode);
   }
   listTouch(phase,event,list){
     if(!this.preference('swipe-clients',undefined,true)||document.querySelector('dialog[open]')||this.clients.filter(c=>c.enabled).length<2){this.cancelListSwipe();return;}

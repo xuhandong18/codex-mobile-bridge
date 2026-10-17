@@ -24,3 +24,5 @@
 .client-swipe-rows{flex:1;min-height:0;overflow:hidden!important}
 .client-swipe-caption{display:flex;align-items:center;gap:8px;flex:none;padding:10px 8px;font-size:12px;font-weight:600;color:var(--muted)}
 .no-client .chat-list-toolbar{display:none}
+
+.chat-list-toolbar .list-actions-more{margin-left:auto;min-width:36px;min-height:36px;padding:2px 8px;font-size:24px;line-height:1}
