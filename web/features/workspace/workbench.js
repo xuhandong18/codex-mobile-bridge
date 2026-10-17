@@ -40,7 +40,9 @@ class Workbench {
     this.resizeObserver=new ResizeObserver(()=>{const eligible=this.canSplit();if(eligible!==this.splitEligible){this.rememberScroll();this.paint();}else if(this.splitMode)this.setRatio(this.current.splitRatio??.5,false);});
     this.resizeObserver.observe(chat);
     this.mobileObserver=new MutationObserver(()=>this.paint());this.mobileObserver.observe(document.documentElement,{attributes:true,attributeFilter:['class']});
-
+    const input=chat.querySelector('.composer').querySelector('textarea');
+    this.fileQuotes=new FileQuoteDrafts({input,onChange:()=>input.dispatchEvent(new Event('input',{bubbles:true}))});
+    this.fileSelection=new FileSelectionAction(this);
   }
   canSplit(){return BridgeLayout.canSplit(this.chat.clientWidth);}
   get splitMode(){return this.canSplit()&&!!this.current?.splitTab;}
@@ -135,13 +137,15 @@ class Workbench {
     } catch (error) { if (!signal.aborted) icon.dataset.thumbnailFailed = 'true'; }
   }
   open(id, host) {
+    this.fileSelection?.close();
     this.rememberScroll();
     const key = (this.provider&&this.provider!=='codex'?this.provider+'|':'')+host + '|' + id;
     if (this.previewFullscreen && this.previewFullscreen.session.key !== key) this.closePreviewFullscreen();
     if (!this.sessions.has(key)) this.sessions.set(key, {id, host, key, provider:this.provider, active: 'chat', files: [], directory: '', search: '', hidden: false, scroll: 0});
-    this.current = this.sessions.get(key); this.paint();
+    this.current = this.sessions.get(key); this.fileQuotes.open(key); this.paint();
   }
   reset(provider=null) {
+    this.fileSelection?.close();this.fileQuotes.close();
     if (this.previewFullscreen && (!provider || this.previewFullscreen.session.provider === provider)) this.closePreviewFullscreen();
     const visible=!provider||this.current?.provider===provider;
     if(visible){this.stopThumbnails();this.uploadController?.abort();}
@@ -159,6 +163,7 @@ class Workbench {
   rememberScroll() { const timeline=this.chat.querySelector('.timeline');if (this.current && !this.chat.classList.contains('workbench-active') && timeline.clientHeight) this.current.scroll = timeline.scrollTop; }
   select(id) {
     if (!this.current) return;
+    this.fileSelection?.close();
     if (this.previewFullscreen && this.previewFullscreen.tab.id !== id) {
       const tab=this.current.files.find(tab=>tab.id===id);
       if(this.previewFullscreen.documentMode&&tab?.id.startsWith('file:'))this.syncPreviewFullscreen(tab);
@@ -313,7 +318,7 @@ class Workbench {
       const url = this.url(session, '', path) + '&hidden=' + session.hidden + '&search=' + encodeURIComponent(session.search) + '&offset=' + (append ? tab.next : 0);
       const result = await this.request(url, undefined, controller.signal);
       if (controller.signal.aborted || !this.sessions.has(session.key)) return;
-      session.project = result.project; const crumb=tab.body.querySelector('.wb-path');delete crumb.dataset.i18n;crumb.textContent = result.project + (path ? ' / ' + path : '');
+      session.project = result.project; session.root = result.root; const crumb=tab.body.querySelector('.wb-path');delete crumb.dataset.i18n;crumb.textContent = result.project + (path ? ' / ' + path : '');
       delete tab.status.dataset.i18n;
       tab.status.replaceChildren(...(result.total ? [this.node('span', '', String(result.total)), this.node('span', '', ' 项 · '), this.node('span', '', session.host === 'local' ? '电脑上的项目' : 'SSH 项目')] : [this.node('span', '', '当前目录没有匹配的文件')]));
       tab.body.querySelector('.wb-load-more')?.remove();
@@ -476,6 +481,7 @@ class Workbench {
       }
       if (copyAction) actions.append(copyAction);
       tab.body.replaceChildren(...(modes ? [head, modes, content] : [head, content]));
+      if(result.kind==='text'||result.kind==='pdf')tab.filePath=entry.path;
       if(this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===tab)this.syncPreviewFullscreen(tab);
       this.scrollMarkdown(tab);
       if (tab.pdf) tab.pdf.load();

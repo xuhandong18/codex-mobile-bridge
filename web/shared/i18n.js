@@ -2,6 +2,12 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"引用到聊天":"Quote in chat",
+"文件引用":"File excerpt",
+"查看文件引用":"View file excerpt",
+"删除引用":"Remove excerpt",
+"添加到哪个聊天？":"Add to which chat?",
+"文字和文件引用合计过长，请缩小选区或删除部分引用":"The message and file excerpts are too long. Select less text or remove an excerpt.",
 "自定义权限":"Custom permissions",
 "完全访问 · 请求批准":"Full access · Ask for approval",
 "权限未提供":"Permissions unavailable",

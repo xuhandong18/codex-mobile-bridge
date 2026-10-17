@@ -1,0 +1,74 @@
+'use strict';
+
+class FileSelectionAction {
+  constructor(workbench){
+    this.workbench=workbench;
+    this.bar=document.createElement('div');this.bar.className='selection-actions file-selection-actions';this.bar.hidden=true;this.bar.setAttribute('role','toolbar');
+    this.button=document.createElement('button');this.button.type='button';this.button.className='selection-more';this.button.dataset.i18n='引用到聊天';this.button.textContent=BridgeI18n.t('引用到聊天');
+    this.bar.append(this.button);workbench.chat.append(this.bar);
+    this.bar.onpointerdown=event=>event.preventDefault();this.button.onclick=()=>this.add(this.capture());
+    const update=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),160);};
+    document.addEventListener('selectionchange',update);document.addEventListener('scroll',update,true);window.addEventListener('resize',update);
+    window.visualViewport?.addEventListener('resize',update);window.visualViewport?.addEventListener('scroll',update);
+    this.menu=new ChatContextMenu(workbench.chat,target=>{
+      const selection=this.capture();if(!selection||!selection.content.contains(target))return [];
+      workbench.closePreviewFullscreen();
+      return [{label:'引用到聊天',run:()=>this.add(selection)}];
+    },{label:'文件引用'});
+  }
+  capture(){
+    const wb=this.workbench,session=wb.current,selection=window.getSelection();
+    if(!session||!selection?.rangeCount||selection.isCollapsed||wb.chat.hidden||document.querySelector('dialog[open]'))return null;
+    const range=selection.getRangeAt(0),start=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement;
+    const content=start?.closest('.wb-preview-content');if(!content||!content.contains(range.endContainer))return null;
+    const tab=session.files.find(tab=>tab.filePath&&tab.body.contains(content));
+    if(!tab||!wb.isVisible(session,tab)||!wb.chat.contains(content)||!this.targets(session).some(target=>target.available()))return null;
+    // Exclude preview chrome, source line numbers and non-text file previews.
+    const code=content.querySelector('.wb-source-code code');
+    if(code&&(!code.contains(range.startContainer)||!code.contains(range.endContainer)))return null;
+    if(!code&&!tab.markdown&&!tab.pdf)return null;
+    const text=selection.toString();if(!text.trim())return null;
+    return {session,tab,content,text,rect:range.getBoundingClientRect()};
+  }
+  targets(session){
+    const wb=this.workbench,targets=[];
+    if(session!==wb.current)return targets;
+    targets.push({id:'chat',name:BridgeI18n.t('主会话'),quotes:wb.fileQuotes,available:()=>wb.canQuoteMain?.()!==false&&session.access?.canSend!==false,focus:()=>{wb.select('chat');wb.revealMainComposer?.();}});
+    for(const tab of session.files){const side=tab.sideChat;if(!side||side.disposed)continue;
+      targets.push({id:tab.id,name:tab.name,quotes:side.fileQuotes,available:()=>!side.disposed&&!side.busy&&!side.pending,focus:()=>{wb.select(tab.id);side.collapse(false);side.controls();}});
+    }
+    return targets;
+  }
+  update(){
+    const selection=this.capture();this.bar.hidden=!selection;if(!selection)return;
+    const viewport=window.visualViewport,left=viewport?.offsetLeft||0,top=viewport?.offsetTop||0,width=viewport?.width||innerWidth,height=viewport?.height||innerHeight;
+    this.bar.style.left=Math.max(left+8,Math.min(selection.rect.left,left+width-this.bar.offsetWidth-8))+'px';
+    this.bar.style.top=Math.max(top+8,Math.min(selection.rect.bottom+8,top+height-this.bar.offsetHeight-8))+'px';
+  }
+  async add(selection){
+    if(!selection)return;const wb=this.workbench,{session,tab,text}=selection;
+    const valid=()=>wb.current===session&&wb.sessions.get(session.key)===session&&session.files.includes(tab);
+    if(!valid())return;this.bar.hidden=true;
+    try{
+      let root=session.root;
+      if(!root){const result=await wb.request(wb.url(session));root=result.root;if(valid())session.root=root;}
+      if(!valid())return;
+      const path=ChatReferencePicker.fileItems({root,entries:[{name:tab.name,path:tab.filePath,kind:'file'}]}).items[0].value;
+      if(!path)throw Error(BridgeI18n.t('当前会话未提供可访问的项目完整目录'));
+      const quote={path,name:tab.name,text,host:session.host};
+      const insert=target=>{
+        if(!valid()||!this.targets(session).some(row=>row.id===target.id&&row.quotes===target.quotes)||!target.available())return;
+        if(target.quotes.add(quote)){this.menu.suppressUntil=0;window.getSelection()?.removeAllRanges();wb.closePreviewFullscreen();target.focus();target.quotes.input.focus();}
+      };
+      const targets=this.targets(session);
+      if(targets.length===1){insert(targets[0]);return;}
+      wb.closePreviewFullscreen();
+      const dialog=this.dialog=wb.node('dialog','picker file-quote-target'),head=wb.node('div','picker-head');
+      head.append(wb.node('h2','','添加到哪个聊天？'),wb.button('关闭',()=>dialog.close(),'关闭'));
+      const list=wb.node('div','file-quote-targets');
+      for(const target of targets){const button=wb.raw(wb.button(target.name,()=>{try{insert(target);dialog.close();}catch(error){wb.notify(error.message);}},target.name));button.dataset.quoteTarget=target.id;button.disabled=!target.available();list.append(button);}
+      dialog.append(head,list);dialog.addEventListener('close',()=>{dialog.remove();if(this.dialog===dialog)this.dialog=null;},{once:true});document.body.append(dialog);dialog.showModal();
+    }catch(error){wb.notify(error.message);}
+  }
+  close(){this.bar.hidden=true;this.menu.menu?.close();this.dialog?.close();}
+}

@@ -74,6 +74,8 @@ function clearListSnapshot(){
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
 async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
 const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat});
+workbench.canQuoteMain=()=>!!currentId&&!sending&&currentAccess().canSend;
+workbench.revealMainComposer=()=>{if($('composer-toggle').getAttribute('aria-expanded')==='false')$('composer-toggle').click();};
 const desktopSessions=new DesktopSessionsView({root:$('app'),select:$('desktop-backend'),request:api,notify:toast,csrf:()=>csrf,onUnauthorized:authLost,onSelect:provider=>{
   if(provider!=='codex'){saveDraft();chatTimeline?.dispose();chatTimeline=null;currentId=null;state=null;workbench.reset();$('chat').hidden=true;$('welcome').hidden=false;$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);}
   else if(clientNavigation.provider==='codex'&&!$('app').hidden)loadList(true).catch(error=>toast(error.message));
@@ -154,7 +156,7 @@ async function enter(authInfo){
   await clientNavigation.openChatLink(chatLink,openChat);
 }
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();if(loginStatus.blocked)return;$('login-button').disabled=true;$('login-error').textContent='';try{const result=await api('/api/login',{username:$('username').value,password:$('password').value,remember:$('remember-login').checked});renderLoginStatus({attemptsRemaining:5,attemptLimit:5,blocked:false});csrf=result.csrf;$('password').value='';await enter();}catch(error){$('login-error').textContent=t(error.message);renderLoginStatus(error.loginStatus);}finally{$('login-button').disabled=loginStatus.blocked;}});
-$('logout').onclick=async()=>{await api('/api/logout',{});document.dispatchEvent(new Event('bridge-logged-out'));csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';clearListSnapshot();sessionStorage.clear();attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
+$('logout').onclick=async()=>{await api('/api/logout',{});document.dispatchEvent(new Event('bridge-logged-out'));csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';clearListSnapshot();sessionStorage.clear();workbench.fileQuotes.forget(()=>true);attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
 function dateText(value){if(!value)return '';return new Date(value*1000).toLocaleDateString(BridgeI18n.locale(),{month:'numeric',day:'numeric'});}
 function listAuthIdentity(auth){return auth?.authenticated&&/^[0-9a-f]{64}$/.test(auth.listCacheIdentity||'')?auth.listCacheIdentity:'';}
 function listSnapshotKey(filter){return listIdentity?'codex-list-v1:'+listIdentity+':'+filter:'';}
@@ -1027,7 +1029,8 @@ function chooseRunningSendMode(){
 $('composer').onsubmit=async event=>{
   event.preventDefault();
   if(applyingNewChat===chatKey()||sending||runningSendChoice||!currentId||!currentAccess().canSend)return;
-  const target=currentId,targetHost=currentHost,text=$('message').value;
+  const target=currentId,targetHost=currentHost,raw=$('message').value,quoteIds=workbench.fileQuotes.rows.map(row=>row.id);
+  let text;try{text=workbench.fileQuotes.validate();}catch(error){$('send-error').textContent=error.message;return;}
   if(!attachments.ready()){toast('请等待附件上传完成');return;}
   const attachmentIds=attachments.ids();
   if(!text.trim()&&!attachmentIds.length)return;
@@ -1036,7 +1039,7 @@ $('composer').onsubmit=async event=>{
   let pending;try{pending=JSON.parse(sessionStorage.getItem(key));}catch{}
   const matches=mode=>pending&&pending.text===text&&pending.mode===mode&&pending.workMode===(mode==='steer'?null:requestedWorkMode)&&JSON.stringify(pending.attachments||[])===JSON.stringify(attachmentIds);
   const current=()=>currentId===target&&currentHost===targetHost;
-  const unchanged=()=>current()&&$('message').value===text&&JSON.stringify(attachments.ids())===JSON.stringify(attachmentIds);
+  const unchanged=()=>current()&&workbench.fileQuotes.text()===text&&JSON.stringify(attachments.ids())===JSON.stringify(attachmentIds);
   $('send-error').textContent='';
   // An existing attempt may already have reached Codex. Reuse its identity and
   // mode to check the result; choosing a different mode would create a duplicate.
@@ -1057,8 +1060,10 @@ $('composer').onsubmit=async event=>{
       if(result.status==='ignored')throw Error(t('这条未确认记录已忽略，请刷新后重新编辑消息。'));
       if(result.status==='unknown')throw Error(t('消息可能已送达，请检查聊天记录。再次点击不会重复提交。'));
       bumpRecency(target,targetHost);sessionStorage.removeItem(key);workModes.submitted(chatKey(target,targetHost),workMode);
-      attachments.clear(chatKey(target,targetHost),attachmentIds);sessionStorage.removeItem('draft:'+chatKey(target,targetHost));
-      if(current()){$('message').value='';window.BridgePresentation?.resizeMessage();}
+      attachments.clear(chatKey(target,targetHost),attachmentIds);
+      if(current()&&$('message').value===raw){$('message').value='';window.BridgePresentation?.resizeMessage();}
+      workbench.fileQuotes.clear(chatKey(target,targetHost),quoteIds);
+      if(current()&&!$('message').value||sessionStorage.getItem('draft:'+chatKey(target,targetHost))===raw)sessionStorage.removeItem('draft:'+chatKey(target,targetHost));
       toast(workMode==='goal'?(result.activation?.status==='queued'?t('目标已创建，启动已排队'):result.activation?t('目标已创建，正在启动'):t('已提交目标请求，等待桌面确认')):result.status==='queued'?t('已加入待发送队列'):t('已发送到会话'));
     }catch(error){
       rejectedBusy=current()&&mode==='send'&&error.status===400&&error.message==='Codex 正在执行。请选择「排队发送」或「补充当前任务」。';

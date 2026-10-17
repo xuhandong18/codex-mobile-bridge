@@ -31,6 +31,8 @@ class DesktopSessionsView {
     this.attachments=new ChatAttachments({root:this.attachmentList,button:this.attachButton,input:this.attachmentInput,paste:this.input,drop:this.form,onChange:()=>this.updateComposer(),upload:(key,id,file)=>this.uploadAttachment(key,id,file),preview:(key,id)=>this.attachmentUrl(key,id,'preview'),thumbnail:async(key,id,file)=>{const image=await this.attachments.thumbnailBlob(file);return this.uploadBinary(this.attachmentUrl(key,id,'thumb')+'&width='+image.width+'&height='+image.height,image.data,image.mime);}});
     const addAttachments=this.attachments.add.bind(this.attachments);this.attachments.add=files=>{if(!this.attachments.key||this.attachments.locked)return;if(this.overRequestLimit([...this.attachments.rows,...files])){this.attachments.error=this.requestLimitMessage();this.attachments.render();return;}if(this.provider!=='claude'||this.state?.backend!=='cli'){if(files.some(file=>!file.type?.startsWith('image/'))){this.attachments.error='此应用的消息附件仅支持图片；其他文件请使用文件传输。';this.attachments.render();return;}}addAttachments(files);};
     this.conversation.append(head,this.notice,this.messages,this.requests,this.form);this.workbench=new Workbench({chat:this.conversation,request,csrf,notify,onUnauthorized});select.onchange=()=>this.choose(select.value);
+    this.workbench.canQuoteMain=()=>this.isChatOpen&&!this.busy&&this.state?.capabilities?.send!==false;
+    this.workbench.revealMainComposer=()=>this.collapseComposer(false);
     document.addEventListener('bridge-language',()=>this.relabel());const resume=()=>{clearTimeout(this.timer);if(document.hidden)this.listSync.reset();else{this.prefetchLists();if(this.provider!=='codex')this.refresh();}};document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);
     this.appearanceObserver=new MutationObserver(()=>{this.renderMessages(this.lastMessages||[]);this.workbench.setThumbnails(document.documentElement.dataset.showFileThumbnails==='true');});this.appearanceObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-show-reasoning','data-show-process','data-show-file-thumbnails']});
     const listRegion=this.node('div','session-list-region');this.listHint=this.button('',()=>{});this.listHint.className='list-sync';this.listHint.hidden=true;this.listHint.setAttribute('aria-live','polite');listRegion.append(this.rowsRoot,this.listHint);this.list.append(listRegion);
@@ -122,11 +124,11 @@ class DesktopSessionsView {
     for(const key of this.detailCache.keys())if(jsonKey(key))this.forgetDetail(key);
     for(const key of this.pending.keys())if(key.startsWith(provider+':'))this.pending.delete(key);
     for(const key of Object.keys(this.activity.rows))if(key.startsWith(provider+'|'))delete this.activity.rows[key];this.activity.save();
-    this.workbench.reset(provider);this.attachments.forget(jsonKey);
+    this.workbench.reset(provider);this.workbench.fileQuotes.forget(key=>key.startsWith(provider+'|'));this.attachments.forget(jsonKey);
     if(provider!==this.provider)return;
     this.rows=[];this.listStamp='';this.lastMessages=[];this.requestStamp='';this.messageNodes.clear();this.messages.replaceChildren();this.requests.replaceChildren();this.showSelection(false);this.renderList();this.updateComposer();await this.refresh();
   }
-  clear(){this.referencePicker.close();this.listSync.reset();this.readEpoch++;this.readTasks.clear();this.providerReadEpochs.clear();this.listPrefetchAt.clear();this.detailCacheSizes.clear();this.detailCacheBytes=0;this.clientStates=[];this.workbench.reset();clearTimeout(this.timer);this.generation++;this.detailRevision++;this.provider='codex';this.select.value='codex';this.select.hidden=true;this.container.hidden=true;this.root.classList.remove('desktop-mode');this.sid=null;this.state=null;this.showSelection(false);this.drafts.clear();this.accountDrafts.clear();this.providerViews.clear();this.detailCache.clear();this.activity.clear();this.freshDetail=false;this.rows=[];this.listStamp='';this.rowsRoot.replaceChildren();this.lastMessages=[];this.requestStamp='';this.pending.clear();this.attachments.reset();this.messages.replaceChildren();this.requests.replaceChildren();this.messageNodes.clear();}
+  clear(){this.referencePicker.close();this.listSync.reset();this.readEpoch++;this.readTasks.clear();this.providerReadEpochs.clear();this.listPrefetchAt.clear();this.detailCacheSizes.clear();this.detailCacheBytes=0;this.clientStates=[];this.workbench.reset();this.workbench.fileQuotes.reset();clearTimeout(this.timer);this.generation++;this.detailRevision++;this.provider='codex';this.select.value='codex';this.select.hidden=true;this.container.hidden=true;this.root.classList.remove('desktop-mode');this.sid=null;this.state=null;this.showSelection(false);this.drafts.clear();this.accountDrafts.clear();this.providerViews.clear();this.detailCache.clear();this.activity.clear();this.freshDetail=false;this.rows=[];this.listStamp='';this.rowsRoot.replaceChildren();this.lastMessages=[];this.requestStamp='';this.pending.clear();this.attachments.reset();this.messages.replaceChildren();this.requests.replaceChildren();this.messageNodes.clear();}
   async refresh(){
     clearTimeout(this.timer);const generation=this.generation,provider=this.provider;if(provider==='codex'||document.hidden||this.root.hidden)return;
     if(this.renderConnectionStatus()){this.updateActivity(this.rows,false);this.renderIndicators();this.freshDetail=false;this.updateComposer();return;}
@@ -243,7 +245,7 @@ class DesktopSessionsView {
   async uploadBinary(url,data,type){const response=await fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':type||'application/octet-stream','X-CSRF-Token':this.csrf()},body:data});const result=await response.json();if(!response.ok){if(response.status===401)this.onUnauthorized();throw Error(result.error||BridgeI18n.t('附件上传失败，请重试'));}return result;}
   uploadAttachment(key,id,file){const [provider,sid]=JSON.parse(key);return this.uploadBinary(this.path('uploads',sid,provider)+'&id='+encodeURIComponent(id)+'&name='+encodeURIComponent(file.name),file,'application/octet-stream');}
   requestLimitMessage(){return 'Claude 单次消息与图片编码后不能超过 10 MiB，请减少附件';}
-  overRequestLimit(rows){const limit=this.state?.maxRequestBytes;if(!limit)return false;return rows.reduce((total,row)=>total+Math.ceil(row.size/3)*4,0)+new TextEncoder().encode(JSON.stringify(this.input.value)).length>limit;}
+  overRequestLimit(rows){const limit=this.state?.maxRequestBytes;if(!limit)return false;return rows.reduce((total,row)=>total+Math.ceil(row.size/3)*4,0)+new TextEncoder().encode(JSON.stringify(this.workbench.fileQuotes.text())).length>limit;}
   referenceContext(){
     if(!this.isChatOpen||!this.state||this.busy)return null;
     const {cwd='',backend='',host='local'}=this.state;
@@ -278,10 +280,12 @@ class DesktopSessionsView {
     return {items:[],nextOffset:null};
   }
   async submit(){
-    const raw=this.input.value,text=raw.trim(),ids=this.state?.capabilities?.attachments===true?this.attachments.ids():[];if((!text&&!ids.length)||!this.sid||!this.state||!this.freshDetail||this.busy||this.state.capabilities.send===false||ids.length&&!this.attachments.ready())return;
+    const raw=this.input.value,quotes=this.workbench.fileQuotes,quoteKey=quotes.key,quoteIds=quotes.rows.map(row=>row.id),ids=this.state?.capabilities?.attachments===true?this.attachments.ids():[];
+    let text;try{text=quotes.validate().trim();}catch(error){this.error.textContent=error.message;return;}
+    if((!text&&!ids.length)||!this.sid||!this.state||!this.freshDetail||this.busy||this.state.capabilities.send===false||ids.length&&!this.attachments.ready())return;
     if(this.overRequestLimit(ids.length?this.attachments.rows:[])){this.error.textContent=BridgeI18n.t(this.requestLimitMessage());return;}
     const sid=this.sid,provider=this.provider,key=JSON.stringify([provider,sid]),epoch=this.readEpoch,accountEpoch=this.accountEpochs.get(provider)||0,body={text,mode:this.mode.value};if(ids.length)body.attachments=ids;const result=await this.mutate('send',body);
-    if(result&&epoch===this.readEpoch&&accountEpoch===(this.accountEpochs.get(provider)||0)){this.attachments.clear(key,ids);if(sid===this.sid&&provider===this.provider&&this.input.value===raw){this.input.value='';this.resizeInput();this.drafts.delete(provider+':'+sid);}this.updateComposer();}
+    if(result&&epoch===this.readEpoch&&accountEpoch===(this.accountEpochs.get(provider)||0)){this.attachments.clear(key,ids);quotes.clear(quoteKey,quoteIds);if(sid===this.sid&&provider===this.provider&&this.input.value===raw){this.input.value='';this.resizeInput();this.drafts.delete(provider+':'+sid);}this.updateComposer();}
   }
   dialog(title){const dialog=this.node('dialog','picker ds-picker'),head=this.node('div','picker-head');head.append(this.translated('h2',title));const close=this.button('×',()=>dialog.close());close.className='icon-button';this.label(close,'关闭');head.append(close);dialog.append(head);dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);return dialog;}
   async models(){

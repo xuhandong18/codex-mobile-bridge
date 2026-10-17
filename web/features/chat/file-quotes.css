@@ -1,0 +1,17 @@
+.file-quote-list{display:flex;flex-wrap:wrap;gap:6px;max-height:112px;overflow:auto;margin-bottom:8px;min-width:0}
+.file-quote-list[hidden]{display:none}
+.file-quote-chip{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:min(100%,300px);min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--soft);color:var(--text);cursor:pointer;font-size:12px;text-align:left}
+.file-quote-chip>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-quote-icon{color:var(--green);font-size:18px;line-height:1}
+.file-quote-details[open],.file-quote-target[open]{display:flex;flex-direction:column;gap:10px;max-height:85dvh;overflow:hidden}
+.file-quote-details{width:min(94vw,720px)}
+.file-quote-details .picker-head,.file-quote-target .picker-head{flex:none;gap:12px;margin:0}
+.file-quote-details .file-quote-path{margin:0;flex:none;max-height:6em;overflow:auto;overflow-wrap:anywhere;font-family:monospace;color:var(--muted);user-select:text}
+.file-quote-text{flex:1;min-height:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;margin:0;border-radius:8px;background:var(--soft);font:13px/1.65 monospace;user-select:text;-webkit-user-select:text}
+.file-quote-remove{align-self:flex-start;flex:none;color:var(--danger,#b13c35)}
+.file-quote-targets{display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:0}
+.file-quote-targets>button{padding:14px;text-align:left;border:1px solid var(--line);border-radius:10px;background:var(--soft);color:var(--text);overflow-wrap:anywhere;cursor:pointer}
+.file-quote-targets>button:hover,.file-quote-chip:hover{border-color:var(--green)}
+.file-selection-actions{z-index:10010}
+@media(pointer:coarse){.file-quote-chip{min-height:40px}}
+@media(max-height:500px){.file-quote-details[open],.file-quote-target[open]{max-height:94dvh;padding:12px;gap:6px}}

@@ -37,6 +37,7 @@ class SideChatPanel {
     this.sendMode.onchange=()=>this.controls();this.workMode.onchange=()=>{this.modeSelected=true;this.controls();};
     actions.append(this.stopButton,this.sendButton);bottom.append(this.attachButton,this.fileInput,this.sendMode,this.workMode,actions);
     this.composerBody.append(this.skillPills,this.attachmentList,this.input,bottom);this.form.append(tools,this.composerBody);
+    this.fileQuotes=new FileQuoteDrafts({input:this.input,onChange:()=>this.controls()});this.fileQuotes.open(session.key+'|'+tab.id);
     this.attachments=new ChatAttachments({root:this.attachmentList,button:this.attachButton,input:this.fileInput,paste:this.input,drop:this.form,
       onChange:()=>this.controls(),preview:(key,id)=>this.uploadUrl(key,id,'preview'),
       upload:(key,id,file)=>this.uploadFile(this.uploadUrl(key,id)+'&name='+encodeURIComponent(file.name),file),
@@ -73,7 +74,7 @@ class SideChatPanel {
   request(body){return this.workbench.request(this.url(),body);}
   controls(){
     const created=!!this.state?.id,active=this.state?.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
-    this.form.hidden=!created;this.landing.hidden=created;this.head.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
+    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created;this.head.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.skillsButton,this.permissionsButton])button.disabled=locked;
     this.sendMode.disabled=locked;this.workMode.disabled=locked||this.sendMode.value==='steer';
@@ -81,7 +82,7 @@ class SideChatPanel {
     if(!active&&this.sendMode.value==='steer')this.sendMode.value='send';
     this.workMode.disabled=locked||this.sendMode.value==='steer';
     this.workMode.title=BridgeI18n.t(this.sendMode.value==='steer'?'补充内容沿用当前任务模式':this.workMode.value==='plan'?'先讨论并制定计划，确认后执行。':'');
-    this.sendButton.disabled=locked||((active||!!this.state?.requests?.length)&&this.sendMode.value==='send')||(!!this.state?.requests?.length&&this.sendMode.value==='steer')||(!this.input.value.trim()&&!this.attachments?.ids().length)||!this.attachments?.ready();
+    this.sendButton.disabled=locked||((active||!!this.state?.requests?.length)&&this.sendMode.value==='send')||(!!this.state?.requests?.length&&this.sendMode.value==='steer')||(!this.input.value.trim()&&!this.fileQuotes.rows.length&&!this.attachments?.ids().length)||!this.attachments?.ready();
     this.createButton.disabled=!!this.busy;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
     this.endButton.hidden=!created;this.endButton.disabled=!!this.busy;
@@ -163,7 +164,7 @@ class SideChatPanel {
   }
   apply(state){
     if(this.disposed)return;
-    if(this.state?.id&&this.state.id!==state.id){this.pending=null;this.creationId=uuid();this.input.value='';this.attachments.clear(this.attachments.key,this.attachments.ids());this.attachments.reset();this.selectedSkills.clear();this.skillChips();this.modeSelected=false;this.workMode.value='default';}
+    if(this.state?.id&&this.state.id!==state.id){this.pending=null;this.creationId=uuid();this.input.value='';this.fileQuotes.clear(this.fileQuotes.key,this.fileQuotes.rows.map(row=>row.id));this.attachments.clear(this.attachments.key,this.attachments.ids());this.attachments.reset();this.selectedSkills.clear();this.skillChips();this.modeSelected=false;this.workMode.value='default';}
     this.state=state;this.contextUsage.update(state);
     if(state.id&&this.attachments.key!==state.id)this.attachments.open(state.id);
     if(state.id){this.modelButton.textContent=[state.model,state.effort].filter(Boolean).join(' · ')||BridgeI18n.t('模型与思考程度');delete this.modelButton.dataset.i18n;}
@@ -171,7 +172,7 @@ class SideChatPanel {
     const permission={'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问'}[state.permissionMode]||'权限';this.permissionsButton.textContent=BridgeI18n.t(permission);this.permissionsButton.dataset.i18n=permission;
     this.tab.body.classList.toggle('has-side-chat',!!state.id);
     if(this.pending&&state.submissions?.some(s=>s.id===this.pending.submissionId&&['accepted','queued'].includes(s.status))){
-      if(this.input.value===this.pending.text)this.input.value='';this.attachments.clear(state.id,this.pending.attachments);this.pending=null;this.selectedSkills.clear();this.skillChips();this.resizeInput();
+      this.completeSubmission();this.attachments.clear(state.id,this.pending.attachments);this.pending=null;this.selectedSkills.clear();this.skillChips();this.resizeInput();
     }
     this.status.textContent=state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):BridgeI18n.t('已连接'));
     const stamp=JSON.stringify([state.id,state.connected,state.turns]);
@@ -249,12 +250,18 @@ class SideChatPanel {
   }
   async send(){
     if(this.sendButton.disabled)return;
-    this.busy=true;const text=this.input.value;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),skills:[...this.selectedSkills.keys()],mode:this.sendMode.value,workMode:this.sendMode.value==='steer'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.controls();this.status.textContent=BridgeI18n.t('正在发送…');
+    let text;try{text=this.fileQuotes.validate();}catch(error){this.status.textContent=error.message;this.controls();return;}
+    this.pendingDraft={raw:this.input.value,quotes:this.fileQuotes.rows.map(row=>row.id)};
+    this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),skills:[...this.selectedSkills.keys()],mode:this.sendMode.value,workMode:this.sendMode.value==='steer'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.controls();this.status.textContent=BridgeI18n.t('正在发送…');
     try{const result=await this.request({action:'send',id:this.state.id,...this.pending});if(this.disposed)return;
-      if(['accepted','queued'].includes(result.status)){this.attachments.clear(this.state.id,attachmentIds);this.pending=null;if(this.input.value===text)this.input.value='';this.selectedSkills.clear();this.skillChips();this.resizeInput();await this.load();}
+      if(['accepted','queued'].includes(result.status)){this.attachments.clear(this.state.id,attachmentIds);this.completeSubmission();this.pending=null;this.selectedSkills.clear();this.skillChips();this.resizeInput();await this.load();}
       else this.status.textContent=BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。');
     }catch(e){if(!this.disposed){if([400,401,403,404].includes(e.status))this.pending=null;this.status.textContent=BridgeI18n.t(e.message);}}
     finally{this.busy=false;this.controls();}
+  }
+  completeSubmission(){
+    if(this.input.value===(this.pendingDraft?.raw??this.pending.text))this.input.value='';
+    this.fileQuotes.clear(this.fileQuotes.key,this.pendingDraft?.quotes||[]);this.pendingDraft=null;
   }
   async action(action,fields={}){if(this.busy)return;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);}finally{this.busy=false;this.controls();}}
   async end(){
@@ -265,5 +272,5 @@ class SideChatPanel {
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }
-  dispose(){this.contextUsage.dispose();this.disposed=true;clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
+  dispose(){this.contextUsage.dispose();this.disposed=true;this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
 }

@@ -9,6 +9,8 @@ function fixture({active=true}={}){
   const nodes=new Map(),saved=new Map(),calls=[],notices=[];
   class Element{
     constructor(tag,cls='',text=''){this.tag=tag;this.className=cls;this.textContent=text;this.children=[];this.dataset={};this.listeners={};this.value='';this.open=false;}
+    before(){}
+    replaceChildren(...items){this.children=[];this.append(...items);}
     append(...items){for(const item of items){item.parent=this;this.children.push(item);}}
     setAttribute(name,value){this[name]=value;}
     addEventListener(name,fn){(this.listeners[name]??=[]).push(fn);}
@@ -17,7 +19,7 @@ function fixture({active=true}={}){
     remove(){if(this.parent)this.parent.children=this.parent.children.filter(node=>node!==this);}
     focus(){document.activeElement=this;}
   }
-  const document={body:new Element('body'),activeElement:null};
+  const document={body:new Element('body'),activeElement:null,createElement:tag=>new Element(tag)};
   const $=id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);};
   $('message').value='A follow-up with an attachment';$('send-mode').value='send';
   const ctx={$,t:value=>value,document,el:(...args)=>new Element(...args),currentId:'parent',currentHost:'local',
@@ -28,11 +30,13 @@ function fixture({active=true}={}){
     sessionStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},
     workModes:{value:mode=>mode==='steer'?null:'plan',render(){},submitted(){}},
     files:['file-a'],attachments:{ready:()=>true,ids:()=>[...ctx.files],setLocked(value){this.locked=value;},clear(){ctx.files=[];}},
-    BridgeI18n:{locale:()=> 'zh-CN'},window:{BridgePresentation:{resizeMessage(){},showError(){}}},
+    BridgeI18n:{locale:()=> 'zh-CN',t:text=>text},window:{BridgePresentation:{resizeMessage(){},showError(){}}},
     bumpRecency(){},toast:text=>notices.push(text)};
   let handler=async(_url,body)=>({status:body.mode==='queue'?'queued':'accepted'});
   ctx.api=async(url,body)=>{calls.push({url,body:structuredClone(body)});return handler(url,body);};
-  vm.createContext(ctx);vm.runInContext(code,ctx);
+  vm.createContext(ctx);vm.runInContext(fs.readFileSync('web/features/chat/file-quotes.js','utf8'),ctx);
+  ctx.workbench={fileQuotes:vm.runInContext("new FileQuoteDrafts({input:$('message')})",ctx)};ctx.workbench.fileQuotes.open('local|parent');
+  vm.runInContext(code,ctx);
   return {ctx,$,saved,calls,notices,document,setHandler:fn=>handler=fn,
     submit:()=>$('composer').onsubmit({preventDefault(){}}),
     dialog:()=>document.body.children.find(node=>node.open),
@@ -73,6 +77,21 @@ test('an earlier dropdown setting does not silently send the next running-chat m
 test('idle chats continue to send directly',async()=>{
   const ui=fixture({active:false});await ui.submit();assert.equal(ui.dialog(),undefined);
   assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].body.mode,'send');
+});
+
+test('a quote-only draft sends full path and selected text and clears the tag only after acceptance',async()=>{
+  const ui=fixture({active:false});ui.ctx.files=[];ui.$('message').value='';
+  const quotes=ui.ctx.workbench.fileQuotes;quotes.add({path:'/project/file.js',text:'selected\n  text',name:'file.js'});
+  ui.setHandler(async()=>({status:'unknown'}));await ui.submit();assert.equal(quotes.rows.length,1);
+  const first=ui.calls[0].body;assert.equal(first.text,'文件：/project/file.js\n> selected\n>   text');
+  ui.setHandler(async()=>({status:'accepted'}));await ui.submit();assert.deepEqual(ui.calls[1].body,first);
+  assert.equal(quotes.rows.length,0);assert.equal(ui.$('message').value,'');
+});
+
+test('removing an excerpt while the running-send choice is open cancels that submission',async()=>{
+  const ui=fixture(),quotes=ui.ctx.workbench.fileQuotes;quotes.add({path:'/file',text:'excerpt'});
+  const pending=ui.submit();quotes.clear(quotes.key,quotes.rows.map(row=>row.id));ui.choose('queue');await pending;
+  assert.equal(ui.calls.length,0);assert.ok(ui.$('message').value);
 });
 
 test('all reference types send as literal message text with no hidden skill selection',async()=>{

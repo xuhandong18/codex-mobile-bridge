@@ -12,6 +12,7 @@ function fixture(){
   replaceChildren(...nodes){for(const n of this.children)n.parentElement=null;this.children=[];this.options=this.children;this._text='';this.append(...nodes);}
   remove(){if(this.parentElement){const p=this.parentElement;p.children.splice(p.children.indexOf(this),1);this.parentElement=null;}}
   after(...nodes){const p=this.parentElement;if(!p)return;let i=p.children.indexOf(this)+1;for(const n of nodes){n.remove();n.parentElement=p;p.children.splice(i++,0,n);}}
+  before(...nodes){for(const node of nodes)this.parentElement?.insertBefore(node,this);}
   insertBefore(n,next){n.remove();n.parentElement=this;const i=this.children.indexOf(next);this.children.splice(i<0?this.children.length:i,0,n);}
   add(option){this.append(option);if(this.children.length===1)this.value=option.value;}
   setAttribute(k,v){this.attributes[k]=String(v);if(k==='class')this.className=v;if(k.startsWith('data-'))this.dataset[k.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=v;}
@@ -25,11 +26,26 @@ function fixture(){
  const root=new Node('div');root.className='app';document.body.append(root);const select=new Node('select'),calls=[],notices=[];let uploadHandler=async()=>({ok:true,status:200,json:async()=>({image:true,size:16,name:'image.png'})}),handler=async(url,body)=>body?{status:'accepted'}:url.includes('/detail')?{session:{id:'a',title:'Chat',model:'model-a',effort:'high',status:'idle',capabilities:{}},messages:[]}:url.includes('/workspace')?{entries:[],total:0,project:'/project'}:{sessions:[]};
  const context=vm.createContext({document,window:{addEventListener(){}},navigator:{},location:{href:'https://bridge.example/relay/device/?client=claude#old',pathname:'/relay/device/'},history:{replaceState(){}},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},crypto:{getRandomValues:array=>webcrypto.getRandomValues(array)},Uint8Array,TextEncoder,URL,Event,Option:class extends Node{constructor(text,value){super('option');this.textContent=text;this.value=value;}},ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},AbortController,requestAnimationFrame:fn=>fn(),cancelAnimationFrame(){},getComputedStyle:()=>({getPropertyValue:()=>8}),setTimeout(){return 1;},clearTimeout(){},fetch:async(url,options)=>{calls.push({url,upload:options});return uploadHandler(url,options);},renderMarkdown:(node,text)=>node.textContent=text,CustomEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8').match(/^function uuid\(\).*$/m)[0],context);
- for(const file of ['web/layouts/viewport.js','web/features/chat/activity.js','web/features/chat/attachments.js','web/shared/i18n.js','web/features/clients/client-lifecycle.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/features/workspace/workbench.js','web/features/chat/list-sync.js','web/features/chat/reference-picker.js','web/features/clients/desktop-sessions.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
+ for(const file of ['web/layouts/viewport.js','web/features/chat/activity.js','web/features/chat/attachments.js','web/shared/i18n.js','web/features/clients/client-lifecycle.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/features/chat/context-menu.js','web/features/chat/file-quotes.js','web/features/workspace/file-selection.js','web/features/workspace/workbench.js','web/features/chat/list-sync.js','web/features/chat/reference-picker.js','web/features/clients/desktop-sessions.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
  const View=vm.runInContext('DesktopSessionsView',context),view=new View({root,select,request:(url,body,signal)=>{calls.push({url,body,signal});return handler(url,body,signal);},notify:text=>notices.push(text),onSelect(){},csrf:()=>'csrf-test',onUnauthorized(){}});
  return {view,root,document,calls,notices,setHandler:fn=>handler=fn,setUploadHandler:fn=>uploadHandler=fn,run:s=>vm.runInContext(s,context),text:n=>n.textContent};
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
+
+test('client composers send quote-only drafts as text and preserve unconfirmed excerpt tags',async()=>{
+ const ui=await opened(),view=ui.view,quotes=view.workbench.fileQuotes;quotes.add({name:'file.py',path:'/project/file.py',text:'selected code'});
+ ui.setHandler(async(_url,body)=>body?{status:'unknown'}:{sessions:[]});await view.submit();
+ const first=ui.calls.filter(call=>call.body?.text).at(-1).body;assert.match(first.text,/文件：\/project\/file.py\n> selected code/);assert.equal(quotes.rows.length,1);
+ ui.setHandler(async(_url,body)=>body?{status:'accepted'}:{sessions:[]});view.freshDetail=true;await view.submit();
+ assert.equal(ui.calls.filter(call=>call.body?.text).at(-1).body.id,first.id);assert.equal(quotes.rows.length,0);
+});
+
+test('a client composer cannot restore cached excerpt tags after logout cleared session storage',async()=>{
+ const ui=await opened(),view=ui.view,quotes=view.workbench.fileQuotes;quotes.add({path:'/private/file',text:'private excerpt'});
+ ui.run("sessionStorage.removeItem('file-quotes:'+"+JSON.stringify(quotes.key)+")");view.clear();
+ assert.equal(quotes.rows.length,0);assert.equal(quotes.states.size,0);
+ await view.choose('claude');await view.open('a');assert.equal(quotes.rows.length,0);
+});
 async function pendingAttachmentSend(provider='claude'){
  const ui=fixture(),view=ui.view,read=url=>url.includes('/detail')?{session:{id:new URL(url,'https://fixture').searchParams.get('sessionId'),title:'Chat',status:'idle'},capabilities:{attachments:true},messages:[]}:{sessions:[]};
  ui.setHandler(async url=>read(url));await view.choose(provider);await view.open('a');view.input.value='$review';view.input.oninput();view.attachments.rows.push({id:'sent-upload',name:'sent.png',status:'ready',size:16});view.attachments.save(view.attachments.key,view.attachments.rows);
