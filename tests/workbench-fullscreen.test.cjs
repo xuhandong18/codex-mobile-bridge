@@ -15,6 +15,7 @@ class Element {
   }
   append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
   contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+  remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=null;}
   get isConnected() { for (let node=this; node; node=node.parentElement) if (node===document.body) return true; return false; }
   querySelectorAll() { return this.controls || []; }
   setAttribute(name, value) { this.attributes[name] = value; }
@@ -73,4 +74,22 @@ test('fullscreen closes when another file tab is selected', () => {
   assert.equal(workbench.previewFullscreen, null);
   assert.equal(session.active, 'file:b');
   assert.equal(body.classes.has('wb-preview-fullscreen'), false);
+});
+
+test('document fullscreen includes its tab strip and survives a linked document selection', () => {
+  const page=document.body=new Element(),chat=new Element(),outside=new Element(),strip=new Element(),panel=new Element();
+  page.append(outside,chat);chat.append(strip,panel);
+  const body=new Element(),content=new Element(),trigger=new Element(),otherBody=new Element();body.append(trigger,content);panel.append(body);
+  const tab={id:'file:guide.md',name:'guide.md',body,markdown:content},other={id:'file:next.md',name:'next.md',body:otherBody};
+  const session={key:'local|docs',active:tab.id,files:[tab,other]};
+  const workbench=Object.create(Workbench.prototype);
+  Object.assign(workbench,{chat,strip,current:session,rememberScroll(){},paint(){},button(){return new Element();}});
+  workbench.openPreviewFullscreen(session,tab,content,trigger);
+  assert.equal(strip.inert,false);
+  assert.equal(workbench.previewFullscreen.body,chat);
+  workbench.select(other.id);
+  assert.ok(workbench.previewFullscreen);
+  assert.equal(workbench.previewFullscreen.tab,other);
+  assert.equal(outside.inert,true);
+  workbench.closePreviewFullscreen();assert.equal(outside.inert,false);
 });

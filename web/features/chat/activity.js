@@ -12,13 +12,15 @@ class SessionActivity {
       }
       const token=terminal&&row.turnId?row.turnId+':'+row.turnStatus:previous?.token||null;
       const pending=token&&previous&&(previous.turnKnown||previous.token||previous.status==='active')&&(token!==previous.token||previous.pending||previous.status==='active')?token:null;
-      this.rows[key]={status:running?'active':row.status,runningSubagents:row.runningSubagents||0,turnId:row.turnId||previous?.turnId,turnStatus:row.turnStatus||previous?.turnStatus,turnKnown:!!row.turnStatus||previous?.turnKnown||false,token,pending:visible===key?null:pending,offline:false};
+      this.rows[key]={status:running?'active':row.status,runningSubagents:row.runningSubagents||0,turnId:row.turnId||previous?.turnId,turnStatus:row.turnStatus||previous?.turnStatus,turnKnown:!!row.turnStatus||previous?.turnKnown||false,token,pending:visible===key?null:pending,manualUnread:!!previous?.manualUnread,offline:false};
     }
     this.save();
   }
-  read(key){if(this.rows[key]){this.rows[key].pending=null;this.save();}}
+  markUnread(key){this.rows[key]={...this.rows[key],manualUnread:true};this.save();}
+  read(key,{explicit=false}={}){if(this.rows[key]){this.rows[key].pending=null;if(explicit)this.rows[key].manualUnread=false;this.save();}}
   indicator(key){
     const row=this.rows[key];if(!row)return null;
+    if(row.manualUnread)return {kind:'completed',label:'未读'};
     if(row.offline)return {kind:'unknown',label:'运行状态暂不可用'};
     if(row.status==='active')return {kind:'running',label:row.runningSubagents?'子代理运行中':'运行中'};
     if(row.pending)return {kind:row.turnStatus==='completed'?'completed':'ended',label:row.turnStatus==='completed'?'已完成，未查看':row.turnStatus==='failed'?'运行失败，未查看':'已停止，未查看'};

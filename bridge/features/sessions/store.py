@@ -68,7 +68,7 @@ class SessionStore:
             raise ValueError('不支持的会话来源')
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
-            fields = [name for name in ("id", "name", "title", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned", "thread_section_id", "section_position", "project_id") if name in columns]
+            fields = [name for name in ("id", "name", "title", "first_user_message", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned", "thread_section_id", "section_position", "project_id") if name in columns]
             where = ["archived = ?"]
             params = [int(archived)]
             where.append(self._user_origin_filter(columns))
@@ -204,6 +204,15 @@ class SessionStore:
                     except OSError:
                         continue
         return False
+
+    def record_path(self, thread_id):
+        metadata = self.get(thread_id)
+        path = Path(metadata['rollout_path']).resolve()
+        if not self._rollout_in_home(path):
+            raise ValueError('会话记录路径不在 Codex 数据目录中')
+        if not path.is_file():
+            raise ValueError('会话记录文件不存在，请刷新列表后重试')
+        return str(path)
 
     def discovery_diagnostics(self, thread_id=None):
         """Return aggregate source and read status, never chat content or private paths."""
@@ -402,6 +411,16 @@ class SessionStore:
                 settings = (payload.get('collaboration_mode') or {}).get('settings') or {}
                 current['params'] = {'model':payload.get('model') or settings.get('model'),
                                      'effort':payload.get('effort') or settings.get('reasoning_effort')}
+                # Recorded permissions describe this historical turn only.
+                for source, target in [('approval_policy', 'approvalPolicy'), ('approvals_reviewer', 'approvalsReviewer')]:
+                    if payload.get(source) is not None:
+                        current['params'][target] = payload[source]
+                policy = payload.get('sandbox_policy')
+                if isinstance(policy, dict):
+                    policy = copy.deepcopy(policy)
+                    policy['type'] = {'danger-full-access': 'dangerFullAccess', 'workspace-write': 'workspaceWrite',
+                                      'read-only': 'readOnly'}.get(policy.get('type'), policy.get('type'))
+                    current['params']['sandboxPolicy'] = policy
             elif record.get("type") == "event_msg" and payload.get("type") in ("task_complete", "turn_aborted"):
                 if current:
                     current["status"] = "completed" if payload["type"] == "task_complete" else "interrupted"
@@ -428,6 +447,11 @@ class SessionStore:
                         items.append({"id": str(len(items)), "type": "agentMessage", "text": "\n".join(x.get("text", "") for x in payload.get("content", []) if isinstance(x, dict)), "phase": payload.get("phase")})
                 elif payload.get("type") in ("agent_message", "agentMessage"):
                     items.append({"id": payload.get("id", str(len(items))), "type": "agentMessage", "text": payload.get("text", "")})
+                elif payload.get("type") == "reasoning":
+                    # Keep saved public summaries in their original position,
+                    # without copying encrypted or other reasoning content.
+                    items.append({"id": payload.get("id") or str(len(items)), "type": "reasoning",
+                                  "summary": copy.deepcopy(payload.get("summary") or [])})
                 elif payload.get("type") in ("function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"):
                     items.append({"id": payload.get("call_id", str(len(items))), "type": "storedToolEvent", **payload})
         result = {"id": thread_id, "title": meta.get("name") or meta.get("title"), "cwd": meta["cwd"],

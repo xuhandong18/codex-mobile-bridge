@@ -15,6 +15,8 @@ class AccountInfo:
         self.probing = False
         self.checked_at = 0
         self.entries = {}
+        self.current_usage = {}
+        self.current_usage_stamp = None
 
     def source_stamp(self):
         home = self.manager.home
@@ -77,7 +79,8 @@ class AccountInfo:
         if stamp == self.stamp and self.identity:
             row = self.match(self.identity)
             return {'status':'ready', 'kind':self.identity['kind'], 'id':row['id'] if row else None,
-                    'name':row['name'] if row else self.identity['name']}
+                    'name':row['name'] if row else self.identity['name'],
+                    'details': {'usage': dict(self.current_usage)} if not row and stamp == self.current_usage_stamp else {}}
         if manager.active_matches():
             row = manager.row(manager.index['activeId'])
             return {'status':'ready', 'kind':row['kind'], 'id':row['id'], 'name':row['name']}
@@ -106,6 +109,18 @@ class AccountInfo:
             raise ValueError('账号详情请求无效')
         with manager.lock:
             manager.check_ready()
+            if value.get('current') is True and section == 'usage':
+                current = self.current()
+                if current.get('status') != 'ready' or current.get('kind') != 'chatgpt' or current.get('id'):
+                    raise ValueError('当前账号已变化，请刷新后重试')
+                stamp = self.source_stamp()
+                cached = self.current_usage if stamp == self.current_usage_stamp else {}
+                if cached.get('status') == 'loading' or (not value.get('refresh') and time.time()-cached.get('checkedAt', 0) < 300):
+                    return manager.public()
+                self.current_usage_stamp = stamp
+                self.current_usage = {**cached, 'status':'loading', 'error':None}
+                threading.Thread(target=self.read_current_usage, args=(stamp, value.get('refresh', False)), daemon=True).start()
+                return manager.public()
             row = dict(manager.row(value.get('id')))
             if section == 'usage' and row['kind'] != 'chatgpt':
                 raise ValueError('API 接入不提供官方额度')
@@ -117,6 +132,27 @@ class AccountInfo:
             info[section] = {**cached, 'status':'loading', 'error':None}
             threading.Thread(target=self.read, args=(row,section,value.get('refresh',False)), daemon=True).start()
             return manager.public()
+
+    def read_current_usage(self, stamp, refresh):
+        manager = self.manager
+        try:
+            if stamp != self.source_stamp():
+                return
+            # Account.read owns its non-reentrant lock and verifies identity after querying.
+            value = manager.bridge.account.read(refresh=refresh)
+            if not value.get('visible'):
+                raise ValueError('账号已变化')
+            result = {k:value[k] for k in ('limits', 'resetCredits', 'updatedAt', 'subscription', 'planType') if k in value}
+            result.update(status='error' if value.get('error') else 'ready', error=value.get('error'), checkedAt=time.time())
+        except Exception:
+            result = {'status':'error', 'checkedAt':time.time(), 'error':'额度暂不可用，请检查登录后重试'}
+        finally:
+            with manager.lock:
+                if stamp == self.current_usage_stamp:
+                    if stamp != self.source_stamp():
+                        self.current_usage = {}
+                    elif 'result' in locals():
+                        self.current_usage = {**self.current_usage, **result}
 
     def read(self, row, section, refresh=False):
         from bridge.features.accounts.accounts import ManagedRPC, token_owner, private_bytes

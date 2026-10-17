@@ -4,6 +4,37 @@ const {SessionActivity}=require('../web/features/chat/activity.js');
 const storage=()=>{const values=new Map();return {getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};};
 const status=(id,host,state,turn='one',result=state==='active'?'inProgress':'completed')=>({id,host,connected:true,status:state,turnId:turn,turnStatus:result});
 
+test('manual unread persists through polling and passive reads until explicitly opened',()=>{
+ const saved=storage(),activity=new SessionActivity({storage:saved});
+ activity.markUnread('local|a');
+ assert.equal(activity.indicator('local|a').label,'未读');
+ activity.update([status('a','local','idle')],'local|a');activity.read('local|a');
+ assert.equal(activity.indicator('local|a').label,'未读');
+ activity.update([{id:'a',host:'local',connected:false,status:'unknown'}],'local|a');
+ const restored=new SessionActivity({storage:saved});
+ assert.equal(restored.indicator('local|a').label,'未读');
+ assert.equal(restored.indicator('remote|a'),null);
+ restored.read('local|a',{explicit:true});
+ assert.equal(restored.rows['local|a'].manualUnread,false);
+ restored.update([status('a','local','idle')],'local|a');
+ assert.equal(restored.indicator('local|a'),null);
+});
+
+test('sidebar context menu marks the selected host-qualified chat unread without opening it',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');
+ const start=source.indexOf("new ChatContextMenu($('sessions'),target=>{");
+ const end=source.indexOf("},{label:'侧栏操作'});",start);
+ let menu,marked,renders=0;
+ const row={id:'a',host:'ssh',access:{}},button={dataset:{id:'a',host:'ssh'}};
+ const ctx=vm.createContext({ChatContextMenu:class{constructor(root,items){menu=items;}},$:()=>({}),listRows:[row],
+  window:{BridgeClipboard:{}},chatKey:(id,host)=>host+'|'+id,sessionActivity:{markUnread:key=>marked=key},renderActivity:()=>renders++,
+  sidebarPlacementActions:()=>[],sidebarEntry:()=>({}),projectChatRows:()=>['a'],sessionAccess:()=>({source:'cli'})});
+ vm.runInContext(source.slice(start,end)+"},{label:'侧栏操作'});",ctx);
+ const items=menu({closest:selector=>selector==='.session'?button:null});
+ items.find(item=>item.label==='标记为未读').run();
+ assert.equal(marked,'ssh|a');assert.equal(renders,1);
+});
+
 test('concurrent host-qualified runs become unread completion badges and persist until viewed',()=>{
  const saved=storage(),a=new SessionActivity({storage:saved});
  a.update([status('a','local','active'),status('a','remote','active')]);

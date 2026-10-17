@@ -43,7 +43,7 @@ from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 LOG = logging.getLogger(__name__)
 from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
-THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename))?$")
+THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename|record-path|archive|unarchive|delete))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
 UPLOAD_THUMB_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/thumb$")
 DESKTOP_IMAGE_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/desktop-images/([0-9a-f]{64})$")
@@ -564,7 +564,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, self.server.bridge.accounts.account(body))
             if write and path == '/api/accounts/details':
                 body = self.read_json()
-                if set(body) - {'id', 'section', 'refresh'} or not {'id', 'section'} <= set(body):
+                current_usage = body.get('current') is True and body.get('section') == 'usage' and 'id' not in body
+                saved_usage = 'id' in body and 'section' in body and 'current' not in body
+                if set(body) - {'id', 'current', 'section', 'refresh'} or not (current_usage or saved_usage):
                     raise ValueError('账号详情请求包含不支持的字段')
                 return self.output(202, self.server.bridge.accounts.info.request(body))
             if write and path == '/api/accounts/ignore-submission':
@@ -617,7 +619,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {"sessions": rows, "availableSources": available, "unavailableHosts": self.server.bridge.host_errors,
                                         'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
             if not write and path == '/api/projects':
+                if query.get('metadata', [''])[0] == '1':
+                    return self.output(200, {**self.server.bridge.hosts.sidebar(),
+                        'canCreateProject':self.server.bridge.project_registry.can_create})
                 return self.output(200, {'projects': self.server.bridge.projects()})
+            if write and path == '/api/projects':
+                bridge = self.server.bridge
+                result = bridge.project_registry.submit(self.read_json(), bridge.hosts.projects(), bridge.hosts.sidebar()['sections'])
+                return self.output(202, result)
+            if not write and path == '/api/project-operations':
+                return self.output(200, self.server.bridge.project_registry.operation(query.get('id', [''])[0]))
+            if not write and path == '/api/project-directories':
+                return self.output(200, self.server.bridge.project_registry.browse(query.get('path', [''])[0]))
+            if not write and path == '/api/new-chat-models':
+                return self.output(200, self.server.bridge.new_chat_models(query.get('project', [''])[0], query.get('kind', ['desktop'])[0]))
             if write and path == '/api/activity':
                 groups = self.read_json().get('hosts')
                 if not isinstance(groups, dict) or len(groups) > 20:
@@ -629,8 +644,10 @@ class Handler(BaseHTTPRequestHandler):
             if write and path == '/api/sessions':
                 body = self.read_json()
                 fields = (body.get('project'), body.get('title'), body.get('id'))
-                result = (self.server.bridge.create_chat(*fields, kind=body['kind']) if 'kind' in body
-                          else self.server.bridge.create_chat(*fields))
+                options = {key:body[key] for key in ('kind',) if key in body}
+                if 'autoTitle' in body:
+                    options['auto_title'] = body['autoTitle']
+                result = self.server.bridge.create_chat(*fields, **options)
                 return self.output(200, result)
             if path == '/api/notifications/defaults':
                 if self.server.notifications is None:
@@ -834,6 +851,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.read_json() if write else {}
                 return self.output(200, self.server.notifications.policy(thread_id, bridge.host, body if write else None))
             if not write:
+                if action == 'record-path':
+                    return self.output(200, bridge.session_record_path(thread_id))
                 if action == 'permissions':
                     return self.output(200, bridge.linux_permission_options(thread_id))
                 if action == 'timeline':
@@ -874,6 +893,10 @@ class Handler(BaseHTTPRequestHandler):
                                      attachments=body.get('attachments'), ui_locale=body.get("uiLocale"))
             elif action == "rename":
                 result = bridge.rename(thread_id, body.get("title"))
+            elif action in ('archive', 'unarchive', 'delete'):
+                if set(body) - {'confirmed'}:
+                    raise ValueError('聊天操作参数无效')
+                result = bridge.manage_session(thread_id, action, body.get('confirmed', False))
             elif action == "permissions":
                 if set(body) - {'preset', 'confirmed', 'expectedRuntime'}:
                     raise ValueError('权限设置无效')

@@ -121,14 +121,37 @@ def independent_directory(data_dir, request_id):
 
 
 def create_empty(executable, codex_home, cwd, title):
+    fallback_path = None
+
     def create(request):
+        nonlocal fallback_path
         result = request('thread/start', {'cwd': cwd, 'ephemeral': False})
         thread_id = result['thread']['id']
         uuid.UUID(thread_id)
-        request('thread/name/set', {'threadId': thread_id, 'name': title})
-        request('thread/read', {'threadId': thread_id, 'includeTurns': True})
+        if title:
+            request('thread/name/set', {'threadId': thread_id, 'name': title})
+        try:
+            request('thread/read', {'threadId': thread_id, 'includeTurns': True})
+        except CreationError as exc:
+            if str(exc) != 'list_turns is not supported yet':
+                raise
+            # Some runtimes cannot hydrate turns even for a new, empty thread.
+            # Keep the same thread and confirm persistence without starting a turn.
+            thread = request('thread/read', {'threadId': thread_id, 'includeTurns': False})['thread']
+            if thread.get('id') != thread_id:
+                raise CreationError('新聊天信息不一致，请先刷新聊天列表并检查电脑 App，避免重复创建')
+            path = thread.get('path')
+            if not isinstance(path, str) or not path or not Path(path).is_absolute():
+                raise CreationError('新聊天尚未确认保存，请先刷新聊天列表并检查电脑 App，避免重复创建')
+            fallback_path = Path(path)
         return thread_id
-    return _runtime_operation(executable, codex_home, cwd, create)
+
+    thread_id = _runtime_operation(executable, codex_home, cwd, create)
+    # EOF is the runtime's flush boundary. Metadata alone is not proof that an
+    # empty thread can be reopened after the helper exits.
+    if fallback_path is not None and not fallback_path.is_file():
+        raise CreationError('新聊天尚未确认保存，请先刷新聊天列表并检查电脑 App，避免重复创建')
+    return thread_id
 
 
 def fork_copy(executable, codex_home, cwd, source_id, turn_id, title, settings):
@@ -191,3 +214,11 @@ def rename_thread(executable, codex_home, thread_id, title):
     uuid.UUID(thread_id)
     return _runtime_operation(executable, codex_home, str(codex_home),
                               lambda request: request('thread/name/set', {'threadId': thread_id, 'name': title}))
+
+
+def manage_thread(executable, codex_home, thread_id, action):
+    uuid.UUID(thread_id)
+    if action not in ('archive', 'unarchive', 'delete'):
+        raise ValueError('无效聊天操作')
+    return _runtime_operation(executable, codex_home, str(codex_home),
+                              lambda request: request('thread/' + action, {'threadId': thread_id}))

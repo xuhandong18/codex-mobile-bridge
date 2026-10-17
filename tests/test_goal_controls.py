@@ -24,6 +24,39 @@ class GoalControlTests(unittest.TestCase):
             self.bridge.goal = GoalStub(self.bridge)
         return self.bridge.send(THREAD, text, str(uuid.uuid4()), work_mode='goal')
 
+    def test_goal_picker_skills_are_persisted_in_objective_and_survive_resume(self):
+        self.bridge.goal = GoalStub(self.bridge)
+        skill = {'id': 'sample-id', 'name': 'sample', 'path': str(self.root / 'SKILL.md')}
+        self.bridge.catalog_reader.validate_skills = lambda cwd, ids: [skill]
+        request_id = str(uuid.uuid4())
+        result = self.bridge.send(THREAD, 'Work', request_id, skills=['sample-id'], work_mode='goal')
+        objective = self.bridge.goal.get_goal(THREAD)['objective']
+        self.assertTrue(result['confirmed'])
+        self.assertTrue(objective.startswith('Work\n'))
+        self.assertIn('sample', objective)
+        self.assertIn(json.dumps(skill['path'], ensure_ascii=False), objective)
+        self.bridge.send(THREAD, 'Work', request_id, skills=['sample-id'], work_mode='goal')
+        self.assertEqual(len(self.bridge.goal.set_calls), 1)
+        self.assertEqual(len(self.calls()), 1)
+        self.bridge.set_goal_status(THREAD, 'paused', str(uuid.uuid4()))
+        self.bridge.set_goal_status(THREAD, 'active', str(uuid.uuid4()))
+        self.assertEqual(self.bridge.goal.get_goal(THREAD)['objective'], objective)
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_goal_skill_validation_happens_before_native_write(self):
+        self.bridge.goal = GoalStub(self.bridge)
+        self.bridge.catalog_reader.validate_skills = lambda cwd, ids: []
+        with self.assertRaisesRegex(ValueError, 'Skill 不可用'):
+            self.bridge.send(THREAD, 'Work', str(uuid.uuid4()), skills=['missing'], work_mode='goal')
+        skill = {'id': 'sample-id', 'name': 'sample', 'path': str(self.root / 'SKILL.md')}
+        self.bridge.catalog_reader.validate_skills = lambda cwd, ids: [skill]
+        with self.assertRaisesRegex(ValueError, '4000'):
+            self.bridge.send(THREAD, 'x' * 4000, str(uuid.uuid4()), skills=['sample-id'], work_mode='goal')
+        with self.assertRaisesRegex(ValueError, '最多选择'):
+            self.bridge.send(THREAD, 'Work', str(uuid.uuid4()), skills='sample-id', work_mode='goal')
+        self.assertEqual(self.bridge.goal.set_calls, [])
+        self.assertEqual(self.calls(), [])
+
     def test_pause_does_not_wait_for_history_or_activate_desktop(self):
         self.create()
         with patch.object(self.bridge, '_refresh_goal_snapshot', side_effect=AssertionError('full history requested')), patch.object(self.bridge, '_target', side_effect=AssertionError('activation requested')):

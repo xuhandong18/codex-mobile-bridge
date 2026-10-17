@@ -12,7 +12,7 @@ const permissionCode=extract("$('permissions-button').onclick=",'const fileTrans
 const newChatTypeCode=extract("$('new-chat-type').onchange=", "$('new-chat-project').onchange=");
 test('CLI creation picker enables only a known CLI folder and uses an accurate action',()=>{
   const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,children:[],replaceChildren(){this.children=[];this.value='';},append(option){this.children.push(option);this.value=option.value;},onchange(){}});return nodes.get(id);};
-  const ctx={$,listRows:[],currentId:null,currentHost:'local',newChatProjects:[],Option:class{constructor(text,value){this.text=text;this.value=value;}},t:key=>({'创建聊天':'Create chat','创建并打开':'Create and open'}[key]||key)};
+  const ctx={$,listRows:[],currentId:null,currentHost:'local',newChatProjects:[],newChatSettings:{load(){}},Option:class{constructor(text,value){this.text=text;this.value=value;}},t:key=>({'创建聊天':'Create chat','创建并打开':'Create and open'}[key]||key)};
   vm.createContext(ctx);vm.runInContext(newChatTypeCode,ctx);
   $('new-chat-type').value='cli';$('new-chat-type').onchange();
   assert.equal($('new-chat-submit').disabled,true);
@@ -27,12 +27,49 @@ test('CLI creation picker enables only a known CLI folder and uses an accurate a
 function node(){return {hidden:false,disabled:false,value:'',textContent:'',title:'',children:[],scrollTop:0,classList:{toggle(){}},append(...parts){this.children.push(...parts);},replaceChildren(...parts){this.children=parts;},querySelector(){return node();}};}
 function fixture(){
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
-  const ctx={$ ,state:null,reconnectFailure:null,listRows:[],availableSources:[],listRenderStamp:'',listComplete:false,listReadFinished:false,currentId:'a',currentHost:'local',sending:false,catalogStarted:false,catalogLoads:0,startCatalog(){ctx.catalogLoads++;},selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','继续会话':'Continue chat'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
-  ctx.sessionActivity.indicator=()=>null;
+  const ctx={$ ,state:null,applyingNewChat:null,rememberNewChatSetting(){},reconnectFailure:null,listRows:[],availableSources:[],listRenderStamp:'',listComplete:false,listReadFinished:false,currentId:'a',currentHost:'local',sending:false,catalogStarted:false,catalogLoads:0,startCatalog(){ctx.catalogLoads++;},selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','继续会话':'Continue chat'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
+  ctx.sidebarData={sections:[],projects:[]};ctx.projectThreadOrder={sort:(key,ids)=>ids};ctx.sectionProjectOrder={sort:(key,ids)=>ids};ctx.sidebarPlacements={resolve:(_item,_sections,native)=>native};ctx.projectChatPages=new Map();ctx.listLoading=0;ctx.listHasMore=false;ctx.sessionActivity.indicator=()=>null;
   vm.createContext(ctx);vm.runInContext(accessCode+listCode+stateCode,ctx);
   return {ctx,$,nodes};
 }
 const cli={source:'cli',runtime:null,readOnly:true,canSend:false,canInterrupt:false,canApprove:false,canReconnect:false};
+
+test('a paginated message preview cannot replace the saved sidebar title when opening a chat',()=>{
+  const {ctx,$}=fixture();
+  ctx.listRows=[{id:'a',host:'local',title:'已保存标题',titleSource:'native'}];
+  ctx.renderState({host:'local',title:'把重置额度也显示出来',titleSource:'message',connected:true,
+    requests:[],submissions:[],historyComplete:false});
+  assert.equal(ctx.listRows[0].title,'已保存标题');
+  assert.equal($('chat-title').textContent,'已保存标题');
+  ctx.renderState({host:'local',title:'真正的新标题',titleSource:'native',connected:true,
+    requests:[],submissions:[],historyComplete:false});
+  assert.equal(ctx.listRows[0].title,'真正的新标题');
+  assert.equal($('chat-title').textContent,'真正的新标题');
+});
+
+test('unspecified reasoning and custom permissions remain visible in the current chat',()=>{
+  const {ctx,$}=fixture();
+  ctx.renderState({host:'local',title:'Fixture',model:'gpt-6.1-sol',effort:null,permissionMode:'custom',
+    connected:false,status:'idle',requests:[],submissions:[],historyComplete:true});
+  assert.equal($('model-effort').hidden,false);
+  assert.match($('model-effort').textContent,/未指定/);
+  assert.equal($('permissions-button').textContent,'自定义权限');
+  ctx.renderState({host:'local',title:'Fixture',model:'gpt-6.1-sol',effort:null,permissionMode:'custom',
+    permissionDetails:{sandbox:'dangerFullAccess',approvalPolicy:'on-request'},
+    connected:false,status:'idle',requests:[],submissions:[],historyComplete:true});
+  assert.equal($('permissions-button').textContent,'完全访问 · 请求批准');
+  assert.equal(ctx.state.permissionMode,'custom');
+});
+
+test('repeated live new-chat placeholders cannot overwrite an automatically refreshed title',()=>{
+  const {ctx,$}=fixture();
+  ctx.listRows=[{id:'a',host:'local',title:'已经生成的新标题'}];
+  for(const title of ['新聊天','未命名聊天','New chat','Untitled chat']){
+    ctx.renderState({host:'local',title,connected:true,requests:[],submissions:[],historyComplete:true});
+    assert.equal($('chat-title').textContent,'已经生成的新标题');
+    assert.equal(ctx.listRows[0].title,'已经生成的新标题');
+  }
+});
 test('source selector uses full inventory and preserves its open options across unchanged refreshes',()=>{
   const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,value:'',rebuilds:0,replaceChildren(...children){this.children=children;this.rebuilds++;}});return nodes.get(id);};
   const saved=[];let locale='zh-CN';

@@ -14,6 +14,14 @@ function fixture(desktop=false){
   return {panel,root,requests,prompts,all,now:()=>now,advance:ms=>now+=ms,hidden:value=>context.document.hidden=value,noRandomUUID:()=>{context.crypto={getRandomValues:bytes=>require("node:crypto").randomFillSync(bytes)};},text:()=>all().map(n=>n.textContent).join('\n'),setValue:v=>value=v,value:()=>value,setRequest:v=>request=v,setRead:v=>read=v,confirm:v=>confirmed=v,
     language:()=>{vm.runInContext("BridgeI18n.setLanguage('en')",context);panel.render();}};
 }
+test('unsaved current account displays quota and requests current usage without a saved id',async()=>{
+ const ui=fixture();ui.setValue({...ui.value(),accounts:[],current:{status:'ready',kind:'chatgpt',name:'Current',id:null,details:{usage:{status:'ready',checkedAt:ui.now()/1000,limits:[{name:'Codex',windows:[{remainingPercent:75,windowDurationMins:300}]}]}}}});
+ await ui.panel.refresh();assert.match(ui.text(),/剩余 75%/);assert.match(ui.text(),/未保存到列表/);
+ assert.ok(ui.all().find(n=>n.textContent==='使用重置卡'));assert.match(ui.text(),/重置卡 · 暂未提供/);
+ await ui.all().find(n=>n.textContent==='查看剩余额度').onclick();assert.equal(ui.requests[0].current,true);assert.equal(ui.requests[0].id,undefined);
+ ui.setValue({...ui.value(),current:{status:'ready',kind:'chatgpt',name:'Current',id:null}});ui.requests.length=0;
+ await ui.panel.refresh();assert.equal(ui.requests[0].current,true);
+});
 test('web exposes saved account selection without enrollment or credential inputs',async()=>{
  const ui=fixture();await ui.panel.refresh();assert.equal(ui.all().some(n=>n.tag==='input'&&n.type!=='checkbox'),false);assert.match(ui.text(),/API <script>/);assert.equal(ui.all().some(n=>n.tag==='script'),false);
  ui.confirm(false);await ui.panel.choose(ui.value().accounts[0]);assert.equal(ui.requests.length,0);

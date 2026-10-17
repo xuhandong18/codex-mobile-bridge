@@ -501,8 +501,15 @@ class Accounts:
         """Operate one saved login without changing the desktop's active connection."""
         from bridge.features.accounts.account import Account
         action = value.get('operation', 'read')
-        if action not in ('read', 'consume') or set(value) - {'action', 'id', 'operation', 'refresh', 'confirmed', 'requestId', 'accountKey', 'creditId'}:
+        if action not in ('read', 'consume') or set(value) - {'action', 'id', 'current', 'operation', 'refresh', 'confirmed', 'requestId', 'accountKey', 'creditId'}:
             raise ValueError('账号重置请求包含不支持的字段')
+        if 'current' in value:
+            if value['current'] is not True or 'id' in value:
+                raise ValueError('账号重置请求包含不支持的字段')
+            with self.gate:
+                with self.lock:
+                    self.check_ready()
+                return self.bridge.account.control({**{k:v for k,v in value.items() if k not in ('action','current','operation')}, 'action':action})
         with self.gate, self.bridge.account.lock, self.lock:
             self.check_ready()
             row = dict(self.row(value.get('id')))

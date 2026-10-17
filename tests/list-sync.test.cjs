@@ -17,6 +17,14 @@ function fixture(){
 }
 const settled=()=>new Promise(setImmediate);
 
+test('automatic metadata refresh keeps running after the sidebar has scrolled',async()=>{
+  const ui=fixture();ui.root.scrollTop=180;
+  await ui.sync.update();
+  assert.equal(ui.calls,1);
+  assert.equal(ui.root.scrollTop,180);
+  assert.equal(ui.status.hidden,true);
+});
+
 test('pull feedback is coalesced per frame and only changes text at the release threshold',()=>{
   const ui=fixture();ui.touch('touchstart',20);
   for(let y=32;y<=70;y++)ui.touch('touchmove',y);

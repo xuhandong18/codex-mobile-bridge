@@ -9,6 +9,7 @@
   window.renderMarkdown = function(node, text, files = [], fileUrl = () => '', options = {}) {
     const body = document.createElement('div');
     body.className = 'markdown-body';
+    const headingAnchors = new Set();
     const artifacts = new Map(files.flatMap(file =>
       [file.reference, ...(file.references || [])].flatMap(reference =>
         [reference, markdown.utils.unescapeAll(reference)].map(value => [markdown.normalizeLink(value), file]))));
@@ -20,11 +21,11 @@
       try { return markdown.parse(source, {}); }
       finally { markdown.validateLink = validate; }
     }
-    function target(reference) {
+    function target(reference, local = false) {
       const file = artifacts.get(reference);
       if (file) return {url:fileUrl(file), file};
       if (/^https?:\/\//i.test(reference)) return {url:reference};
-      return null;
+      return local ? options.resolveLink?.(reference) || null : null;
     }
     function link(url, title) {
       const anchor = document.createElement('a');
@@ -106,12 +107,22 @@
             parent.append(anchor);
           } else parent.append(document.createTextNode(label));
         } else if (token.nesting === -1) {
+          if (options.headingAnchors && token.type === 'heading_close') {
+            const base = parent.textContent.toLowerCase().replace(/[^\p{L}\p{M}\p{N}_\-\s]/gu, '').replace(/\s/g, '-');
+            let slug = base, suffix = 0;
+            while (headingAnchors.has(slug)) slug = base + '-' + ++suffix;
+            headingAnchors.add(slug); parent.dataset.markdownAnchor = slug;
+          }
           parents.pop();
         } else {
           let element;
           if (token.type === 'link_open') {
-            const destination = target(token.attrGet('href') || '');
+            const destination = target(token.attrGet('href') || '', true);
             element = destination ? link(destination.url, token.attrGet('title')) : document.createElement('span');
+            if (destination?.activate) element.onclick = event => {
+              if (event.defaultPrevented || event.button !== 0) return;
+              event.preventDefault(); destination.activate();
+            };
             if (destination?.file?.image) { element.dataset.imagePreview = destination.url; element.dataset.imageName = destination.file.name; }
           } else if (tags.has(token.tag)) {
             element = document.createElement(token.tag);

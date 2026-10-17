@@ -129,7 +129,20 @@ def normalize_item(item):
         if path:
             row["attachments"] = [{"type": "localImage", "path": path, "name": Path(path).name}]
     elif kind == "reasoning":
-        row.update(role="activity", title="思考摘要", text="\n".join(item.get("summary", [])))
+        summary = item.get('summary') or []
+        if isinstance(summary, str):
+            text = summary
+        elif isinstance(summary, list):
+            parts = [part if isinstance(part, str) else part.get('text', '')
+                     for part in summary if isinstance(part, str)
+                     or isinstance(part, dict) and part.get('type') == 'summary_text']
+            text = '\n'.join(part for part in parts if isinstance(part, str))
+        else:
+            text = ''
+        row.update(role="activity", title="思考摘要", text=text)
+        # Only the public summary belongs in the display projection. Other
+        # reasoning content is neither a summary fallback nor an attachment.
+        return row
     elif kind == "commandExecution":
         row.update(role="activity", title="执行命令", text=item.get("command", ""), output=item.get("aggregatedOutput", ""), exitCode=item.get("exitCode"))
     elif kind == "fileChange":
@@ -149,12 +162,27 @@ def normalize_item(item):
     return row
 
 
-def permission_mode(state, *, legacy_reviewer=False):
+def permission_values(state):
     turns = ordered_turns(state)
     latest = state.get('latestThreadSettings') or {}
     params = (turns[-1].get('params') or {}) if turns else {}
     current = state.get('currentPermissions') or {}
-    values = {**current, **params, **latest}
+    return {**current, **params, **latest}
+
+
+def permission_details(state):
+    """Display facts only; a custom combination must never become a preset."""
+    values = permission_values(state)
+    profile = values.get('activePermissionProfile') or {}
+    profile_id = values.get('permissions') or profile.get('id')
+    sandbox = {':danger-full-access': 'dangerFullAccess', ':workspace': 'workspaceWrite'}.get(profile_id)
+    if not profile_id:
+        sandbox = (values.get('sandboxPolicy') or {}).get('type')
+    return {'sandbox': sandbox, 'approvalPolicy': values.get('approvalPolicy')}
+
+
+def permission_mode(state, *, legacy_reviewer=False):
+    values = permission_values(state)
     profile = values.get('activePermissionProfile') or {}
     profile_id = values.get('permissions') or profile.get('id')
     policy = values.get('sandboxPolicy') or {}
@@ -178,6 +206,27 @@ def context_usage(state):
     return {'usedTokens': used,
             'contextWindow': window if type(window) is int and window > 0 else None,
             'cached': state.get('tokenUsageFromHistory') is True}
+
+
+def session_title(state, first_user_text=''):
+    """Prefer the native name, then a short preview while auto-naming is pending."""
+    title = state.get('name') or state.get('title')
+    if isinstance(title, str) and title.strip():
+        return title
+    preview = state.get('preview') or state.get('first_user_message') or first_user_text
+    if isinstance(preview, str):
+        summary = ' '.join(user_display_text(preview).split())
+        if summary:
+            return summary[:80] + ('…' if len(summary) > 80 else '')
+    return '未命名聊天'
+
+
+def session_title_source(state, first_user_text=''):
+    if any(isinstance(state.get(key), str) and state[key].strip() for key in ('name', 'title')):
+        return 'native'
+    if state.get('preview') or state.get('first_user_message'):
+        return 'preview'
+    return 'message' if first_user_text else 'placeholder'
 
 
 def normalize_state(state, connected=True):
@@ -213,11 +262,22 @@ def normalize_state(state, connected=True):
                        "error": turn.get("error"), "diff": turn.get("diff")})
     history = state.get("turnHistory", {}).get("history", {})
     settings = state.get('latestThreadSettings') or {}
+    params = (turns[-1].get('params') or {}) if turns else {}
+    collaboration = settings.get('collaborationMode') or state.get('latestCollaborationMode') or params.get('collaborationMode') or {}
+    model_settings = collaboration.get('settings') or {}
+    model = state.get('latestModel') or settings.get('model') or model_settings.get('model') or params.get('model')
+    effort = (state.get('latestReasoningEffort') or settings.get('effort') or settings.get('reasoningEffort')
+              or settings.get('reasoning_effort') or model_settings.get('reasoning_effort')
+              or params.get('effort') or params.get('reasoningEffort'))
     tier = settings if 'serviceTier' in settings else (turns[-1].get('params') or {}) if turns else {}
-    return {"id": state.get("id", state.get("sessionId")), "title": state.get("title") or "未命名聊天",
-            "cwd": state.get("cwd"), "model": state.get("latestModel"), "provider": state.get("modelProvider"), "effort": state.get("latestReasoningEffort") or (state.get("latestThreadSettings") or {}).get("effort"),
+    first_user_text = next((message.get('text', '') for turn in result for message in turn['messages']
+                            if message.get('role') == 'user' and message.get('text')), '')
+    return {"id": state.get("id", state.get("sessionId")), "title": session_title(state, first_user_text),
+            "titleSource": session_title_source(state, first_user_text),
+            "cwd": state.get("cwd"), "model": model, "provider": state.get("modelProvider"), "effort": effort,
             "connected": connected, "status": state.get("threadRuntimeStatus", {}).get("type", "idle"),
             "permissionMode": permission_mode(state),
+            "permissionDetails": permission_details(state),
             "contextUsage": context_usage(state),
             "collaborationMode": (state.get("latestCollaborationMode") or {}).get("mode"),
             **({'serviceTier': tier['serviceTier']} if 'serviceTier' in tier else {}),

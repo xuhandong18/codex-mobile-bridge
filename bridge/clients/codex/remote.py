@@ -116,6 +116,9 @@ class RemoteStore:
     def get(self, thread_id):
         return self.call('get', {'thread_id': thread_id})
 
+    def record_path(self, thread_id):
+        return self.call('record_path', {'thread_id': thread_id})
+
     def history(self, thread_id, turn_limit=None):
         return self.call('history', {'thread_id': thread_id, 'turn_limit': turn_limit})
 

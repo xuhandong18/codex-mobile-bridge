@@ -1,0 +1,15 @@
+.chat-message-map{position:fixed;z-index:12;transform:translateY(-50%);width:22px;padding:4px 2px;border-radius:10px;color:var(--green,#397457)}
+.chat-message-map[hidden]{display:none}
+.chat-message-map-list{display:flex;flex-direction:column;max-height:var(--map-height,320px);overflow-y:auto;scrollbar-width:none;overscroll-behavior:contain}
+.chat-message-map-list::-webkit-scrollbar{display:none}
+.chat-message-map-list button{display:flex;align-items:center;gap:10px;flex:0 0 7px;min-height:7px;width:100%;padding:2px 3px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer;border-radius:5px}
+.chat-message-map-list i{display:block;width:12px;height:2px;flex:none;border-radius:2px;background:currentColor;opacity:.42}
+.chat-message-map-list span{display:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.chat-message-map-earlier{display:none;width:100%;border:0;background:transparent;color:inherit;font-size:12px;padding:10px;cursor:pointer}
+.chat-message-map:is(:hover,:focus-within,.is-open){width:min(280px,calc(100vw - 40px));padding:8px;background:var(--panel,#f7f7f2);box-shadow:0 3px 20px #0002}
+.chat-message-map:is(:hover,:focus-within,.is-open) .chat-message-map-list button{flex-basis:44px;min-height:44px;padding:8px}
+.chat-message-map:is(:hover,:focus-within,.is-open) .chat-message-map-list span{display:block}
+.chat-message-map:is(:hover,:focus-within,.is-open) .chat-message-map-earlier:not([hidden]){display:block}
+.chat-message-map-list button:is(:hover,:focus-visible,[aria-current]){background:#39745718;outline-offset:-2px}
+.chat-message-map-list button:is(:hover,:focus-visible,[aria-current]) i{opacity:1;width:16px}
+@media (prefers-reduced-motion:no-preference){.chat-message-map{transition:width .12s ease}}

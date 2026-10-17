@@ -61,6 +61,16 @@ class DesktopIdle(unittest.TestCase):
         self.bridge.activate.assert_not_called(); self.bridge.store.history.assert_not_called()
         self.assertTrue(all(instance.closed for instance in self.instances))
 
+    def test_selected_thread_audit_ignores_unrelated_tasks_and_reads_fresh_child_state(self):
+        self.bridge.accounts.blockers.return_value = [{'host':'local','id':'unrelated'}]
+        self.states[('local', 'parent')] = {'id':'parent','threadRuntimeStatus':{'type':'idle'},'turns':[],'requests':[]}
+        self.states[('local', 'child')] = {'id':'child','threadRuntimeStatus':{'type':'active'},'turns':[],'requests':[]}
+        with self.assertRaisesRegex(ValueError, '任务运行'):
+            self.bridge.assert_desktop_idle(thread_ids={'parent','child'})
+        self.assertNotIn(('follow', 'local', 'desktop-only', 'owner'), self.calls)
+        self.bridge.store.lifecycle_threads.assert_not_called()
+        self.bridge.activate.assert_not_called()
+
     def test_exact_no_client_found_is_absence_not_stale_history_activity(self):
         self.owners[('local', 'desktop-only')] = IPCError('no-client-found')
         self.bridge.live['desktop-only'] = SimpleNamespace(connected=False, state={'turns': [{'status': 'inProgress'}]})

@@ -70,6 +70,13 @@ class FakeClient:
 
 
 class CliSessionTests(unittest.TestCase):
+    def test_native_title_notification_refreshes_only_the_joined_thread(self):
+        with patch.object(self.sessions,'_queue_refresh') as refresh:
+            self.sessions.joined['thread-a']=self.fake.process
+            self.sessions._event({'method':'thread/name/updated','params':{'threadId':'thread-a'}})
+            self.sessions._event({'method':'thread/name/updated','params':{'threadId':'other'}})
+            refresh.assert_called_once_with('thread-a')
+
     def setUp(self):
         (ROOT / '.tmp').mkdir(exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / '.tmp')

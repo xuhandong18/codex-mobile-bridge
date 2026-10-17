@@ -204,7 +204,8 @@ class CliSessions:
                                         'permissions': {key: copy.deepcopy(result[key]) for key in
                                                         ('approvalPolicy', 'approvalsReviewer', 'sandbox', 'activePermissionProfile')
                                                         if key in result}, 'goal': None}
-        self.client.request('thread/name/set', {'threadId': thread_id, 'name': title})
+        if title:
+            self.client.request('thread/name/set', {'threadId': thread_id, 'name': title})
         return self.refresh(thread_id)
 
     def attach(self, thread_id, explicit=False):
@@ -780,6 +781,9 @@ class CliSessions:
         with self.lock:
             joined = thread_id in self.joined
         if not joined:
+            return
+        if method == 'thread/name/updated':
+            self._queue_refresh(thread_id)
             return
         if method == 'thread/closed' or (method == 'thread/status/changed' and
                 (params.get('status') or {}).get('type') == 'notLoaded'):

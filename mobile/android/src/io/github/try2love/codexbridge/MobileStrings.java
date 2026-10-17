@@ -3,6 +3,8 @@ import android.content.Context;
 final class MobileStrings {
  private static final java.util.Map<String,String> values=new java.util.HashMap<>();
  static {
+  values.put("添加到会话","Add to chat");
+  values.put("在侧边聊天中了解更多","Learn more in a side chat");
   values.put("未读通知","Unread notifications");
   values.put("刷新状态","Refresh status");
   values.put("最近通知","Recent notifications");

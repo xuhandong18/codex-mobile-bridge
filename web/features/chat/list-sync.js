@@ -54,7 +54,7 @@ class ListSync {
   schedule(){clearTimeout(this.timer);this.timer=setTimeout(async()=>{await this.update();this.schedule();},15000);}
   async update(explicit=false){
     if(this.start||this.busy)return;
-    if(document.hidden||!this.visible()||!this.ready()||(!explicit&&this.root.scrollTop>24)){
+    if(document.hidden||!this.visible()||!this.ready()){
       if(explicit){this.setPull(0);this.hide();}return;
     }
     this.busy=true;this.recoveredWhileBusy=false;const revision=this.revision;

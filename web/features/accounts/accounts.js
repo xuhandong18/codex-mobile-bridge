@@ -92,11 +92,14 @@ class AccountsPanel {
   async loadUsage(generation){
     if(!this.visible())return;
     if(!['idle','complete','restored','failed'].includes(this.value?.switch?.phase||'idle'))return;
-    for(const row of this.value?.accounts||[]){
+    const current=this.value?.current;
+    const rows=[...(this.value?.accounts||[])];
+    if(current?.status==='ready'&&current.kind==='chatgpt'&&!current.id)rows.unshift(current);
+    for(const row of rows){
       const usage=row.details?.usage;
       if(row.kind!=='chatgpt'||usage?.status==='loading'||(usage&&Date.now()/1000-(usage.checkedAt||0)<300))continue;
       if(generation!==this.generation||this.busy)return;
-      const value=await this.request({action:'details',id:row.id,section:'usage'});
+      const value=await this.request({action:'details',...(row.id?{id:row.id}:{current:true}),section:'usage'});
       if(generation===this.generation&&!this.busy)this.accept(value);
     }
   }
@@ -128,20 +131,21 @@ class AccountsPanel {
         const expiry=usage.resetCredits?.credits?.filter(c=>c.status==='available'&&c.resetType==='codexRateLimits'&&typeof c.expiresAt==='number'&&c.expiresAt>Date.now()/1000).map(c=>c.expiresAt).sort((a,b)=>a-b)[0];
         if(expiry)box.append(this.node('small',this.text('最近一张重置卡到期：')+new Date(expiry*1000).toLocaleString(BridgeI18n.locale()),'account-muted'));
       }
-      const refresh=this.button('查看剩余额度',()=>this.perform({action:'details',id:row.id,section:'usage',refresh:true}));refresh.disabled=this.busy||usage?.status==='loading';box.append(refresh);card.append(box);
+      const refresh=this.button('查看剩余额度',()=>this.perform({action:'details',...(row.id?{id:row.id}:{current:true}),section:'usage',refresh:true}));refresh.disabled=this.busy||usage?.status==='loading';box.append(refresh);card.append(box);
     }
   }
   async openReset(row){
     if(this.resetDialog?.open)return;
+    const target=row.id?{id:row.id}:{current:true};
     const dialog=this.node('dialog',undefined,'picker account-reset-dialog'),heading=this.node('h2',this.text('使用重置卡')+' · '+row.name);
     const close=this.button('关闭',()=>dialog.close()),content=this.node('div'),button=this.node('button');
     const header=this.node('div',undefined,'picker-head');header.append(heading,close);dialog.append(header,content);
     const panel=new AccountPanel({root:content,button,
-      read:refresh=>this.request({action:'account',id:row.id,operation:'read',refresh}),
-      consume:value=>this.request({action:'account',id:row.id,operation:'consume',...value}),
-      onConsumed:()=>this.perform({action:'details',id:row.id,section:'usage',refresh:true}),
+      read:refresh=>this.request({action:'account',...target,operation:'read',refresh}),
+      consume:value=>this.request({action:'account',...target,operation:'consume',...value}),
+      onConsumed:()=>this.perform({action:'details',...target,section:'usage',refresh:true}),
       visible:()=>dialog.open&&this.visible()});
-    this.resetDialog=dialog;this.resetPanel=panel;this.resetAccountId=row.id;
+    this.resetDialog=dialog;this.resetPanel=panel;this.resetAccountId=row.id;this.resetCurrentName=row.id?null:row.name;
     dialog.onclose=()=>{panel.clear();dialog.remove();this.resetDialog=null;this.resetPanel=null;this.resetAccountId=null;};
     document.body.append(dialog);dialog.showModal();await panel.refresh();
   }
@@ -196,7 +200,7 @@ class AccountsPanel {
     const value=this.value;if(!value)return;
     const phase=value.switch?.phase||'idle',labels={idle:'请选择已保存的接入',preparing:'正在准备账号',stopping:'正在退出 Codex 桌面应用',applying:'正在应用接入配置',starting:'正在启动 Codex 桌面应用',verifying:'正在核验账号与桌面连接',complete:'切换完成',restoring:'正在恢复原接入',restored:'已恢复原接入',failed:'切换未完成',interrupted:'需要在桌面端恢复原接入'};
     const switching=!['idle','complete','restored','failed'].includes(phase);
-    if(this.resetDialog?.open&&(switching||!value.accounts.some(row=>row.id===this.resetAccountId)))this.resetDialog.close();
+    if(this.resetDialog?.open&&(switching||(this.resetCurrentName?value.current?.kind!=='chatgpt'||value.current?.name!==this.resetCurrentName:!value.accounts.some(row=>row.id===this.resetAccountId))))this.resetDialog.close();
     this.status.textContent=this.text(labels[phase]||phase)+(value.switch?.error?' · '+this.text(value.switch.error):'');
     if(value.switch?.cliSync?.status==='verified')this.status.textContent+=' · '+this.text('本机 CLI 已核验');
     else if(value.switch?.cliSync?.status==='failed')this.status.textContent+=' · '+this.text('桌面已切换；本机 CLI 核验失败：')+this.text(value.switch.cliSync.error||'请检查接入');
@@ -208,7 +212,15 @@ class AccountsPanel {
       ignore.disabled=this.busy||switching;line.append(ignore);
     }this.blocked.append(line);}
     this.refreshButton.disabled=this.loading;this.rows.replaceChildren();this.renderTools();
-    if(!value.accounts.length)this.rows.append(this.node('p','尚未添加账号。请在电脑端添加官方账号或自定义 API。'));
+    if(current?.status==='ready'&&current.kind==='chatgpt'&&!current.id){
+      const card=this.node('section',undefined,'account-bucket');card.classList.add('is-current');
+      const heading=this.node('h3');heading.textContent=current.name;card.append(heading);
+      const count=current.details?.usage?.resetCredits?.availableCount;
+      card.append(this.node('span',this.text('重置卡')+' · '+(count??this.text('暂未提供')),'accounts-credit'));
+      const reset=this.button('使用重置卡',()=>this.openReset(current));reset.disabled=this.busy||switching;card.append(reset);
+      this.accountUsage(card,current);this.rows.append(card);
+    }
+    if(!value.accounts.length&&!(current?.status==='ready'&&current.kind==='chatgpt'))this.rows.append(this.node('p','尚未添加账号。请在电脑端添加官方账号或自定义 API。'));
     for(const row of [...value.accounts].sort((a,b)=>Number(b.id===value.activeId)-Number(a.id===value.activeId))){
       const card=this.node('section',undefined,'account-bucket'),active=value.activeId===row.id;
       if(active)card.classList.add('is-current');

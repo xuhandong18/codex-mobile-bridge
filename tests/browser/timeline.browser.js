@@ -152,3 +152,34 @@ async function runTimelineVisibilityTests() {
   empty.dispose();
   return checks;
 }
+
+async function runReasoningSummaryTests() {
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+  document.getElementById('messages').replaceChildren();
+  let calls=0;
+  const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?host=local',
+    request:async url=>{
+      calls++;
+      const key=new URL(url,location.origin).searchParams.get('key').split('.').pop();
+      return {key,version:'public',text:'Complete public summary',offset:0,next:null};
+    },renderMeta:()=>{},renderText:(node,text)=>node.textContent=text,status:()=>{}});
+  const row=(key,text='',extra={})=>({key,order:0,role:'activity',kind:'reasoning',title:'思考摘要',version:'empty',text,truncated:false,...extra});
+  const page=(rows,sequence=1)=>({epoch:'summary',sequence,rows,meta:{requests:[]},hasMore:false});
+  timeline.apply(page([row('empty')]),true);
+  const empty=timeline.nodes.get('empty').node;
+  check(empty.hidden,'Reasoning records without a public summary are hidden');
+  check(calls===0,'An explicitly empty summary does not issue a pointless detail request');
+  timeline.apply(page([row('pending','',{order:1,status:'inProgress'})],2));
+  const pending=timeline.nodes.get('pending').node;
+  check(pending.hidden,'Active reasoning records remain hidden until a public summary arrives');
+  timeline.apply(page([row('empty','Public preview',{version:'public',truncated:true})],3));
+  await frame();await frame();
+  const updated=timeline.nodes.get('empty').node;
+  check(!updated.hidden,'A later public summary makes the existing record visible');
+  updated.querySelector('summary').click();await frame();await frame();
+  check(updated.querySelector('.activity-body').textContent==='Complete public summary','A later public summary becomes visible and loads its full text');
+  check(calls===1&&updated.querySelector('.detail-more').hidden,'A public summary loads once and hides its completed load button');
+  timeline.dispose();
+  return checks;
+}

@@ -8,7 +8,11 @@
 
 默认继承已有会话的设置。显式选择模型时更新 `model`、`effort` 或速度档位。账号切换是独立的全局操作：仅桌面端添加凭据，双端选择已保存接入，退出官方桌面后替换本机认证及默认 provider，再启动核验。已有聊天的 provider 和审批策略不直接迁移；详情见 [账号与接入](docs/account-switching.md)。
 
+新建聊天后，所选模型/推理强度与权限分别通过原 owner 提交并确认。网页历史读取失败，或其中一项设置失败、未确认，都不阻断另一项提交；错误分别报告，不自动重放未确认的写入。桌面快照的 `latestReasoningEffort` 可能为空，应继续核对详细线程设置和协作模式中的显式值；不能据空的摘要字段把已明确设置的推理强度显示为未指定。
+
 ## 原生 Goal 控制
+
+目标模式支持技能框选择的 Skill：先按执行会话的技能目录校验，再将技能名称与文件路径作为明确的使用要求写入原生目标文本，暂停和恢复沿用该目标。正文与技能引用合计仍受 4000 字限制；目标模式仍不接受附件。
 
 App 执行的本地聊天，其 Goal 元数据通过受限的官方运行时连接读写，只允许 `initialize` 和 `thread/goal/get/set/clear`；该连接不加载或恢复聊天，不调用 `turn/start`，也不修改 provider、认证或审批设置。原桌面 owner 继续拥有实际执行和审批。已连接原生 CLI 的本地或 SSH 聊天通过其同一 daemon 读写 Goal，能力经原生接口探测；两条路径共用操作 ID 与结果确认规则。当前 follower IPC 没有 Goal 写接口，因此 SSH 上由 App owner 执行的聊天仍不支持 Goal 控制；不能把此通路当作任意 App Server RPC 代理。
 
@@ -40,11 +44,15 @@ Codex 列表下拉刷新使用浮层提示与按动画帧更新的位移，不�
 
 `/api/activity` 的展示状态汇总所选主机的父会话和嵌套子代理。`SessionStore.activity_tree` 批量读取来源元数据并验证根会话归属，不读取聊天正文；SSH 使用同一独立源模块。`features/sessions/activity.py` 的子代理订阅与可发送会话分开，按原 host/owner 被动读取原生快照及增量，验证协议、ID、owner 和版本，不激活、恢复或启动任务。每棵树最多发现 128 项、每主机最多保留 1024 个子代理订阅；未知或截断状态不视作完成，未使用订阅在 5 分钟后由网关维护循环取消。该展示缓存不参与退出应用、切换账号或会话管理的安全判断，后者仍即时核验原生任务状态。
 
+## 原生新建项目
+
+Windows 网页项目创建只转交 Codex 桌面的受限工具管道：`list_hosts` 检查原生目录权限、`create_project` 创建、`move_project_to_sidebar_section` 保存分区。进程路径、同 Windows 会话和当前配置的原生项目 ID 均需核验。请求 UUID 与操作回执独立保存，项目列表仍只读桌面数据；信任提示由用户在桌面确认，写结果未知不得重放。原生列表、分区及桌面持久化读回一致后才返回完成，详见 `web/README.md`。
+
 ## 新建聊天
 
 登录后的 `GET /api/projects` 返回 App 已保存的本机及 SSH 项目；`POST /api/sessions` 接受项目键、名称和请求 UUID。服务端重新解析已保存项目，不接受客户端任意目录、主机、程序路径或配置覆盖。创建接口沿用 Host、Origin、登录和 CSRF 校验。
 
-`bridge/features/sessions/create.py` 使用所选主机的官方运行时完成 `initialize → thread/start → thread/name/set → thread/read(includeTurns=true)`，随后关闭 stdio 并等待进程退出。读取完整空历史是必需步骤：仅设置名称会留下目录元数据，却未必落盘可恢复的 rollout。整个辅助进程不调用 `turn/start`，不会发送模型任务。新线程使用该主机、工作目录的运行时默认配置；不克隆已有聊天的临时设置。
+`bridge/features/sessions/create.py` 使用所选主机的官方运行时完成 `initialize → thread/start → thread/name/set → thread/read(includeTurns=true)`，随后关闭 stdio 并等待进程退出。读取空历史用于落实持久化：仅设置名称会留下目录元数据，却未必落盘可恢复的 rollout。若运行时明确返回 `list_turns is not supported yet`，只对同一新线程改用 `thread/read(includeTurns=false)`，核对返回 ID 与保存路径，并在进程正常退出后确认保存文件存在；不能只忽略错误就报告成功。其他失败仍保留结果未知、不自动重放的语义。自动标题不设置占位名称。整个辅助进程不调用 `turn/start`，不会发送模型任务。新线程使用该主机、工作目录的运行时默认配置；不克隆已有聊天的临时设置。
 
 创建结果按 UUID 写入网关自己的 `creations.json`，重试复用同一聊天；请求可能提交但结果未知时不自动重放。辅助进程退出后，通过 `codex://threads/<id>?hostId=...` 打开原桌面 App，桌面接管后才允许发送和审批。此步骤会切换桌面当前页面；打开失败保留已创建 ID。SSH 创建借助已有非交互 SSH 通道执行相同辅助代码，不在远端安装网关。
 

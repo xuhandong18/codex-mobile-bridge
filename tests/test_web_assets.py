@@ -82,6 +82,20 @@ class WebAssetTests(unittest.TestCase):
                 with self.assertRaises(KeyError):
                     isolated.asset_bytes(web, public_path)
 
+    def test_running_gateway_reloads_changed_bundle_members_before_serving_new_app_code(self):
+        web=self.web/'web';web.mkdir()
+        (web/'shell.js').write_bytes(b'new NewChatSettings();\n')
+        manifest=web/'assets.json';manifest.write_text(json.dumps({'/app.js':['shell.js']}),encoding='utf-8')
+        spec=importlib.util.spec_from_file_location('running_web_assets',assets.__file__)
+        running=importlib.util.module_from_spec(spec)
+        with patch('bridge.resources.project_root',return_value=self.web):spec.loader.exec_module(running)
+        self.assertEqual(running.asset_bytes(web,'/app.js'),b'new NewChatSettings();\n')
+        (web/'controls.js').write_bytes(b'class NewChatSettings {}\n')
+        manifest.write_text(json.dumps({'/app.js':['controls.js','shell.js'],'/private.js':'controls.js'}),encoding='utf-8')
+        self.assertEqual(running.asset_bytes(web,'/app.js'),b'class NewChatSettings {}\nnew NewChatSettings();\n')
+        self.assertNotIn('/private.js',running.STATIC)
+        with self.assertRaises(KeyError):running.asset_bytes(web,'/private.js')
+
 
 if __name__ == '__main__':
     unittest.main()

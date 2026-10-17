@@ -12,6 +12,40 @@ class InfoTests(unittest.TestCase):
     setUp = test_accounts.AccountsTests.setUp
     tearDown = test_accounts.AccountsTests.tearDown
 
+    def test_unsaved_current_usage_is_read_only_and_invalidated_on_change(self):
+        info = self.manager.info
+        info.identity = {'kind':'chatgpt', 'name':'fixture@example.test', 'owner':None}
+        info.stamp = info.source_stamp(); info.checked_at = time.time()
+        before = self.manager.snapshot_files()
+        def read_current(**kwargs):
+            acquired = self.bridge.account.lock.acquire(blocking=False)
+            self.assertTrue(acquired, 'current usage must not acquire the non-reentrant account lock before Account.read')
+            if acquired:
+                self.bridge.account.lock.release()
+            return {'visible':True, 'accountKey':'private-identity',
+                'limits':[{'name':'Codex', 'windows':[{'remainingPercent':75}]}], 'updatedAt':123}
+        self.bridge.account.read = Mock(side_effect=read_current)
+        with patch('bridge.features.accounts.info.threading.Thread'):
+            info.request({'current':True, 'section':'usage'})
+        info.read_current_usage(info.source_stamp(), False)
+        current = self.manager.public()['current']
+        self.assertEqual(current['details']['usage']['limits'][0]['windows'][0]['remainingPercent'], 75)
+        self.assertNotIn('private-identity', json.dumps(current))
+        self.assertEqual(self.manager.index['accounts'], [])
+        self.assertEqual(self.manager.snapshot_files(), before)
+        (self.home/'config.toml').write_text('# changed')
+        self.assertNotIn('details', self.manager.public()['current'])
+
+    def test_unsaved_usage_discards_result_when_account_changes_during_query(self):
+        info = self.manager.info
+        stamp = info.source_stamp(); info.current_usage_stamp = stamp
+        def changed(**kwargs):
+            (self.home/'auth.json').write_text('{}')
+            return {'visible':True, 'limits':[{'name':'old account'}]}
+        self.bridge.account.read = Mock(side_effect=changed)
+        info.read_current_usage(stamp, False)
+        self.assertEqual(info.current_usage, {})
+
     def official(self):
         claims=base64.urlsafe_b64encode(b'{"sub":"fixture-user","email":"fixture@example.test"}').decode().rstrip('=')
         row={'id':'a'*32,'kind':'chatgpt','name':'Fixture','email':'fixture@example.test','tokenOwner':['org','fixture-user','fixture@example.test']}

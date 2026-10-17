@@ -9,3 +9,9 @@
 .ds-messages article{border:0}.client-functions #computers-button{color:var(--accent)}
 
 .settings-action-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:4px 0 16px}.settings-action-row.three-actions{grid-template-columns:repeat(3,minmax(0,1fr))}.settings-action-row.two-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-action-row button{min-width:0;min-height:40px;padding:8px 4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12px;line-height:1.25;overflow-wrap:anywhere}.settings-action-row button[hidden]{display:none}@media(max-width:600px){.settings-action-row,.settings-action-row.three-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:360px){#appearance-dialog{padding-inline:16px}.settings-action-row{gap:4px}.settings-action-row button{padding-inline:2px}}
+.chat-context-menu{width:max-content;min-width:200px;max-width:calc(100vw - 16px);padding:8px;box-shadow:0 8px 32px #0003}
+.chat-context-menu>.plain{display:block;width:100%;text-align:left;min-height:44px;padding:12px;border-radius:6px}
+.chat-context-menu>.plain:hover{background:var(--soft)}
+.selection-actions{position:fixed;z-index:40;display:flex;flex-wrap:wrap;gap:6px;max-width:calc(100vw - 16px);padding:6px;box-shadow:0 3px 18px #0003;border:1px solid var(--line);border-radius:8px;background:var(--surface,#fff)}
+.selection-actions[hidden],.selection-more[hidden]{display:none}
+.selection-more{color:var(--text);padding:10px 14px;min-height:44px}

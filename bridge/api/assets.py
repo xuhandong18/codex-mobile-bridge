@@ -85,13 +85,42 @@ for _url, (_name, _mime) in list(STATIC.items()):
 
 @lru_cache(maxsize=16)
 def _assembled(paths, signatures):
-    # Preserve declared CSS cascade order. Cache changes with source metadata,
+    # Preserve declared script dependencies and CSS cascade order. Cache changes with source metadata,
     # so serving a split stylesheet adds no repeated content reads or HTTP calls.
     return b''.join(Path(path).read_bytes() for path in paths)
 
 
+@lru_cache(maxsize=8)
+def _current_layout(path, signature):
+    layout = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(layout, dict):
+        raise ValueError('Invalid web asset layout')
+    return layout
+
+
 def asset_bytes(web_dir, public_path):
     sources, _ = STATIC[public_path]
+    # Source files are read live, so the bundle membership must be live too.
+    # Otherwise a running gateway can serve a new app.js with its new module
+    # omitted by the manifest captured when this process started.
+    manifest = Path(web_dir) / 'assets.json'
+    try:
+        stat = manifest.stat()
+    except FileNotFoundError:
+        pass
+    else:
+        layout = _current_layout(str(manifest.resolve()), (stat.st_mtime_ns, stat.st_size))
+        selected = layout.get(public_path, sources)
+        sources = tuple(selected) if isinstance(selected, list) else selected
+        entries = (sources,) if isinstance(sources, str) else sources
+        if not isinstance(entries, tuple) or not entries:
+            raise ValueError('Empty or invalid web asset layout: ' + public_path)
+        for relative in entries:
+            if not isinstance(relative, str) or not relative:
+                raise ValueError('Invalid web asset layout: ' + public_path)
+            path = PurePosixPath(relative)
+            if path.is_absolute() or '..' in path.parts or '\\' in relative:
+                raise ValueError('Invalid web asset layout: ' + public_path)
     if isinstance(sources, str):
         return (Path(web_dir) / sources).read_bytes()
     paths = tuple(str((Path(web_dir) / relative).resolve()) for relative in sources)

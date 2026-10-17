@@ -23,13 +23,13 @@ from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
-from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text
+from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text, session_title, session_title_source
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
 from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
-from bridge.features.sessions.create import rename_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
+from bridge.features.sessions.create import rename_thread, manage_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
 from bridge.features.sessions.timeline import Timeline
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
@@ -92,6 +92,9 @@ class LiveSession:
     def view(self):
         with self.condition:
             result = normalize_state(self.state or {"id": self.id}, self.connected)
+            if self.saved_view and result.get('titleSource') != 'native' and self.saved_view.get('titleSource') == 'native':
+                result['title'] = self.saved_view['title']
+                result['titleSource'] = 'native'
             if self.runtime == 'cli':
                 result['permissionMode'] = linux_permissions.current_mode(self.state)
             if self.saved_view and result['contextUsage'] is None:
@@ -132,6 +135,9 @@ class Bridge:
         self.host = host
         self.codex_home = Path(codex_home)
         self.data_dir = Path(data_dir)
+        from bridge.features.sessions.projects import Projects
+        from bridge.clients.codex.projects import NativeProjects
+        self.project_registry = Projects(data_dir, NativeProjects(self))
         self.hosts = AppHosts(codex_home)
         self.remote_bridges = {}
         self.host_errors = []
@@ -482,7 +488,7 @@ class Bridge:
         return projects
 
     @operation
-    def create_chat(self, project_key, title, request_id, kind='desktop'):
+    def create_chat(self, project_key, title, request_id, kind='desktop', auto_title=False):
         if not isinstance(request_id, str):
             raise ValueError('创建请求标识无效')
         uuid.UUID(request_id)
@@ -490,6 +496,8 @@ class Bridge:
             raise ValueError('请输入 1–120 字的聊天名称')
         if kind not in ('desktop', 'cli'):
             raise ValueError('未知聊天类型')
+        if not isinstance(auto_title, bool):
+            raise ValueError('自动标题选项无效')
         available = self.projects() if kind == 'cli' else self.hosts.projects()
         project = next((p for p in available if p['key'] == project_key), None)
         if kind == 'desktop' and project_key == 'local|independent':
@@ -501,6 +509,7 @@ class Bridge:
             entry = self.creations.get(request_id)
             if entry:
                 if (entry['project'] != project_key or entry['title'] != title or
+                        entry.get('autoTitle', False) != auto_title or
                         entry.get('kind', 'desktop') != kind or
                         entry.get('cwd', project['cwd']) != project['cwd']):
                     raise ValueError('同一创建请求不能用于不同内容')
@@ -509,7 +518,7 @@ class Bridge:
             else:
                 if kind == 'desktop':
                     self.ipc.connect()
-                entry = {'project': project_key, 'title': title, 'kind': kind,
+                entry = {'project': project_key, 'title': title, 'kind': kind, 'autoTitle': auto_title,
                          'cwd': project['cwd'], 'host': project['host'], 'at': time.time()}
                 self.creations[request_id] = entry
                 self._save_creations()
@@ -524,7 +533,7 @@ class Bridge:
 
                     try:
                         state = self.for_host(project['host']).cli_sessions.create(
-                            project['cwd'], title, on_start=mark_started, on_created=mark_created)
+                            project['cwd'], None if auto_title else title, on_start=mark_started, on_created=mark_created)
                         thread_id = state['id']
                     except AppServerUnavailable:
                         if not entry.get('started'):
@@ -534,7 +543,7 @@ class Bridge:
                 elif project['host'] == 'local':
                     try:
                         cwd = project['cwd'] or independent_directory(self.data_dir, request_id)
-                        thread_id = create_empty(self.catalog_reader.executable, self.codex_home, cwd, title)
+                        thread_id = create_empty(self.catalog_reader.executable, self.codex_home, cwd, None if auto_title else title)
                     except CreationUnavailable:
                         # No process started: retrying this request cannot create
                         # a duplicate. Keep uncertain post-start results recorded.
@@ -546,7 +555,7 @@ class Bridge:
                     source = source_text('features/sessions/create.py')
                     source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
                     source += 'runtime=shutil.which("codex") or str(Path.home()/".local/bin/codex")\n'
-                    source += 'print(json.dumps({"id":create_empty(runtime, home, **' + payload({'cwd': project['cwd'], 'title': title}) + ')}))\n'
+                    source += 'print(json.dumps({"id":create_empty(runtime, home, **' + payload({'cwd': project['cwd'], 'title': None if auto_title else title}) + ')}))\n'
                     thread_id = ssh_read(host['alias'], source, timeout=90)['id']
                 uuid.UUID(thread_id)
                 entry['id'] = thread_id
@@ -586,6 +595,18 @@ class Bridge:
         target.write_text(json.dumps(self.message_actions, ensure_ascii=False), encoding='utf-8')
         target.chmod(0o600)
         target.replace(self.actions_path)
+
+    def new_chat_models(self, project_key, kind='desktop'):
+        if kind not in ('desktop', 'cli'):
+            raise ValueError('未知聊天类型')
+        project = next((row for row in self.projects() if row['key'] == project_key and row.get('type', 'desktop') == kind), None)
+        if kind == 'desktop' and project_key == 'local|independent':
+            project = {'host': 'local', 'cwd': str(self.codex_home)}
+        if project is None:
+            raise ValueError('请选择现有项目')
+        bridge = self.for_host(project['host'])
+        selected = self.accounts.current_models(False) if project['host'] == 'local' and self.accounts else None
+        return selected if selected is not None else bridge.catalog_reader.get_kind('models', project['cwd'])
 
     def _fork_origin(self, thread_id):
         with self.message_lock:
@@ -725,10 +746,11 @@ class Bridge:
                 self.remote_bridges[host].accounts = self.accounts
             return self.remote_bridges[host]
 
-    def assert_desktop_idle(self, timeout=20):
-        """Passively check every desktop owner before an application shutdown.
+    def assert_desktop_idle(self, timeout=20, *, thread_ids=None):
+        """Passively check desktop owners before shutdown or thread management.
 
-        The caller holds the account operation gate until shutdown completes.
+        The caller holds the account operation gate until the mutation completes.
+        thread_ids limits checks to the selected host's parent/descendant threads.
         Saved rollouts and the gateway's existing follow cache are not evidence
         that a desktop-only or remote task is idle.
         """
@@ -743,7 +765,10 @@ class Bridge:
             return value
 
         def check_submissions():
-            if self.accounts.blockers():
+            blockers = self.accounts.blockers()
+            if thread_ids is not None:
+                blockers = [row for row in blockers if row.get('host') == self.host and row.get('id') in thread_ids]
+            if blockers:
                 raise ValueError('Codex 有任务或待确认操作，请先处理后再关闭')
 
         check_submissions()
@@ -751,9 +776,9 @@ class Bridge:
             # AppHosts normally tolerates damaged metadata for list rendering.
             # A lifecycle decision must not silently lose its remote coverage.
             metadata = self.codex_home / '.codex-global-state.json'
-            if metadata.exists() and not isinstance(json.loads(metadata.read_text(encoding='utf-8')), dict):
+            if thread_ids is None and metadata.exists() and not isinstance(json.loads(metadata.read_text(encoding='utf-8')), dict):
                 raise ValueError('Invalid desktop metadata')
-            hosts = self.hosts.lifecycle_hosts()
+            hosts = self.hosts.lifecycle_hosts() if thread_ids is None else {}
             sources = {self.host: self, **{key: value for key, value in self.remote_bridges.items() if key in hosts}}
             for host in hosts:
                 remaining()
@@ -765,16 +790,17 @@ class Bridge:
         # SSH metadata already has its own finite transport timeout. Waiting on
         # these read-only jobs is also bounded by this operation's deadline.
         executor = ThreadPoolExecutor(max_workers=min(4, len(sources)))
-        reads = {host: executor.submit(source.store.lifecycle_threads) for host, source in sources.items()}
+        reads = {host: executor.submit(source.store.lifecycle_threads if thread_ids is None else
+                                       lambda: [{'id': sid} for sid in thread_ids]) for host, source in sources.items()}
         threads = []
         try:
             for host, source in sources.items():
                 rows = reads[host].result(timeout=remaining())
                 identifiers = {row['id'] for row in rows}
                 with source.lock:
-                    identifiers.update(sid for sid, live in source.live.items()
-                                       if getattr(live, "origin", "desktop") == "desktop" or
-                                       (getattr(live, "runtime", "desktop") == "desktop" and getattr(live, "connected", False)))
+                    identifiers.update(sid for sid, live in source.live.items() if thread_ids is None and
+                                       (getattr(live, "origin", "desktop") == "desktop" or
+                                        (getattr(live, "runtime", "desktop") == "desktop" and getattr(live, "connected", False))))
                 if any(not isinstance(sid, str) or not sid for sid in identifiers):
                     raise ValueError('Invalid desktop session metadata')
                 threads.extend((host, sid) for sid in sorted(identifiers))
@@ -981,7 +1007,9 @@ class Bridge:
                         bridge.origins[row['id']] = row.get('origin', 'desktop')
                         row['connected'] = bool(session and session.connected)
                         row['access'] = bridge._access(row.get('origin', 'desktop'), session)
-                        row['title'] = row.get('name') or row.get('title') or '未命名聊天'
+                        row['titleSource'] = session_title_source(row)
+                        row['title'] = session_title(row)
+                        row.pop('first_user_message', None)
                 return rows, None, available
             except (RemoteUnavailable, StoreUnavailable) as exc:
                 return [], {'host': bridge.host, 'label': label, 'error': str(exc)}, []
@@ -2011,6 +2039,35 @@ class Bridge:
                 session.changed()
         return {'id': thread_id, 'host': self.host, 'title': title}
 
+    def session_record_path(self, thread_id):
+        uuid.UUID(thread_id)
+        return {'id': thread_id, 'host': self.host, 'path': self.store.record_path(thread_id)}
+
+    @operation
+    def manage_session(self, thread_id, action, confirmed=False):
+        uuid.UUID(thread_id)
+        if action not in ('archive', 'unarchive', 'delete'):
+            raise ValueError('无效聊天操作')
+        if action == 'delete' and confirmed is not True:
+            raise ValueError('请确认永久删除此聊天及其子智能体记录')
+        self._require_desktop_feature(thread_id)
+        agents = self.store.subagents(thread_id)
+        if agents.get('limited'):
+            raise ValueError('子智能体记录过多，无法确认任务状态，请在桌面操作')
+        identifiers = {thread_id, *(row['id'] for row in agents.get('agents', []))}
+        self.assert_desktop_idle(thread_ids=identifiers)
+        if isinstance(self.store, RemoteStore):
+            source = source_text('features/sessions/create.py')
+            source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
+            source += 'runtime=shutil.which("codex") or str(Path.home()/".local/bin/codex")\n'
+            source += 'manage_thread(runtime, home, **' + payload({'thread_id': thread_id, 'action': action}) + ')\nprint(json.dumps({"ok":True}))\n'
+            ssh_read(self.store.alias, source, timeout=90)
+            with self.store.lock:
+                self.store.cache.clear()
+        else:
+            manage_thread(self.catalog_reader.executable, self.codex_home, thread_id, action)
+        return {'id': thread_id, 'host': self.host, 'action': action, 'confirmed': True}
+
     def _linux_permission_options(self, session):
         with session.condition:
             cwd = (session.state or {}).get('cwd') or str(self.codex_home)
@@ -2290,8 +2347,6 @@ class Bridge:
         if work_mode == "goal":
             if identifiers:
                 raise ValueError("目标模式暂不支持附件")
-            if skills:
-                raise ValueError("目标模式只接受纯文本目标")
             if self.host != 'local':
                 session = self.session(thread_id, attach=False, background=True)
                 if not (session.origin == 'cli' and session.connected and session.runtime == 'cli'):
@@ -2303,6 +2358,17 @@ class Bridge:
                 raise ValueError('目标模式暂不支持 SSH 主机')
             if session.origin == 'cli' and not self._session_goal_available(session):
                 raise ValueError('当前 Codex 会话暂不支持目标模式')
+            if skills and not self._access(session.origin, session)['canSelectSkills']:
+                raise ValueError('此会话暂不能选择 Skill')
+            selected = self._resolve_skills(session, [] if skills is None else skills)
+            # Native goals store only text. Persist validated picker references in
+            # the objective so resumed turns retain the same explicit skill request.
+            if selected:
+                references = '\n'.join(json.dumps({'name': s['name'], 'path': s['path']},
+                                                  ensure_ascii=False) for s in selected)
+                text = text.strip() + '\n\n请使用以下技能完成此目标（name 为技能名称，path 为技能文件路径）：\n' + references
+                if len(text) > 4000:
+                    raise ValueError('目标内容不能超过 4000 字')
             with session.action_lock, self.goal_lock:
                 response = self._goal_command(session, thread_id, submission_id, "create", objective=text,
                                               ui_locale=ui_locale or activation.get("uiLocale") if activation else ui_locale)

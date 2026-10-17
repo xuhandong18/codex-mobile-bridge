@@ -371,12 +371,13 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(len(self.calls()),1)
         self.assertEqual(self.bridge.submissions[activation_key]['status'],'accepted')
 
-    def test_goal_rejects_attachments_skills_and_remote_host(self):
+    def test_goal_rejects_attachments_invalid_skills_and_remote_host(self):
         self.bridge.goal=GoalStub(self.bridge)
         image=self.upload_png()
         with self.assertRaises(ValueError):
             self.bridge.send(THREAD, 'Objective', str(uuid.uuid4()), attachments=[image['id']], work_mode='goal')
-        with self.assertRaises(ValueError):
+        self.bridge.catalog_reader.validate_skills = lambda cwd, ids: []
+        with self.assertRaisesRegex(ValueError, 'Skill 不可用'):
             self.bridge.send(THREAD, 'Objective', str(uuid.uuid4()), skills=['skill'], work_mode='goal')
         self.bridge.goal=None
         with self.assertRaises(ValueError):

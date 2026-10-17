@@ -1,2 +1,3 @@
 
 .bridge-mobile .list-heading{grid-template-columns:minmax(0,auto) minmax(0,1fr) auto}.bridge-mobile .list-more,.bridge-mobile .ds-settings{display:none!important}
+.bridge-mobile .list-heading:has(>.sidebar-toggle){grid-template-columns:auto minmax(0,auto) minmax(0,1fr) auto;gap:4px}

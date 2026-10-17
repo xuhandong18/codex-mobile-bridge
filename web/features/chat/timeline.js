@@ -1,6 +1,62 @@
 'use strict';
 const timelineText=source=>typeof BridgeI18n==='undefined'?source:BridgeI18n.t(source);
 
+// A view of loaded user messages; navigation never activates a session or sends a request.
+class ChatMessageMap {
+  constructor(timeline){
+    this.timeline=timeline;this.abort=new AbortController();
+    const signal=this.abort.signal;
+    this.root=document.createElement('nav');this.root.className='chat-message-map';
+    this.root.setAttribute('aria-label',timelineText('我的消息导航'));
+    this.list=document.createElement('div');this.list.className='chat-message-map-list';
+    this.earlier=document.createElement('button');this.earlier.type='button';this.earlier.className='chat-message-map-earlier';
+    this.earlier.onclick=()=>timeline.loadOlder(100);
+    this.root.append(this.list,this.earlier);timeline.viewport.parentElement.append(this.root);
+    document.addEventListener('pointerdown',event=>{if(!this.root.contains(event.target))this.close();},{signal});
+    this.root.addEventListener('keydown',event=>{if(event.key==='Escape'){this.close();document.activeElement?.blur();event.stopPropagation();}},{signal});
+    this.position=()=>{
+      const rect=timeline.viewport.getBoundingClientRect();
+      this.root.hidden=!this.list.children.length||!rect.width||!rect.height;
+      this.root.style.top=(rect.top+rect.height/2)+'px';this.root.style.right=Math.max(0,window.innerWidth-rect.right+4)+'px';
+      this.root.style.setProperty('--map-height',Math.max(44,Math.min(320,rect.height-24))+'px');
+    };
+    this.resize=new ResizeObserver(this.position);this.resize.observe(timeline.viewport);
+    window.addEventListener('resize',this.position,{signal});
+    window.addEventListener('scroll',this.position,{capture:true,passive:true,signal});
+    this.update();
+  }
+  close(){this.root.classList.remove('is-open');}
+  update(){
+    const timeline=this.timeline;
+    const rows=[...timeline.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order);
+    const keep=new Set(rows.map(row=>row.key));
+    for(const button of [...this.list.children])if(!keep.has(button.dataset.key))button.remove();
+    const buttons=new Map([...this.list.children].map(button=>[button.dataset.key,button]));
+    rows.forEach((row,index)=>{
+      let button=buttons.get(row.key);
+      if(!button){
+        button=document.createElement('button');button.type='button';button.dataset.key=row.key;
+        const line=document.createElement('i'),label=document.createElement('span');button.append(line,label);
+        button.onclick=()=>{
+          const node=timeline.nodes.get(row.key)?.node;if(!node)return;
+          timeline.following=false;
+          timeline.viewport.scrollTop+=node.getBoundingClientRect().top-timeline.viewport.getBoundingClientRect().top-12;
+          timeline.lastTop=timeline.viewport.scrollTop;timeline.anchor=timeline.capture();
+          for(const item of this.list.children)item.removeAttribute('aria-current');
+          button.setAttribute('aria-current','true');this.close();button.blur();
+        };
+      }
+      const summary=(row.text||row.attachments?.map(item=>item.name||item.type).join('、')||timelineText('消息')).replace(/\s+/g,' ').slice(0,100);
+      const label=(index+1)+'. '+summary;
+      button.lastChild.textContent=label;button.setAttribute('aria-label',label);button.title=label;
+      this.list.append(button);
+    });
+    this.earlier.hidden=!timeline.hasMore;this.earlier.disabled=timeline.busy;
+    this.earlier.textContent=timelineText('查看更早内容');this.position();
+  }
+  dispose(){this.abort.abort();this.resize.disconnect();this.root.remove();}
+}
+
 // History and live changes share stable keys, but never share a request queue.
 class ChatTimeline {
   constructor({url, request, renderMeta, renderText, status, onAction, canEdit = () => true, elements = {}, active = () => true}) {
@@ -26,14 +82,15 @@ class ChatTimeline {
     this.newer.onclick=()=>{this.jumpBottom();this.anchor=this.capture();};
     this.resize=new ResizeObserver(()=>this.restore(this.anchor,this.following));
     this.resize.observe(this.container);
+    this.messageMap=new ChatMessageMap(this);
   }
-  dispose(){this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;}
+  dispose(){this.messageMap.dispose();this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;}
   atBottom(){return this.viewport.scrollHeight-this.viewport.scrollTop-this.viewport.clientHeight<110;}
   nearTop(){const nodes=[...this.container.children].filter(n=>!n.hidden);return nodes.length>0&&nodes.slice(0,11).some(n=>n.getBoundingClientRect().bottom>=this.viewport.getBoundingClientRect().top);}
   capture(accept=()=>true){if(!this.viewport.clientHeight)return this.anchor;const top=this.viewport.getBoundingClientRect().top;const nodes=[...this.container.children].filter(n=>!n.hidden&&accept(n));const node=nodes.find(n=>n.getBoundingClientRect().bottom>top)||nodes[nodes.length-1];return node?{key:node.dataset.key,offset:node.getBoundingClientRect().top-top}:null;}
   rowVisible(row){
     if(row.role==='user'||row.role==='error')return true;
-    if(row.kind==='reasoning')return this.showReasoning;
+    if(row.kind==='reasoning')return this.showReasoning&&!!row.text?.trim();
     if(row.role==='activity'||row.phase==='commentary')return this.showProcess;
     return true;
   }
@@ -71,7 +128,7 @@ class ChatTimeline {
   }
   fillRecent(){
     const filtered=!this.showReasoning||!this.showProcess,target=filtered?20:100;
-    const count=filtered?[...this.nodes.values()].filter(({node})=>!node.hidden).length:this.rows.size;
+    const count=[...this.nodes.values()].filter(({node})=>!node.hidden).length;
     if(!this.abort.signal.aborted&&this.rows.size>0&&count<target&&!this.retryCount)this.loadOlder(filtered?100:target-count);
   }
   historyStatus(){this.older.hidden=!this.hasMore;this.older.disabled=this.busy;this.older.textContent=this.busy?timelineText('正在读取更早内容…'):this.retryCount?timelineText('历史加载失败，点击重试'):timelineText('查看更早内容');}
@@ -111,6 +168,7 @@ class ChatTimeline {
     for(const row of ordered){const node=this.nodes.get(row.key).node;if(node===position)position=position.nextSibling;else this.container.insertBefore(node,position);}
     if(reset||history){this.before=page.before;this.hasMore=page.hasMore;this.windowRevision++;}
     this.refreshActions();this.historyStatus();this.restore(anchor,bottom);
+    this.messageMap.update();
     if(!history&&!bottom&&(changed||page.meta.requests?.length)){this.newer.textContent=page.meta.requests?.length?timelineText('有待确认请求 ↓'):timelineText('有新内容 ↓');this.newer.hidden=false;}
     if(reset)requestAnimationFrame(()=>this.fillRecent());
   }
@@ -168,7 +226,7 @@ class ChatTimeline {
       attachment.textContent=timelineText('附件：')+row.attachments.map(a=>a.name||a.type).join('、');
       attachments.append(attachment);node.append(attachments);
     }
-    if(activity){node.open=!!open;node.ontoggle=()=>{if(node.open&&!this.details.has(row.key))load();};}
+    if(activity){node.open=!!open;node.ontoggle=()=>{if(node.open&&row.truncated&&!this.details.has(row.key))load();};}
     return node;
   }
   async fullText(row){

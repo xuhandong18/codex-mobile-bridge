@@ -159,7 +159,11 @@ class Workbench {
   rememberScroll() { const timeline=this.chat.querySelector('.timeline');if (this.current && !this.chat.classList.contains('workbench-active') && timeline.clientHeight) this.current.scroll = timeline.scrollTop; }
   select(id) {
     if (!this.current) return;
-    if (this.previewFullscreen && this.previewFullscreen.tab.id !== id) this.closePreviewFullscreen();
+    if (this.previewFullscreen && this.previewFullscreen.tab.id !== id) {
+      const tab=this.current.files.find(tab=>tab.id===id);
+      if(this.previewFullscreen.documentMode&&tab?.id.startsWith('file:'))this.syncPreviewFullscreen(tab);
+      else this.closePreviewFullscreen();
+    }
     this.rememberScroll(); this.current.active = id; if(this.current.splitTab&&id!=='chat')this.current.splitTab=id; this.paint();
     if (id === 'chat') { const session = this.current; requestAnimationFrame(() => { if (session === this.current && session.active === 'chat') this.chat.querySelector('.timeline').scrollTop = session.scroll; }); }
   }
@@ -189,6 +193,7 @@ class Workbench {
     if (active) {
       for (const node of active.body.querySelectorAll('.wb-file-list,.wb-preview-content,.wb-git-list,.wb-git-diff,.wb-branch-list,.wb-side-messages')) node.scrollTop = this.scrollPositions.get(node) || 0;
       for (const stage of active.body.querySelectorAll('.wb-pdf-stage')) { const position=this.scrollPositions.get(stage); if(position){stage.scrollTop=position.top;stage.scrollLeft=position.left;} }
+      this.scrollMarkdown(active);
     }
     if(restoreMain)this.chat.querySelector('.timeline').scrollTop=session.scroll;
     this.refreshThumbnails();
@@ -206,13 +211,16 @@ class Workbench {
   async close(id) {
     const session = this.current, index = session.files.findIndex(t => t.id === id);
     if (index < 0) return;
-    if (this.previewFullscreen?.tab === session.files[index]) this.closePreviewFullscreen();
+    const fullscreenTab=this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===session.files[index]
+      ?session.files.find(tab=>tab.id!==id&&tab.id.startsWith('file:')):null;
+    if (this.previewFullscreen?.tab === session.files[index]&&!fullscreenTab) this.closePreviewFullscreen();
     if (session.files[index].sideChat && !await session.files[index].sideChat.end()) return;
     if (!session.files[index] || session.files[index].id !== id) return;
     session.files[index].controller?.abort(); session.files[index].pdf?.dispose(); session.files[index].html?.dispose(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
     if(session.splitTab===id)session.splitTab=(session.files[index]||session.files[index-1])?.id||null;
     const wasActive=session.active===id;
-    if(wasActive)session.active=session.splitTab||(session.files.some(t=>t.id==='files')?'files':'chat');
+    if(wasActive)session.active=fullscreenTab?.id||session.splitTab||(session.files.some(t=>t.id==='files')?'files':'chat');
+    if(fullscreenTab&&session.splitTab)session.splitTab=fullscreenTab.id;
     if (this.current !== session) return;
     if (wasActive) this.select(session.active); else this.paint();
   }
@@ -265,13 +273,15 @@ class Workbench {
     }
     this.select('agents');
   }
-  sideChat() {
+  sideChat(selectedText='') {
+    if(selectedText.length>12000){this.notify(BridgeI18n.t('选中内容过长，请缩小范围后重试'));return;}
     const session=this.current;if(!session||session.access?.canUseSideChat===false)return;
     if(!session.files.some(tab=>tab.id==='sidechat')) {
       const tab={id:'sidechat',name:BridgeI18n.t('侧边聊天'),body:this.node('div','wb-side-content')};
       session.files.push(tab);tab.sideChat=new SideChatPanel(this,session,tab);
     }
     this.select('sidechat');
+    if(selectedText)session.files.find(tab=>tab.id==='sidechat').sideChat.quoteSelection(selectedText);
   }
   terminal() {
     const session=this.current;if(!session)return;
@@ -321,7 +331,10 @@ class Workbench {
   }
   openPreviewFullscreen(session, tab, content, trigger) {
     if (this.previewFullscreen || session !== this.current || !tab.body.contains(content)) return;
-    const body = tab.body, inerted = [];
+    const documentMode=!!tab.markdown,body=documentMode?this.chat:tab.body,inerted=[];
+    const exitButton=documentMode?this.button('退出全屏',()=>this.closePreviewFullscreen()):null;
+    if(exitButton){exitButton.className='wb-fullscreen-exit';this.strip.append(exitButton);}
+    const focusTarget=exitButton||trigger;
     for (let node = body; node.parentElement; node = node.parentElement) {
       for (const sibling of node.parentElement.children) if (sibling !== node && !sibling.inert) { sibling.inert = true; inerted.push(sibling); }
     }
@@ -330,30 +343,40 @@ class Workbench {
       if (event.key !== 'Tab') return;
       const controls = [...body.querySelectorAll('a[href],button,iframe,[tabindex]')].filter(node => !node.hidden && !node.disabled && node.getClientRects().length);
       const first = controls[0], last = controls.at(-1);
-      if (!first) { event.preventDefault(); trigger.focus(); }
+      if (!first) { event.preventDefault(); focusTarget.focus(); }
       else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
-    const onFocus = event => { if (!body.contains(event.target)) trigger.focus(); };
-    this.previewFullscreen = {body, trigger, tab, session, inerted, onKeydown, onFocus};
+    const onFocus = event => { if (!body.contains(event.target)) focusTarget.focus(); };
+    this.previewFullscreen = {body, trigger:focusTarget, previewTrigger:trigger, originTrigger:trigger, exitButton, documentMode, tab, session, inerted, onKeydown, onFocus};
     body.classList.add('wb-preview-fullscreen');
+    if(documentMode)body.classList.add('wb-document-fullscreen');
     body.setAttribute('role', 'dialog'); body.setAttribute('aria-modal', 'true'); body.setAttribute('aria-label', tab.name);
     this.previewFullscreenLabel(trigger, true);
     document.addEventListener('keydown', onKeydown, true);
     document.addEventListener('focusin', onFocus, true);
-    trigger.focus({preventScroll:true});
+    focusTarget.focus({preventScroll:true});
+  }
+  syncPreviewFullscreen(tab){
+    const state=this.previewFullscreen;if(!state?.documentMode||state.session!==this.current)return;
+    const trigger=tab.body.querySelector?.('.wb-preview-expand');
+    if(state.previewTrigger&&state.previewTrigger!==trigger)this.previewFullscreenLabel(state.previewTrigger,false);
+    state.tab=tab;state.previewTrigger=trigger||null;state.body.setAttribute('aria-label',tab.name);
+    if(trigger)this.previewFullscreenLabel(trigger,true);
   }
   closePreviewFullscreen() {
     const state = this.previewFullscreen; if (!state) return;
     this.previewFullscreen = null;
-    const {body, trigger, inerted, onKeydown, onFocus} = state;
+    const {body, trigger, previewTrigger, originTrigger, exitButton, inerted, onKeydown, onFocus} = state;
     document.removeEventListener('keydown', onKeydown, true);
     document.removeEventListener('focusin', onFocus, true);
     body.classList.remove('wb-preview-fullscreen');
+    body.classList.remove('wb-document-fullscreen');exitButton?.remove();
     body.removeAttribute('role'); body.removeAttribute('aria-modal'); body.removeAttribute('aria-label');
     for (const node of inerted) node.inert = false;
-    this.previewFullscreenLabel(trigger, false);
-    if (trigger.isConnected) trigger.focus({preventScroll:true});
+    if(previewTrigger)this.previewFullscreenLabel(previewTrigger,false);
+    const target=previewTrigger?.isConnected?previewTrigger:originTrigger?.isConnected?originTrigger:this.strip?.querySelector?.('[role=tab][aria-selected=true]')||trigger;
+    if(target.isConnected)target.focus({preventScroll:true});
   }
   previewFullscreenLabel(button, active) {
     const label = active ? '退出全屏' : '全屏', description = active ? '退出全屏' : '全屏预览';
@@ -361,12 +384,40 @@ class Workbench {
     button.dataset.i18nAriaLabel = description; button.dataset.i18nTitle = description;
     button.setAttribute('aria-label', BridgeI18n.t(description)); button.title = BridgeI18n.t(description);
   }
-  async preview(session, entry) {
+  markdownTarget(path, reference) {
+    // Resolve on the selected workspace, never against the gateway's URL or OS.
+    if (!reference || /^[a-z][a-z\d+.-]*:|^\/\//i.test(reference)) return null;
+    try {
+      const hash = reference.indexOf('#'), fragment = hash < 0 ? undefined : decodeURIComponent(reference.slice(hash + 1));
+      const value = decodeURIComponent((hash < 0 ? reference : reference.slice(0, hash)).split('?')[0]);
+      if (/[\\:\x00-\x1f\x7f]/.test(value)) return null;
+      if (!value) return {path, fragment:fragment ?? ''};
+      const parts = value.startsWith('/') ? [] : path.split('/').slice(0, -1);
+      for (const part of value.split('/')) {
+        if (!part || part === '.') continue;
+        if (part === '..') { if (!parts.length) return null; parts.pop(); }
+        else parts.push(part);
+      }
+      return parts.length ? {path:parts.join('/'), fragment} : null;
+    } catch { return null; }
+  }
+  scrollMarkdown(tab) {
+    if (tab.fragment === undefined || !tab.markdown || !this.current?.files.includes(tab) || !this.isVisible(this.current, tab)) return;
+    const content = tab.markdown, fragment = tab.fragment;
+    delete tab.fragment;
+    const heading = [...content.querySelectorAll('[data-markdown-anchor]')].find(node => node.dataset.markdownAnchor === fragment);
+    if (!fragment) content.scrollTop = 0;
+    else if (heading) content.scrollTop += heading.getBoundingClientRect().top - content.getBoundingClientRect().top - 12;
+    else this.notify(BridgeI18n.t('未找到对应章节'));
+    this.scrollPositions.set(content, content.scrollTop);
+  }
+  async preview(session, entry, fragment) {
     if (session !== this.current) return;
     const id = 'file:' + entry.path;
-    if (session.files.some(t => t.id === id)) { this.select(id); return; }
+    const existing = session.files.find(t => t.id === id);
+    if (existing) { if (fragment !== undefined) existing.fragment = fragment; this.select(id); return; }
     if (session.files.filter(t => t.id.startsWith('file:')).length >= 8) { this.notify(BridgeI18n.t('最多同时打开 8 个文件，请先关闭一个标签')); return; }
-    const tab = {id, name: entry.name, body: this.node('div', 'wb-preview'), controller: new AbortController()}; session.files.push(tab);
+    const tab = {id, name: entry.name, body: this.node('div', 'wb-preview'), controller: new AbortController(), fragment}; session.files.push(tab);
     tab.body.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取文件…'))); this.select(id);
     try {
       const pdf = /\.pdf$/i.test(entry.name);
@@ -386,7 +437,16 @@ class Workbench {
         content.classList.add('wb-pdf-content'); content.append(tab.pdf.element);
       } else if (result.kind === 'image') { const image = this.node('img'); image.src = 'data:' + result.mime + ';base64,' + result.data; image.alt = result.name; window.BridgeImageViewer?.registerWorkspaceImage(image, result); content.append(image); }
       else if (result.kind === 'text') {
-        if (/\.md$/i.test(result.name)) renderMarkdown(content, result.text);
+        if (/\.(md|markdown)$/i.test(result.name)) {
+          tab.markdown = content;
+          renderMarkdown(content, result.text, [], undefined, {headingAnchors:true, resolveLink:reference => {
+            const target = this.markdownTarget(entry.path, reference);
+            if (!target) return null;
+            return {url:this.url(session, 'preview', target.path) + (target.fragment === undefined ? '' : '#' + encodeURIComponent(target.fragment)), activate:() => {
+              if (session === this.current && session.files.includes(tab)) this.preview(session, {path:target.path, name:target.path.split('/').pop()}, target.fragment);
+            }};
+          }});
+        }
         else if (/\.html?$/i.test(result.name)) {
           modes = this.node('div', 'wb-preview-modes');
           const preview = this.button('预览', () => show('preview'));
@@ -416,8 +476,10 @@ class Workbench {
       }
       if (copyAction) actions.append(copyAction);
       tab.body.replaceChildren(...(modes ? [head, modes, content] : [head, content]));
+      if(this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===tab)this.syncPreviewFullscreen(tab);
+      this.scrollMarkdown(tab);
       if (tab.pdf) tab.pdf.load();
-    } catch (error) { if (error.name !== 'AbortError') tab.body.replaceChildren(this.node('p', 'wb-status error', error.message), this.button(BridgeI18n.t('重试'), () => { this.close(id); this.preview(session, entry); })); }
+    } catch (error) { if (error.name !== 'AbortError') tab.body.replaceChildren(this.node('p', 'wb-status error', error.message), this.button(BridgeI18n.t('重试'), () => { this.close(id); this.preview(session, entry, tab.fragment); })); }
   }
   uploadDialog(session, tab, directory) {
     const dialog = this.node('dialog', 'picker wb-upload'), form = this.node('form');

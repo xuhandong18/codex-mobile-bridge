@@ -966,6 +966,22 @@ class HttpTests(unittest.TestCase):
         self.server.bridge.for_host.assert_called_once_with('remote')
         remote.rename.assert_called_once_with(THREAD, 'New')
 
+    def test_session_management_routes_require_csrf_and_preserve_selected_host(self):
+        from unittest.mock import Mock
+        headers=self.login();remote=Mock()
+        remote.manage_session.return_value={'confirmed':True}
+        remote.session_record_path.return_value={'path':'/remote/sessions/fixture.jsonl'}
+        self.server.bridge.for_host=Mock(return_value=remote)
+        base='/api/sessions/'+THREAD
+        for action in ('archive','unarchive','delete'):
+            path=base+'/'+action+'?host=remote'
+            self.assertEqual(self.request('POST',path,{}, {'Cookie':headers['Cookie']})[0],403)
+            self.assertEqual(self.request('GET',path,headers=headers)[0],404)
+            self.assertEqual(self.request('POST',path,{'confirmed':True},headers)[0],200)
+            self.assertEqual(remote.manage_session.call_args.args,(THREAD,action,True))
+        self.assertEqual(self.request('GET',base+'/record-path?host=remote',headers=headers)[2]['path'],'/remote/sessions/fixture.jsonl')
+        remote.session_record_path.assert_called_once_with(THREAD)
+
     def test_skill_catalog_route_paginates_searches_and_hydrates_selection(self):
         from unittest.mock import Mock
         headers = self.login()

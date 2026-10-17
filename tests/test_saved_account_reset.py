@@ -11,6 +11,19 @@ class SavedResetTests(unittest.TestCase):
     setUp = test_accounts.AccountsTests.setUp
     tearDown = test_accounts.AccountsTests.tearDown
 
+    def test_unsaved_current_reset_read_uses_native_account_and_requires_confirmation(self):
+        rpc = FakeRPC()
+        with patch('bridge.features.accounts.account.Account.rpc', return_value=rpc):
+            result = self.manager.account({'current':True, 'operation':'read'})
+            self.assertTrue(result['visible'])
+            self.assertGreater(result['resetCredits']['availableCount'], 0)
+            with self.assertRaises(ValueError):
+                self.manager.account({'current':True, 'operation':'consume'})
+        self.assertFalse(any(m.endswith('/consume') for m, _ in rpc.calls))
+        self.assertEqual(self.manager.index['accounts'], [])
+        with self.assertRaises(ValueError):
+            self.manager.account({'current':True, 'id':'ambiguous'})
+
     def setup_saved(self):
         import base64
         identifier = 'a'*32

@@ -41,7 +41,7 @@ class AccountsHttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST','/api/accounts/switch',{'id':'fixture'},headers)[0],403)
         manager.switch.assert_not_called()
 
-    def test_details_are_authenticated_and_accept_only_saved_account_queries(self):
+    def test_details_are_authenticated_and_accept_saved_or_current_usage_queries(self):
         manager=self.manager();value={'id':'fixture','section':'models'}
         self.assertEqual(self.request('POST','/api/accounts/details',value)[0],401)
         headers=self.login()
@@ -49,6 +49,12 @@ class AccountsHttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST','/api/accounts/details',{**value,'apiKey':'forbidden'},headers)[0],400)
         self.assertEqual(self.request('POST','/api/accounts/details',value,headers)[0],202)
         manager.info.request.assert_called_once_with(value)
+        current = {'current':True, 'section':'usage'}
+        self.assertEqual(self.request('POST','/api/accounts/details',current,headers)[0],202)
+        manager.info.request.assert_called_with(current)
+        for invalid in ({'current':False,'section':'usage'}, {'current':True,'section':'models'},
+                        {'current':True,'id':'fixture','section':'usage'}):
+            self.assertEqual(self.request('POST','/api/accounts/details',invalid,headers)[0],400)
 
     def test_reminders_and_desktop_updates_require_authenticated_csrf_requests(self):
         manager=self.manager();manager.monitor=SimpleNamespace(configure=Mock());manager.updates=SimpleNamespace(check=Mock(),request=Mock())

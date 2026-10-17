@@ -3,14 +3,15 @@
   "/index.html": "index.html",
   "/icon.png": "icon.png",
   "/manifest.webmanifest": "manifest.webmanifest",
-  "/app.js": ["shared/dialog-dismiss.js", "shell/app.js"],
+  "/app.js": ["shared/dialog-dismiss.js", "features/chat/context-menu.js", "features/chat/session-list.js", "shell/app.js"],
   "/bootstrap.js": "shared/bootstrap.js",
   "/style.css": [
     "shell/style.css",
     "layouts/wide/shell.css",
     "shell/chat-list.css",
     "layouts/compact/shell.css",
-    "shell/content.css"
+    "shell/content.css",
+    "features/chat/message-map.css"
   ],
   "/activity.js": "features/chat/activity.js",
   "/attachments.js": "features/chat/attachments.js",

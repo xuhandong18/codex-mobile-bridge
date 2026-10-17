@@ -1,2 +1,18 @@
 @media(min-width:721px){#sidebar,.ds-list{padding-top:0}}
 @media(min-width:721px) and (max-width:1100px){.app.chat-open{grid-template-columns:minmax(0,1fr)}.app.chat-open>#sidebar{display:none}.desktop-sessions:not(.ds-open){grid-template-columns:minmax(0,1fr)}.desktop-sessions:not(.ds-open)>.ds-main{display:none}.desktop-sessions.ds-open{grid-template-columns:minmax(0,1fr)}.desktop-sessions.ds-open>.ds-list{display:none}#back{display:block}}
+
+.sidebar-toggle{display:flex;align-items:center;justify-content:center;flex:none;width:36px;min-height:40px;padding:6px}
+.list-heading:has(>.sidebar-toggle){grid-template-columns:auto minmax(0,auto) minmax(0,1fr) auto auto;gap:4px}
+@media(min-width:721px){
+  .app.sidebar-open:not(.desktop-mode),.app.sidebar-open .desktop-sessions{display:grid;grid-template-columns:clamp(250px,28vw,310px) minmax(0,1fr)}
+  .app.sidebar-open:not(.desktop-mode)>#sidebar,.app.sidebar-open .desktop-sessions>.ds-list{display:flex;height:100%;border-right:1px solid var(--line)}
+  .app.sidebar-open:not(.desktop-mode)>main,.app.sidebar-open .desktop-sessions>.ds-main{display:block;height:100%}
+  .app.sidebar-closed:not(.desktop-mode),.app.sidebar-closed .desktop-sessions.ds-open{display:grid;grid-template-columns:minmax(0,1fr)}
+  .app.sidebar-closed.chat-open>#sidebar,.app.sidebar-closed .desktop-sessions.ds-open>.ds-list{display:none}
+  .app.sidebar-closed:not(.chat-open):not(.desktop-mode)>main{display:none}
+  .app.sidebar-open #back,.app.sidebar-open .ds-head .ds-back{display:none!important}
+}
+@media(max-width:720px){
+  .app.sidebar-open.chat-open>#sidebar,.app.sidebar-open .desktop-sessions.ds-open>.ds-list{display:flex;position:absolute;inset:0 auto 0 0;width:min(310px,88%);height:100%;z-index:30;box-shadow:8px 0 28px #0003}
+  .app.sidebar-open,.desktop-sessions{position:relative}
+}

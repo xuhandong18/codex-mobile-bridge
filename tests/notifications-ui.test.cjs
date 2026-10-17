@@ -18,7 +18,7 @@ async function fixture({sessionStore=new Map(),skipStartup=false}={}){
   let nextPost,nextGet;
   const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
   let listResponse=()=>response({sessions:[],unavailableHosts:[]}),knownRows=[];
-  const context=vm.createContext({ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}acknowledgeList(provider,value){acknowledgements.push({provider,value});}},DesktopSessionsView:class{clear(){}},Workbench:class{constructor(){this.current={};}open(){}reset(){}setThumbnails(){}relabel(){}},navigator:{userAgent:'test'},document:{addEventListener(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:selector=>selector==='.archive-filter'?archiveFilter:{disabled:false},querySelectorAll:selector=>selector==='[data-notification-channel]'?channelButtons:[],createElement:node},
+  const context=vm.createContext({SidebarNavigation:class{},ChatContextMenu:class{},SelectedTextAction:class{},NewChatSettings:class{constructor(){this.defaults={remember(){}};}load(){}},ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}acknowledgeList(provider,value){acknowledgements.push({provider,value});}},DesktopSessionsView:class{clear(){}},Workbench:class{constructor(){this.current={};}open(){}reset(){}setThumbnails(){}relabel(){}},navigator:{userAgent:'test'},document:{addEventListener(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:selector=>selector==='.archive-filter'?archiveFilter:{disabled:false},querySelectorAll:selector=>selector==='[data-notification-channel]'?channelButtons:[],createElement:node},
     renderMarkdown(){},window:{addEventListener(){}},localStorage:storage(),sessionStorage:scopedStorage,
     location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},setTimeout(){},clearTimeout(){},setInterval(){},
     ChatTimeline:class{constructor(){this.abort=new AbortController();}async start(){}dispose(){this.abort.abort();}relabel(){}refreshActions(){}},
@@ -59,7 +59,7 @@ async function fixture({sessionStore=new Map(),skipStartup=false}={}){
       }
       return response(saved.get(url)||{available:true,watching:false,notifyOnCompletion:false,requests:'inherit',completion:'inherit'});
     }});
-  for(const file of ['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/accounts/account.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/shell/app.js']){
+  for(const file of ['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/chat/session-list.js','web/features/accounts/account.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/shell/app.js']){
     let source=fs.readFileSync(path.join(__dirname,'..',file),'utf8');
     if(skipStartup&&file==='web/shell/app.js')source=source.replace('startFromLink(initialPairingToken);initialPairingToken=null;','initialPairingToken=null;');
     vm.runInContext(source,context);
@@ -281,6 +281,26 @@ test('accepted interaction bumps recent order while merely rendering does not',a
 });
 
 const sessionPage=(start,count)=>({sessions:Array.from({length:count},(_,i)=>({id:'chat-'+(start+i),host:'local',title:'Chat '+(start+i),projectKey:'project',projectName:'Project',recency:10000-start-i})),unavailableHosts:[]});
+
+test('a complete host prefix without a look-ahead row does not offer a phantom next page after refresh',async()=>{
+  const ui=await fixture();ui.nodes.get('app').hidden=false;
+  ui.setList(()=>ui.response({...sessionPage(0,100),complete:true,remoteHosts:[]}));
+  await ui.run('loadList(true)');assert.equal(ui.run('listHasMore'),false);
+  await ui.run('loadList(true)');assert.equal(ui.run('listHasMore'),false);
+});
+
+test('automatic list titles update both new-chat headings and rows despite stale live or list placeholders',async()=>{
+  const ui=await fixture();ui.nodes.get('app').hidden=false;
+  ui.setList(()=>ui.response(sessionPage(0,1)));await ui.run('loadList(true)');
+  ui.run("currentId='chat-0';currentHost='local';state={host:'local',title:'新聊天',connected:true,requests:[],submissions:[],historyComplete:true}");
+  let title='自动生成的标题';
+  ui.setList(()=>ui.response({...sessionPage(0,1),sessions:[{...sessionPage(0,1).sessions[0],title}]}));
+  await ui.run('loadList(true)');
+  assert.equal(ui.nodes.get('chat-title').textContent,title);assert.equal(ui.run('listRows[0].title'),title);
+  ui.run("renderState({...state,title:'新聊天'})");assert.equal(ui.nodes.get('chat-title').textContent,title);
+  const expected=title;title='新聊天';await ui.run('loadList(true)');
+  assert.equal(ui.run('listRows[0].title'),expected);
+});
 
 test('refresh retains unchanged chat nodes but renders title and selection updates',async()=>{
   const ui=await fixture(),root=ui.nodes.get('sessions');ui.nodes.get('app').hidden=false;

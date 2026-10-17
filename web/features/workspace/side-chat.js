@@ -46,6 +46,14 @@ class SideChatPanel {
     tab.body.append(this.head,this.landing,this.status,this.messages,this.approvals,this.queued,this.form);this.controls();this.load();this.schedule();
   }
   resizeInput(){this.input.style.height='auto';this.input.style.height=Math.min(160,Math.max(48,this.input.scrollHeight))+'px';}
+  quoteSelection(text){
+    const prompt=BridgeI18n.t('请进一步解释以下内容：')+'\n\n'+text.split('\n').map(line=>'> '+line).join('\n');
+    this.input.value=(this.input.value.trim()?this.input.value+'\n\n':'')+prompt;this.collapse(false);this.input.oninput();
+    if(!this.state?.id){
+      if(!this.selectionPreview){this.selectionPreview=this.workbench.node('blockquote','wb-side-selection');this.landing.append(this.selectionPreview);}
+      this.selectionPreview.textContent=this.input.value;
+    }else this.input.focus();
+  }
   collapse(value){this.collapsed=value;this.composerBody.hidden=value;this.form.classList.toggle('is-collapsed',value);this.toggle.setAttribute('aria-expanded',String(!value));const label=value?'展开输入区':'收起输入区';this.toggle.dataset.i18nTitle=label;this.toggle.dataset.i18nAriaLabel=label;this.toggle.title=BridgeI18n.t(label);this.toggle.setAttribute('aria-label',BridgeI18n.t(label));if(!value)this.resizeInput();}
   uploadUrl(child,id,operation=''){
     const path='/api/sessions/'+this.session.id+'/uploads'+(operation?'/'+encodeURIComponent(id)+'/'+operation:'')+'?host='+encodeURIComponent(this.session.host)+'&side='+encodeURIComponent(child)+(operation?'':'&id='+encodeURIComponent(id));

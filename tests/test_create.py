@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from bridge.features.sessions.create import CreationUnavailable, create_empty, rename_thread, open_in_desktop, CreationError
+from bridge.features.sessions.create import CreationUnavailable, create_empty, rename_thread, manage_thread, open_in_desktop, CreationError
 from bridge.clients.codex.remote import AppHosts
 from bridge.app.service import Bridge
 
@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CreationTests(unittest.TestCase):
     def setUp(self):
+        runtime = patch('bridge.clients.codex.catalog.Catalog.find_runtime', return_value=None)
+        runtime.start();self.addCleanup(runtime.stop)
         self.temp = tempfile.TemporaryDirectory(dir=ROOT/'.tmp')
         self.root = Path(self.temp.name)
         self.bridge = Bridge(self.root, self.root/'data')
@@ -54,6 +56,57 @@ class CreationTests(unittest.TestCase):
             self.assertIn('rename_thread(runtime, home', remote.call_args.args[1])
             self.assertNotIn(title, remote.call_args.args[1])
             self.assertFalse(self.bridge.store.cache)
+
+    def test_record_path_is_passive_and_checks_the_codex_home_boundary(self):
+        record = self.root / 'sessions' / 'record.jsonl'
+        record.parent.mkdir();record.write_text('{}\n')
+        with patch.object(self.bridge.store, 'get', return_value={'rollout_path': str(record)}), patch.object(self.bridge, 'activate') as activate:
+            self.assertEqual(self.bridge.session_record_path(self.tid)['path'], str(record.resolve()))
+            activate.assert_not_called()
+        outside = self.root / 'outside.jsonl';outside.write_text('{}\n')
+        with patch.object(self.bridge.store, 'get', return_value={'rollout_path': str(outside)}):
+            with self.assertRaisesRegex(ValueError, '数据目录'):
+                self.bridge.session_record_path(self.tid)
+
+    def test_management_checks_fresh_parent_and_descendant_state_and_delete_confirmation(self):
+        child = str(uuid.uuid4())
+        with patch.object(self.bridge.store, 'get', return_value={'origin': 'desktop'}), \
+             patch.object(self.bridge.store, 'subagents', return_value={'agents': [{'id': child}]}), \
+             patch.object(self.bridge, 'assert_desktop_idle') as idle, \
+             patch('bridge.app.service.manage_thread') as manage:
+            with self.assertRaisesRegex(ValueError, '确认永久删除'):
+                self.bridge.manage_session(self.tid, 'delete')
+            manage.assert_not_called();idle.assert_not_called()
+            self.assertTrue(self.bridge.manage_session(self.tid, 'archive')['confirmed'])
+            idle.assert_called_once_with(thread_ids={self.tid, child})
+            self.assertEqual(manage.call_args.args[2:], (self.tid, 'archive'))
+            idle.side_effect = ValueError('任务运行')
+            with self.assertRaisesRegex(ValueError, '任务运行'):
+                self.bridge.manage_session(self.tid, 'delete', True)
+            self.assertEqual(manage.call_count, 1)
+
+    def test_new_chat_models_reads_selected_project_without_creating_or_activating(self):
+        with patch.object(self.bridge.accounts, 'current_models', return_value={'models': [{'id': 'fixture'}]}) as models, \
+             patch.object(self.bridge, 'activate') as activate:
+            self.assertEqual(self.bridge.new_chat_models('local|p')['models'][0]['id'], 'fixture')
+            models.assert_called_once_with(False);activate.assert_not_called()
+            with self.assertRaises(ValueError):self.bridge.new_chat_models('local|missing')
+
+    def test_legacy_gateway_projects_are_preserved_but_not_injected_as_native_projects(self):
+        path = self.bridge.project_registry.path;path.parent.mkdir(parents=True, exist_ok=True)
+        legacy = [{'key':'local|gateway-old', 'host':'local', 'name':'Old gateway project', 'cwd':str(self.root)}]
+        path.write_text(json.dumps(legacy))
+        self.assertFalse(any(p['key']=='local|gateway-old' for p in self.bridge.hosts.projects()))
+        self.assertEqual(json.loads(path.read_text()), legacy)
+
+    def test_automatic_title_does_not_persist_the_placeholder_or_replay_a_different_mode(self):
+        request=str(uuid.uuid4())
+        with patch('bridge.app.service.create_empty',return_value=self.tid) as create, patch('bridge.app.service.open_in_desktop'):
+            self.bridge.create_chat('local|p','新聊天',request,auto_title=True)
+            self.assertIsNone(create.call_args.args[-1])
+            self.bridge.create_chat('local|p','新聊天',request,auto_title=True)
+            create.assert_called_once()
+            with self.assertRaises(ValueError):self.bridge.create_chat('local|p','新聊天',request)
 
     def tearDown(self):
         self.bridge.close()
@@ -211,10 +264,20 @@ Path(''' + repr(str(log)) + ''').write_text(json.dumps(calls))
         self.assertEqual(calls[-1]['params'],{'threadId':self.tid,'includeTurns':True})
         self.assertEqual(calls[2]['params'],{'cwd':str(self.root),'ephemeral':False})
         with patch('bridge.features.sessions.create.subprocess.Popen',side_effect=spawn):
+            create_empty('runtime',self.root,str(self.root),None)
+        calls=json.loads(log.read_text())
+        self.assertEqual([c['method'] for c in calls],['initialize','initialized','thread/start','thread/read'])
+        with patch('bridge.features.sessions.create.subprocess.Popen',side_effect=spawn):
             rename_thread('runtime', self.root, self.tid, 'Renamed')
         calls=json.loads(log.read_text())
         self.assertEqual([c['method'] for c in calls], ['initialize','initialized','thread/name/set'])
         self.assertEqual(calls[-1]['params'], {'threadId': self.tid, 'name': 'Renamed'})
+        for action in ('archive', 'unarchive', 'delete'):
+            with patch('bridge.features.sessions.create.subprocess.Popen',side_effect=spawn):
+                manage_thread('runtime', self.root, self.tid, action)
+            calls=json.loads(log.read_text())
+            self.assertEqual([c['method'] for c in calls], ['initialize','initialized','thread/'+action])
+            self.assertEqual(calls[-1]['params'], {'threadId':self.tid})
 
     def test_deep_link_encodes_host_and_never_invokes_shell(self):
         with patch('bridge.features.sessions.create.sys.platform','darwin'),patch('bridge.features.sessions.create.subprocess.run') as run:
