@@ -13,6 +13,7 @@ const en={
 "消息":"Message",
 "上移":"Move up",
 "下移":"Move down",
+"折叠所有":"Collapse all",
 "无法保存项目顺序，请检查设备存储权限。":"Could not save project order. Check device storage permissions.",
 "侧栏操作":"Sidebar actions",
 "移动到分区…":"Move to section…",

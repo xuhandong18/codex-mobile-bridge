@@ -296,6 +296,13 @@ async function loadProjectChats(key){
   }catch(error){toast(error.message);}
   finally{page.loading=false;listRenderStamp='';renderList();}
 }
+function collapseSidebarGroups(){
+  for(const group of $('sessions').querySelectorAll('.sidebar-section, .project-group')){
+    group.open=false;
+    // Save now: a refresh can replace this node before its queued toggle event.
+    group.ontoggle?.();
+  }
+}
 function renderList(){
   const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,listLoading,[...projectChatPages].filter(([,page])=>page.limit!==5||page.loading)]:null;
   const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position])]);
@@ -533,7 +540,10 @@ const sidebarManagement=typeof SidebarManagementUI==='function'?new SidebarManag
     $('list-mode').value='codex';try{localStorage.setItem('list-mode','codex');}catch{}
     await loadList(true);
   }}):null;
-if(typeof bindListActions==='function')bindListActions(document.querySelector('#sidebar .chat-list-toolbar'),$('archived'),sidebarManagement?sidebarManagement.topActions(()=>openNewProject()):[{label:'新建项目',run:()=>openNewProject()}]);
+if(typeof bindListActions==='function')bindListActions(document.querySelector('#sidebar .chat-list-toolbar'),$('archived'),[
+  ...(sidebarManagement?sidebarManagement.topActions(()=>openNewProject()):[{label:'新建项目',run:()=>openNewProject()}]),
+  {label:'折叠所有',run:collapseSidebarGroups}
+]);
 function openNewProject(){
   const dialog=desktopSessions.dialog('新建项目'),form=el('form'),error=el('p','error');
   const field=(text,node)=>{const label=el('label','',t(text));label.append(node);form.append(label);return node;};
@@ -692,7 +702,13 @@ $('new-chat-form').onsubmit=async event=>{
 const messageActions=new MessageActions({request:api,openChat,refresh:()=>loadList(true).catch(e=>toast(e.message)),uuid,notify:toast,busy:value=>{approvalBusy+=value?1:-1;setLanguageBusy();}});
 document.addEventListener('bridge-message-error',event=>toast(event.detail));
 new ChatContextMenu($('sessions'),target=>{
-  const nativeActions=sidebarManagement?.items(target);if(nativeActions!==null&&nativeActions!==undefined)return nativeActions;
+  const nativeActions=sidebarManagement?.items(target);
+  if(nativeActions!==null&&nativeActions!==undefined){
+    const summary=target.closest('summary[data-project-key]');
+    return nativeActions.length&&summary?[...nativeActions,...sidebarProjectOrderActions(sidebarEntry('project',{
+      key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName
+    }))]:nativeActions;
+  }
   const button=target.closest('.session');
   if(!button){
     const summary=target.closest('summary[data-project-key]');
@@ -717,12 +733,13 @@ new ChatContextMenu($('sessions'),target=>{
 function sidebarPlacementActions(item){
   const items=[{label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,'toggle-pin')},
     {label:'移动到分区…',run:()=>openSidebarPlacement(item)}];
-  if(item.kind==='project'){
-    const {ids}=sectionProjectRows(item),index=ids.indexOf(item.id);
-    if(index>=0)items.push({label:'上移',disabled:index===0,run:()=>shiftSectionProject(item,-1)},
-      {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)});
-  }
+  if(item.kind==='project')items.push(...sidebarProjectOrderActions(item));
   return items;
+}
+function sidebarProjectOrderActions(item){
+  const {ids}=sectionProjectRows(item),index=ids.indexOf(item.id);
+  return index<0?[]:[{label:'上移',disabled:index===0,run:()=>shiftSectionProject(item,-1)},
+    {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)}];
 }
 function currentSidebarEntry(item){
   let row;

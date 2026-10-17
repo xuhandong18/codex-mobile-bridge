@@ -6,6 +6,14 @@ const source=fs.readFileSync('web/shell/app.js','utf8');
 const render=source.slice(source.indexOf('function sidebarEntry('),source.indexOf('async function loadList('));
 class Element{
   constructor(tag,cls='',text=''){this.tag=tag;this.className=cls;this.textContent=text;this.children=[];this.dataset={};this.scrollTop=0;}
+  get parentElement(){return this.parent;}
+  matches(selector){
+    if(selector==='summary[data-project-key]')return this.tag==='summary'&&this.dataset.projectKey!==undefined;
+    if(selector==='.sidebar-section > summary')return this.tag==='summary'&&this.parent?.matches('.sidebar-section');
+    return selector.startsWith('.')?this.className.split(' ').includes(selector.slice(1)):this.tag===selector;
+  }
+  closest(selector){for(let node=this;node;node=node.parent)if(node.matches(selector))return node;return null;}
+  querySelectorAll(selector){return this.children.flatMap(child=>[...(selector.split(',').some(part=>child.matches(part.trim()))?[child]:[]),...child.querySelectorAll(selector)]);}
   append(...nodes){for(const node of nodes){node.parent=this;this.children.push(node);}}
   replaceChildren(...nodes){this.children=[];this.append(...nodes);}
   setAttribute(name,value){this[name]=value;}
@@ -88,6 +96,52 @@ test('a detached project cannot overwrite the remembered open state with a delay
   const current=nodes.sessions.children[0];current.open=true;current.ontoggle();
   old.isConnected=false;old.ontoggle();
   context.listRows[0].title='Again';context.renderList();assert.equal(nodes.sessions.children[0].open,true);
+});
+
+function bindSidebarMenu({context}){
+  vm.runInContext(fs.readFileSync('web/features/chat/sidebar-management.js','utf8'),context);
+  context.sidebarManagement=new context.SidebarManagementUI({snapshot:()=>context.sidebarData});
+  context.ChatContextMenu=class{constructor(_root,items){context.menuItems=items;}};
+  vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nfunction currentSidebarEntry(')),context);
+}
+
+for(const mode of ['codex','project'])test('native project management retains sibling ordering in '+mode+' mode',()=>{
+  const f=fixture(mode),{context,nodes}=f;
+  context.sidebarData.projects=context.sidebarData.projects.filter(project=>project.key!=='local|empty');
+  context.sidebarData.projects.push({key:'local|b',host:'local',name:'B'},{key:'ssh|r',host:'ssh',name:'Remote'});
+  context.sidebarData.sections[0].itemKeys.push('codex:project:b','codex:project:r');
+  context.renderList();bindSidebarMenu(f);
+  const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
+  const menu=key=>context.menuItems(group(key).children[0]);
+  const keys=()=>group('local|p').parent.children.filter(node=>node.dataset.projectKey).map(node=>node.dataset.projectKey);
+  const first=menu('local|p');
+  for(const label of ['修改名称','移动到分区…','删除项目','上移','下移'])assert.ok(first.some(row=>row.label===label),'Missing '+label);
+  assert.equal(first.find(row=>row.label==='上移').disabled,true);
+  first.find(row=>row.label==='下移').run();
+  const scope=mode==='codex'?'custom':'projects';
+  assert.deepEqual(Array.from(context.sectionProjectOrder.sort(scope,['local|p','local|b','ssh|r'])),['local|b','local|p','ssh|r']);
+  const ordered=keys();assert.ok(ordered.indexOf('local|b')<ordered.indexOf('local|p'));
+  const remote=menu('ssh|r');assert.equal(remote.find(row=>row.label==='修改名称').disabled,true);
+  assert.equal(remote.find(row=>row.label==='上移').disabled,false);assert.equal(remote.find(row=>row.label==='下移').disabled,true);
+  remote.find(row=>row.label==='上移').run();
+  context.listRows[0].title='Refreshed';context.renderList();
+  assert.deepEqual(Array.from(context.sectionProjectOrder.sort(scope,['local|p','local|b','ssh|r'])),['local|b','ssh|r','local|p']);
+  assert.deepEqual(Array.from(context.menuItems(group('local|p').children[0].children[1])),[],'The project create button does not open a menu');
+});
+
+for(const mode of ['codex','project','recent'])test('collapse all persists immediately across list refreshes in '+mode+' mode',()=>{
+  const {context,nodes}=fixture(mode),row=JSON.stringify(context.listRows),pages=context.projectChatPages;
+  context.collapseSidebarGroups();
+  const groups=()=>nodes.sessions.querySelectorAll('.sidebar-section, .project-group');
+  assert.ok(groups().every(group=>!group.open));
+  context.listRenderStamp='';context.renderList();
+  assert.ok(groups().every(group=>!group.open),'A refresh before the toggle event must retain collapsed state');
+  if(mode!=='recent'){
+    const project=groups().find(group=>group.dataset.projectKey==='local|p');
+    project.open=true;project.ontoggle();context.listRenderStamp='';context.renderList();
+    assert.equal(groups().find(group=>group.dataset.projectKey==='local|p').open,true,'An individual project can be reopened');
+  }
+  assert.equal(JSON.stringify(context.listRows),row);assert.equal(context.projectChatPages,pages);
 });
 test('recent mode preserves the flat list and project mode offers creation',()=>{
   const recent=fixture('recent');assert.equal(recent.nodes.sessions.children.length,2);

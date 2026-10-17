@@ -20,6 +20,8 @@
 
 `project-section-order.browser.js` 的 `runProjectSectionOrderBrowserTests()` 使用自定义分区、置顶区各有三个项目的夹具，检查项目菜单上下移动、边界禁用、分区中直接聊天的位置不变，以及区域排序隔离。驱动继续验证手机/平板长按和整页刷新后的顺序。
 
+`sidebar-collapse.browser.js` 的 `runSidebarCollapseBrowserTests(mode)` 在 `codex` 和 `project` 显示方式下检查工具栏“⋯”菜单的“折叠所有”，覆盖分区及嵌套项目一起收起、刷新保留、单独重新展开，以及当前聊天、草稿和项目分页保留。驱动在电脑、手机和平板宽度分别调用，并检查整页刷新后仍折叠。
+
 `timeline.browser.js` 还提供 `runReasoningSummaryTests()`，检查无公开摘要的记录隐藏、不读取空记录，以及后续公开摘要到达后显示并加载正文。
 
 `navigation-preferences.browser.js` 的 `runSelectionActionBrowserTests()` 检查选词后的滚动、当前输入框引用、侧边聊天草稿、活动正文选词，以及原生菜单消费选区凭证时的单次消费和会话隔离；只在合成聊天中执行。
