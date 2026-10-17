@@ -195,6 +195,77 @@ class WindowsWorkspaceTests(unittest.TestCase):
         with self.renamed(self.root):
             pass
 
+    def test_mkdir_pins_parent_and_every_ancestor_against_real_rename_and_junction_replacement(self):
+        target = self.project / 'parent'; target.mkdir()
+        mkdir = os.mkdir
+        attempts = []
+        def guarded(path, *args, **kwargs):
+            self.assertEqual(Path(path), target/'新文件夹')
+            for candidate in (self.root, self.project, target):
+                with self.assertRaises(OSError) as denied:
+                    with self.renamed(candidate):
+                        self.fail('Parent ancestor renamed while mkdir held its handle')
+                self.assertIn(denied.exception.winerror, (5, 32))
+                attempts.append(candidate)
+            with self.assertRaises(OSError) as denied:
+                with self.replaced_with_junction(target):
+                    self.fail('Parent replaced with junction during mkdir')
+            self.assertIn(denied.exception.winerror, (5, 32))
+            return mkdir(path, *args, **kwargs)
+        with patch('bridge.features.workspace.workspace.os.mkdir', side_effect=guarded):
+            receipt = self.workspace.mkdir('parent', '新文件夹')
+        self.assertEqual(attempts, [self.root, self.project, target])
+        self.assertEqual(receipt, {'path':str(target/'新文件夹'), 'parent':str(target), 'name':'新文件夹'})
+        self.assertTrue((target/'新文件夹').is_dir())
+        self.assertFalse((self.outside/'新文件夹').exists())
+        for candidate in (target, self.project, self.root):
+            with self.renamed(candidate):
+                pass
+
+    def test_mkdir_rejects_real_parent_and_root_ancestor_junctions_before_write(self):
+        target = self.project/'parent'; target.mkdir()
+        for candidate in (target, self.project):
+            with self.subTest(candidate=candidate), self.replaced_with_junction(candidate):
+                with patch('bridge.features.workspace.workspace.os.mkdir', side_effect=AssertionError('Unsafe mkdir')):
+                    with self.assertRaises(PermissionError):
+                        self.workspace.mkdir('parent', 'escaped')
+        container = self.root/'container'; container.mkdir()
+        nested = container/'workspace'; nested.mkdir()
+        workspace = Workspace(nested)
+        with self.replaced_with_junction(container):
+            with patch('bridge.features.workspace.workspace.os.mkdir', side_effect=AssertionError('Unsafe mkdir')):
+                with self.assertRaises(PermissionError):
+                    workspace.mkdir('', 'escaped')
+        self.assertFalse((self.outside/'escaped').exists())
+
+    def test_mkdir_share_conflict_fails_closed_and_releases_ancestor_handles(self):
+        kernel = self.kernel()
+        handle = kernel.CreateFileW(str(self.project), 0x10000, 7, None, 3, 0x02200000, None)
+        self.assertNotIn(handle, (None, ctypes.c_void_p(-1).value))
+        try:
+            with patch('bridge.features.workspace.workspace.os.mkdir', side_effect=AssertionError('Unsafe mkdir fallback')):
+                with self.assertRaises(OSError) as denied:
+                    self.workspace.mkdir('', 'child')
+                self.assertEqual(denied.exception.winerror, 32)
+        finally:
+            kernel.CloseHandle(handle)
+        with self.renamed(self.root):
+            pass
+        self.assertFalse((self.project/'child').exists())
+
+    def test_mkdir_collisions_preserve_files_directories_and_junctions_and_release_locks(self):
+        (self.project/'FILE').write_text('fixture data')
+        (self.project/'DIRECTORY').mkdir()
+        self.junction()
+        for name in ('file', 'directory', 'LINKED'):
+            with self.subTest(name=name), self.assertRaises(FileExistsError):
+                self.workspace.mkdir('', name)
+            with self.renamed(self.root):
+                pass
+        self.assertEqual((self.project/'FILE').read_text(), 'fixture data')
+        self.assertEqual(list((self.project/'DIRECTORY').iterdir()), [])
+        self.assertEqual(sorted(p.name for p in self.outside.iterdir()), ['fixture.txt'])
+
     def test_guard_locks_drive_unc_and_extended_path_ancestors_in_order(self):
         for raw in ('C:/work/project', '//server/share/work/project', '//?/C:/work/project', '//?/UNC/server/share/work/project'):
             target = PureWindowsPath(raw)

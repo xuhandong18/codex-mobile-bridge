@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 from bridge.clients.codex.desktop_tools import DesktopTools, ToolError
 from bridge.clients.desktop_app import DesktopApp
@@ -38,14 +38,44 @@ class NativeProjects:
         identifier = value.get('contextId')
         if identifier:
             row = self.bridge.store.get(identifier)
-            if row.get('origin') != 'desktop':
+            if row.get('origin') != 'desktop' or row.get('host', 'local') != 'local':
                 raise ToolError('请先选择一个本机 Codex 桌面聊天，再创建项目')
             return row['id']
         rows = self.bridge.store.list(limit=100, source='desktop')
-        row = next((r for r in rows if within(value['cwd'], r.get('cwd') or '/invalid')), None)
+        row = next((r for r in rows if r.get('origin') == 'desktop' and r.get('host', 'local') == 'local'
+                    and within(value['cwd'], r.get('cwd') or '/invalid')), None)
         if not row:
             raise ToolError('请先打开一个关联目录的本机 Codex 桌面聊天，再创建项目')
         return row['id']
+
+    @contextmanager
+    def directory_scope(self, value):
+        """Keep current native directory authorization stable until mkdir finishes."""
+        if not self.available:
+            raise ToolError('当前环境不支持本机 Codex 原生目录授权')
+        gate = getattr(self.bridge.accounts, 'gate', None)
+        if gate is None:
+            raise ToolError('无法取得账号操作锁，未创建文件夹')
+        with gate:
+            bridge = self.bridge
+            context_id = self.context({'cwd':value['parent'], **({'contextId':value['contextId']} if 'contextId' in value else {})})
+            executable = bridge.accounts.index.get('desktopExecutable') or DesktopApp.scan(bridge.catalog_reader.executable, bridge.codex_home)
+            native = DesktopTools.connect(executable, context_id,
+                {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'})
+            try:
+                hosts = native.call('list_hosts', {}).get('hosts')
+                if not isinstance(hosts, list) or any(not isinstance(h, dict) for h in hosts):
+                    raise ToolError('无法核验当前聊天的目录权限')
+                local = [h for h in hosts if h.get('hostId') == 'local']
+                roots = local[0].get('workspaceRoots') if len(local) == 1 else None
+                if not isinstance(roots, list) or any(not isinstance(root, str) or not root or not Path(root).is_absolute() for root in roots):
+                    raise ToolError('无法核验当前聊天的目录权限')
+                allowed = [canonical(root) for root in roots if within(value['parent'], root)]
+                if not allowed:
+                    raise ToolError('所选文件夹不在当前聊天已获准的目录内，请先在 Codex 桌面添加该目录')
+                yield max(allowed, key=lambda root: len(root.parts))
+            finally:
+                native.close()
 
     def __call__(self, value, progress):
         with getattr(self.bridge.accounts, 'gate', nullcontext()):

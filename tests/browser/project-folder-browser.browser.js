@@ -1,0 +1,55 @@
+// Run against an isolated gateway with D:\Workspace, 工作项目, Archive and Collision folders.
+// The driver opens openNewProject() and supplies {picker,projectDialog,pathInput,nameInput,folderName}.
+async function runProjectFolderBrowserTests(){
+  const {picker,projectDialog,pathInput,nameInput,folderName}=window.projectFolderFixture;
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  const waitFor=async test=>{for(let i=0;i<160;i++){if(test())return;await new Promise(resolve=>setTimeout(resolve,25));}throw Error('Folder browser fixture timed out');};
+  const rows=()=>[...picker.list.querySelectorAll('.pf-folder-row')];
+  await waitFor(()=>!picker.loading);
+  check(picker.dialog.open&&projectDialog.open,'Folder browsing opens above the project form');
+  check(picker.currentPath==='D:\\Workspace','The picker starts in the current project folder');
+  check(rows().length>=3,'Folders appear as named rows with icons and full paths');
+  check(picker.shortcuts.querySelectorAll('button').length>=3,'Home, computer and drive shortcuts are available');
+  const rect=picker.dialog.getBoundingClientRect();
+  check(rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,'The folder dialog fits inside the viewport');
+  check(picker.dialog.scrollHeight<=picker.dialog.clientHeight+1,'The modal keeps its header and footer visible');
+  picker.search.value='工作';picker.search.dispatchEvent(new Event('input',{bubbles:true}));
+  check(rows().length===1&&rows()[0].textContent.includes('工作项目'),'Search filters the current folder by name');
+  picker.search.value='no-such-folder';picker.search.dispatchEvent(new Event('input',{bubbles:true}));
+  check(!rows().length&&picker.list.textContent.includes('没有匹配的文件夹'),'Search has a clear empty state');
+  picker.search.value='';picker.search.dispatchEvent(new Event('input',{bubbles:true}));
+  rows().find(node=>node.textContent.includes('工作项目')).click();
+  await waitFor(()=>!picker.loading&&picker.currentPath.endsWith('工作项目'));
+  check(picker.list.textContent.includes('这个文件夹还是空的'),'Empty folders can still be selected');
+  check(!picker.selectButton.disabled,'An existing empty folder is a valid selection');
+  check(pathInput.value==='','Navigation does not change the project form');
+  picker.upButton.click();await waitFor(()=>!picker.loading&&picker.currentPath==='D:\\Workspace');
+  check(picker.breadcrumbs.textContent.includes('Workspace'),'Breadcrumb navigation preserves the current folder');
+  picker.editButton.click();picker.address.value='D:\\Missing';picker.goButton.click();
+  await waitFor(()=>!picker.loading&&picker.failed);
+  check(!!picker.error.textContent&&picker.selectButton.disabled,'Unreadable paths show an error and cannot be selected');
+  picker.editButton.click();picker.address.value='D:\\Workspace';picker.goButton.click();
+  await waitFor(()=>!picker.loading&&!picker.failed&&picker.currentPath==='D:\\Workspace');
+  picker.cancelButton.click();
+  check(pathInput.value===''&&projectDialog.open,'Cancelling browsing preserves the project form');
+  await picker.open();picker.newFolderButton.click();
+  check(!picker.createPanel.hidden&&document.activeElement===picker.folderName,'New folder opens a focused inline name field');
+  picker.folderName.value='../outside';await picker.createDirectory();
+  check(picker.createStatus.textContent.includes('单层'),'Invalid nested folder names are rejected');
+  picker.folderName.value='Collision';picker.folderName.dispatchEvent(new Event('input',{bubbles:true}));
+  await picker.createDirectory();
+  check(picker.createStatus.textContent.includes('已存在'),'An existing folder is reported without overwriting it');
+  check(!picker.createPanel.hidden&&!picker.folderName.disabled,'A failed creation leaves the name editable');
+  picker.folderName.value=folderName;picker.folderName.dispatchEvent(new Event('input',{bubbles:true}));
+  await picker.createDirectory();
+  check(picker.currentPath==='D:\\Workspace\\'+folderName,'Successful creation enters the new folder');
+  check(picker.status.textContent.includes('文件夹已创建'),'Creation completion is visible');
+  check(pathInput.value==='','Creating a folder still requires an explicit selection');
+  check(picker.dialog.scrollHeight<=picker.dialog.clientHeight+1,'Creation controls do not overflow the modal');
+  picker.selectButton.click();
+  check(!picker.dialog.open&&pathInput.value==='D:\\Workspace\\'+folderName,'Confirming fills the full folder path');
+  check(nameInput.value===folderName,'An empty project name is suggested from the chosen folder');
+  check(projectDialog.open,'Choosing a folder does not create or close the project');
+  projectDialog.close();
+  return {checks};
+}

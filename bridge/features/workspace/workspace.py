@@ -180,6 +180,64 @@ class Workspace:
             raise PermissionError('只能访问当前项目内的文件')
         return parts
 
+    @staticmethod
+    def directory_name(name):
+        # Apply the portable Win32 restrictions even on POSIX; names are never
+        # trimmed or interpreted as paths, device names or alternate streams.
+        if (not isinstance(name, str) or not name.strip() or name in ('.', '..') or name.endswith((' ', '.'))
+                or any(ord(c) < 32 or ord(c) == 127 or c in '<>:"/\\|?*' for c in name)):
+            raise ValueError('请输入有效的单层文件夹名称，不含路径或特殊字符')
+        reserved = name.split('.', 1)[0].rstrip(' ').upper()
+        if reserved in {'CON', 'PRN', 'AUX', 'NUL', 'CLOCK$', 'CONIN$', 'CONOUT$'} or re.fullmatch(r'(?:COM|LPT)[1-9¹²³]', reserved):
+            raise ValueError('文件夹名称不能使用系统保留名称')
+        try:
+            if len(name.encode('utf-8')) > 255 or len(name.encode('utf-16-le')) > 510:
+                raise ValueError('文件夹名称过长')
+        except UnicodeError:
+            raise ValueError('文件夹名称包含无效字符') from None
+        return name
+
+    @contextmanager
+    def _mkdir_directory(self, parts):
+        if os.name == 'nt':
+            with self._listing_directory(parts) as value:
+                yield value
+        elif os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd and hasattr(os, 'O_NOFOLLOW'):
+            # Walk from the filesystem anchor, including ancestors above root.
+            # Opening root by its full path could follow a replaced ancestor.
+            fd = os.open(self.root.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                for part in [*self.root.parts[1:], *parts]:
+                    nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    os.close(fd); fd = nxt
+                yield self.root.joinpath(*parts), fd
+            finally:
+                os.close(fd)
+        else:
+            raise PermissionError('当前系统无法安全创建文件夹')
+
+    def mkdir(self, path, name):
+        """Create exactly one directory under an existing, pinned parent."""
+        parts = self.parts(path)
+        name = self.directory_name(name)
+        created = False
+        try:
+            with self._mkdir_directory(parts) as (parent, fd):
+                if fd is not None:
+                    os.mkdir(name, mode=0o700, dir_fd=fd)
+                else:
+                    os.mkdir(parent / name, mode=0o700)
+                created = True
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False) if fd is not None else (parent / name).lstat()
+                if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                        or os.name == 'nt' and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                    raise PermissionError('新文件夹状态已变化，请先核对实际目录，不要重复创建')
+                return {'path':str(parent / name), 'parent':str(parent), 'name':name}
+        except Exception as exc:
+            if created:
+                exc.unknown = True
+            raise
+
     @contextmanager
     def directory(self, parts):
         # On POSIX, walk using directory handles so a renamed/replaced symlink

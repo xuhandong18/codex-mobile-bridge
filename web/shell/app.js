@@ -546,28 +546,19 @@ if(typeof bindListActions==='function')bindListActions(document.querySelector('#
 ]);
 function openNewProject(){
   const dialog=desktopSessions.dialog('新建项目'),form=el('form'),error=el('p','error');
+  dialog.classList.add('new-project-dialog');
   const field=(text,node)=>{const label=el('label','',t(text));label.append(node);form.append(label);return node;};
-  const name=field('项目名称',el('input')),path=field('关联文件夹',el('input')),section=field('所属分区',el('select'));
+  const name=field('项目名称',el('input')),path=el('input'),pathRow=field('关联文件夹',el('div','project-path-row')),section=field('所属分区',el('select'));
   name.maxLength=120;name.required=true;path.required=true;path.placeholder=t('输入此电脑上的完整文件夹路径');
   name.setAttribute('aria-label',t('项目名称'));path.setAttribute('aria-label',t('关联文件夹'));section.setAttribute('aria-label',t('所属分区'));
   section.append(new Option(t('不属于分区'),''));for(const row of sidebarData.sections||[])section.append(new Option(row.name,row.id));
-  const browse=el('button','plain',t('浏览文件夹')),folders=el('div','project-folder-browser'),folderStatus=el('p','muted');browse.type='button';form.append(browse,folderStatus,folders);
+  const browse=el('button','project-browse-button',t('浏览文件夹'));browse.type='button';pathRow.append(path,browse);
   form.append(el('p','muted',t('项目由 Codex 桌面保存。文件夹须在当前桌面聊天已获准的目录内；首次使用可能需要在电脑确认信任。')));
-  let browsing=0,busy=false,attempt=null,metadataReady=false,uncertain=false;
-  const showFolders=async directory=>{
-    const revision=++browsing;browse.disabled=true;error.textContent='';
-    try{
-      const value=await api('/api/project-directories?path='+encodeURIComponent(directory));if(revision!==browsing||!dialog.open)return;
-      folders.replaceChildren();folderStatus.textContent=value.path||t('选择文件夹');
-      if(value.path)path.value=value.path;
-      const entry=(caption,target)=>{const button=el('button','plain',caption);button.type='button';button.onclick=()=>showFolders(target);folders.append(button);};
-      if(value.parent!==null)entry(t('上一级'),value.parent);
-      for(const child of value.directories)entry(child.name,child.path);
-      if(value.path&&!value.directories.length)folders.append(el('p','muted',t('没有子文件夹，可使用当前文件夹。')));
-    }catch(failure){if(revision===browsing)error.textContent=t(failure.message);}
-    finally{if(revision===browsing)browse.disabled=false;}
-  };
-  browse.onclick=()=>showFolders(path.value.trim());
+  let busy=false,attempt=null,metadataReady=false,uncertain=false;
+  const folderBrowser=new ProjectFolderBrowser({button:browse,input:path,request:api,uuid,canCreate:()=>metadataReady&&!busy&&!uncertain,
+    context:()=>({key:chatKey()+'|'+modelCatalogGeneration,cwd:state?.cwd||'',...(currentId&&currentHost==='local'&&state?.origin==='desktop'?{contextId:currentId}:{})}),
+    onSelect:cwd=>{if(!name.value.trim())name.value=ProjectFolderBrowser.trail(cwd).at(-1)?.name||'';}});
+  browse.prepend(folderBrowser.icon('folder'));dialog.addEventListener('close',()=>{folderBrowser.close();folderBrowser.dialog?.remove();});
   const actions=el('div','actions'),submit=el('button','primary',t('创建项目')),cancel=el('button','secondary',t('取消'));
   submit.type='submit';cancel.type='button';cancel.onclick=()=>{if(!busy)dialog.close();};actions.append(submit,cancel);form.append(error,actions);
   form.onsubmit=async event=>{
@@ -576,7 +567,7 @@ function openNewProject(){
     if(currentId&&currentHost==='local'&&state?.origin==='desktop')value.contextId=currentId;
     if(!value.name||!value.cwd){error.textContent=t('请填写项目名称并选择文件夹');return;}
     if(!attempt||JSON.stringify(attempt.value)!==JSON.stringify(value))attempt={id:uuid(),value};
-    busy=true;++browsing;dialog.querySelectorAll('input,select,button').forEach(node=>node.disabled=true);error.textContent=t('正在等待 Codex 桌面创建项目，请留意电脑上的文件夹信任提示');
+    busy=true;folderBrowser.setLocked(true);dialog.querySelectorAll('input,select,button').forEach(node=>node.disabled=true);error.textContent=t('正在等待 Codex 桌面创建项目，请留意电脑上的文件夹信任提示');
     try{
       let result=await api('/api/projects',{id:attempt.id,...value});
       while(['pending','creating','assigning','verifying'].includes(result.status)){
@@ -596,7 +587,7 @@ function openNewProject(){
       for(let parent=node;parent&&parent!==$('sessions');parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
       node?.scrollIntoView({block:'nearest'});toast('项目已创建');
     }catch(failure){if(!failure.status&&!failure.nativeResult)uncertain=true;error.textContent=t(failure.message);}
-    finally{busy=false;dialog.querySelectorAll('input,select,button').forEach(node=>node.disabled=false);submit.disabled=!metadataReady||uncertain;}
+    finally{busy=false;folderBrowser.setLocked(false);dialog.querySelectorAll('input,select,button').forEach(node=>node.disabled=false);submit.disabled=!metadataReady||uncertain;}
   };
   dialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();});dialog.append(form);dialog.showModal();name.focus();
   submit.disabled=true;section.disabled=true;

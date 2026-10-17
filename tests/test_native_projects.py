@@ -89,10 +89,116 @@ class NativeProjectDelegationTests(unittest.TestCase):
         self.identifier = str(uuid.uuid4())
         self.row = {'projectId':self.identifier,'label':'Native','path':str(self.folder)}
         self.project = {'key':'local|'+self.identifier,'name':'Native','cwd':str(self.folder),'host':'local'}
-        self.bridge = SimpleNamespace(store=SimpleNamespace(list=lambda **k:[{'id':str(uuid.uuid4()),'cwd':str(self.root)}]),
+        self.bridge = SimpleNamespace(store=SimpleNamespace(list=lambda **k:[{'id':str(uuid.uuid4()), 'cwd':str(self.root), 'origin':'desktop', 'host':'local'}]),
             accounts=SimpleNamespace(index={'desktopExecutable':'Codex.exe'}),catalog_reader=SimpleNamespace(executable='runtime'),
             hosts=SimpleNamespace(projects=lambda:[{'key':'local|existing','host':'local'}],sidebar=lambda:{'sections':[], 'projects':[self.project]}))
+        self.bridge.host = 'local'
+        self.bridge.accounts.gate = threading.Lock()
         self.request = {'id':str(uuid.uuid4()),'name':'Native','cwd':str(self.folder),'sectionId':None}
+
+    def test_directory_scope_only_reads_native_roots_and_holds_account_gate(self):
+        native = Mock()
+        native.call.return_value = {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root), str(self.folder)]}]}
+        context_id = str(uuid.uuid4())
+        self.bridge.store.get = Mock(return_value={'id':context_id, 'origin':'desktop', 'host':'local'})
+        value = {'parent':str(self.folder), 'contextId':context_id}
+        with patch.object(NativeProjects, 'available', True), patch.object(DesktopTools, 'connect', return_value=native) as connect:
+            with NativeProjects(self.bridge).directory_scope(value) as root:
+                self.assertEqual(root, self.folder.resolve())
+                self.assertFalse(self.bridge.accounts.gate.acquire(blocking=False))
+                native.close.assert_not_called()
+            self.assertTrue(self.bridge.accounts.gate.acquire(blocking=False))
+            self.bridge.accounts.gate.release()
+        connect.assert_called_once_with('Codex.exe', context_id, {'existing'})
+        native.call.assert_called_once_with('list_hosts', {})
+        native.close.assert_called_once()
+
+    def test_directory_scope_gate_is_held_during_context_connect_and_live_authorization(self):
+        native = Mock()
+        def authorize(*args):
+            self.assertFalse(self.bridge.accounts.gate.acquire(blocking=False))
+            return {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)]}]}
+        native.call.side_effect = authorize
+        context_id = str(uuid.uuid4())
+        def context(**kwargs):
+            self.assertFalse(self.bridge.accounts.gate.acquire(blocking=False))
+            return [{'id':context_id, 'origin':'desktop', 'host':'local', 'cwd':str(self.root)}]
+        self.bridge.store.list = context
+        def connect(*args):
+            self.assertFalse(self.bridge.accounts.gate.acquire(blocking=False))
+            return native
+        with patch.object(NativeProjects, 'available', True), patch.object(DesktopTools, 'connect', side_effect=connect):
+            with self.assertRaisesRegex(RuntimeError, 'fixture cancellation'):
+                with NativeProjects(self.bridge).directory_scope({'parent':str(self.folder)}):
+                    raise RuntimeError('fixture cancellation')
+        native.close.assert_called_once()
+        self.assertTrue(self.bridge.accounts.gate.acquire(blocking=False))
+        self.bridge.accounts.gate.release()
+
+    def test_directory_scope_rejects_unavailable_missing_gate_and_remote_context(self):
+        creator = NativeProjects(self.bridge)
+        with patch.object(DesktopTools, 'connect') as connect:
+            with patch.object(NativeProjects, 'available', False), self.assertRaises(ToolError):
+                with creator.directory_scope({'parent':str(self.folder)}):
+                    self.fail('Unsupported platform authorized')
+            with patch.object(NativeProjects, 'available', True):
+                self.bridge.accounts.gate = None
+                with self.assertRaisesRegex(ToolError, '账号操作锁'):
+                    with creator.directory_scope({'parent':str(self.folder)}):
+                        self.fail('Missing gate authorized')
+                self.bridge.accounts.gate = threading.Lock()
+                for row in ({'id':'fixture', 'origin':'desktop', 'host':'ssh-fixture'}, {'id':'fixture', 'origin':'cli'}):
+                    self.bridge.store.get = Mock(return_value=row)
+                    with self.subTest(row=row), self.assertRaisesRegex(ToolError, '本机'):
+                        with creator.directory_scope({'parent':str(self.folder), 'contextId':str(uuid.uuid4())}):
+                            self.fail('Non-local desktop context authorized')
+            connect.assert_not_called()
+
+    def test_directory_scope_live_root_denial_and_malformed_results_never_write(self):
+        results = [
+            {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.folder/'unapproved')]}]},
+            {'hosts':[{'hostId':'ssh-fixture', 'workspaceRoots':[str(self.root)]}]},
+            {'hosts':[{'hostId':'local', 'workspaceRoots':str(self.root)}]},
+            {'hosts':[{'hostId':'local', 'workspaceRoots':['relative']}]},
+            {'hosts':[{'hostId':'local', 'workspaceRoots':[None]}]},
+            {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)]}]*2},
+            {'hosts':None}, {'hosts':[None]}, {'hosts':[]},
+        ]
+        for result in results:
+            native = Mock()
+            native.call.return_value = result
+            with self.subTest(result=result), patch.object(NativeProjects, 'available', True), \
+                    patch.object(DesktopTools, 'connect', return_value=native), self.assertRaises(ToolError):
+                with NativeProjects(self.bridge).directory_scope({'parent':str(self.folder)}):
+                    self.fail('Invalid root authorized')
+            native.call.assert_called_once_with('list_hosts', {})
+            native.close.assert_called_once()
+
+    def test_directory_worker_keeps_gate_until_mkdir_and_never_sends_project_write(self):
+        from bridge.features.workspace.workspace import Workspace
+        native = Mock()
+        native.call.return_value = {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)]}]}
+        mkdir = Workspace.mkdir
+        def guarded(workspace, path, name):
+            self.assertFalse(self.bridge.accounts.gate.acquire(blocking=False))
+            native.close.assert_not_called()
+            return mkdir(workspace, path, name)
+        creator = NativeProjects(self.bridge)
+        value = {'id':str(uuid.uuid4()), 'parent':str(self.folder), 'name':'fixture-directory'}
+        with patch.object(NativeProjects, 'available', True), patch.object(DesktopTools, 'connect', return_value=native), \
+                patch.object(Workspace, 'mkdir', new=guarded):
+            projects = Projects(self.root/'directory-data', creator)
+            projects.submit_directory(value)
+            deadline = time.monotonic()+3
+            while time.monotonic() < deadline:
+                receipt = projects.directory_operation(value['id'])
+                if receipt['status'] in ('completed', 'failed', 'unknown'):
+                    break
+                time.sleep(.01)
+            self.assertEqual(receipt['status'], 'completed', receipt)
+        native.call.assert_called_once_with('list_hosts', {})
+        native.close.assert_called_once()
+        self.assertTrue((self.folder/'fixture-directory').is_dir())
 
     @unittest.skipUnless(__import__('os').name=='nt','Windows path semantics')
     def test_extended_windows_cwd_matches_normal_native_workspace_root(self):

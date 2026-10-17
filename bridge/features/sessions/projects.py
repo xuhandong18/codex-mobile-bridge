@@ -1,11 +1,13 @@
 """Project validation and folder browsing; creation must be owned by the desktop."""
 import json
 import os
+import re
 import threading
 import uuid
 import hashlib
 from pathlib import Path
 from bridge.features.notifications.channels import read_json, write_json
+from bridge.features.workspace.workspace import Workspace
 
 
 class Projects:
@@ -18,6 +20,130 @@ class Projects:
         for operation in self.operations.values():
             if operation['status'] in ('pending','creating','assigning','verifying'):
                 operation.update(status='unknown', message='上次桌面操作中断，请检查 Codex 项目列表，不要重复创建')
+        self.directory_operations_path = Path(data_dir)/'project-directory-operations.json'
+        self.directory_operations = read_json(self.directory_operations_path, {})
+        interrupted = False
+        for operation in self.directory_operations.values():
+            if operation['status'] in ('pending', 'creating'):
+                operation.update(status='unknown', message='上次文件夹创建中断，请先核对实际目录，不要重复创建')
+                interrupted = True
+        if interrupted:
+            write_json(self.directory_operations_path, self.directory_operations)
+
+    @staticmethod
+    def _directory_receipt(operation):
+        result = {key:operation[key] for key in ('id', 'status', 'message')}
+        if 'directory' in operation:
+            result['directory'] = dict(operation['directory'])
+        return result
+
+    def directory_operation(self, identifier):
+        try:
+            identifier = str(uuid.UUID(identifier))
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('文件夹请求标识无效') from None
+        with self.lock:
+            if identifier not in self.directory_operations:
+                raise ValueError('找不到文件夹创建记录')
+            return self._directory_receipt(self.directory_operations[identifier])
+
+    @staticmethod
+    def _directory_request(value):
+        if (not isinstance(value, dict) or set(value)-{'id', 'parent', 'name', 'contextId'}
+                or not {'id', 'parent', 'name'} <= set(value)):
+            raise ValueError('新建文件夹请求无效')
+        result = dict(value)
+        for key in ('id', 'contextId'):
+            if key == 'contextId' and key not in value:
+                continue
+            try:
+                result[key] = str(uuid.UUID(value[key]))
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError('文件夹请求或桌面聊天标识无效') from None
+        parent = value['parent']
+        if (not isinstance(parent, str) or not parent.strip() or len(parent) > 4096
+                or any(ord(c) < 32 or ord(c) == 127 for c in parent)
+                or any(part in ('.', '..') for part in re.split(r'[/\\]', parent))):
+            raise ValueError('请选择已存在文件夹的完整路径，不含路径穿越')
+        path = Path(parent)
+        if not path.is_absolute():
+            raise ValueError('请使用父文件夹的完整路径')
+        if os.name == 'nt' and (parent.replace('/', '\\').startswith(('\\\\?\\', '\\\\.\\'))
+                or any(part.endswith((' ', '.')) or ':' in part for part in path.parts[1:])):
+            raise ValueError('父文件夹路径包含不支持的系统别名')
+        Workspace.directory_name(value['name'])
+        return result
+
+    def submit_directory(self, value):
+        value = self._directory_request(value)
+        identifier = value['id']
+        fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        # Directory targets have their own ledger; creating a project from this
+        # folder later must remain independent of the filesystem operation.
+        with self.lock:
+            if identifier in self.directory_operations:
+                prior = self.directory_operations[identifier]
+                if prior['fingerprint'] != fingerprint:
+                    raise ValueError('同一个文件夹创建请求不能修改内容')
+                return self._directory_receipt(prior)
+            if not self.can_create or not callable(getattr(self.native_creator, 'directory_scope', None)):
+                raise ValueError('尚未接通 Codex 桌面的原生目录授权接口，请先在桌面端创建文件夹')
+            # Resolve only the existing parent for target identity (including
+            # Windows short-name aliases). The worker still walks the original
+            # path without following links; this is not an authorization check.
+            parent = Path(value['parent']).resolve()
+            target = hashlib.sha256(os.path.normcase(str(parent / value['name'])).encode()).hexdigest()
+            if any(op.get('target') == target and op['status'] != 'failed' for op in self.directory_operations.values()):
+                raise ValueError('这个文件夹已有创建请求，请先核对实际目录，不要重复创建')
+            self.directory_operations[identifier] = {'id':identifier, 'fingerprint':fingerprint, 'target':target,
+                'status':'pending', 'message':'正在核验 Codex 桌面目录权限'}
+            # No filesystem mutation can start until the pending receipt is saved.
+            write_json(self.directory_operations_path, self.directory_operations)
+            threading.Thread(target=self._run_directory, args=(value,), daemon=True).start()
+            return self._directory_receipt(self.directory_operations[identifier])
+
+    def _directory_progress(self, identifier, status, message, directory=None):
+        with self.lock:
+            operation = self.directory_operations[identifier]
+            operation.update(status=status, message=message)
+            if directory is not None:
+                operation['directory'] = directory
+            write_json(self.directory_operations_path, self.directory_operations)
+
+    def _run_directory(self, value):
+        attempted = False
+        directory = None
+        try:
+            # NativeProjects holds accounts.gate through authorization and mkdir.
+            with self.native_creator.directory_scope(value) as root:
+                workspace = Workspace(root)
+                try:
+                    relative = Path(value['parent']).relative_to(workspace.root).as_posix()
+                except ValueError:
+                    raise PermissionError('父文件夹不在已获准的真实目录内') from None
+                if relative == '.':
+                    relative = ''
+                self._directory_progress(value['id'], 'creating', '正在创建文件夹')
+                attempted = True
+                directory = workspace.mkdir(relative, value['name'])
+                directory['parent'] = value['parent']
+            self._directory_progress(value['id'], 'completed', '文件夹已创建', directory)
+        except Exception as exc:
+            # These errors prove mkdir was refused. Other failures after entry
+            # may have happened after the write, including receipt persistence.
+            refused = isinstance(exc, (FileExistsError, FileNotFoundError, NotADirectoryError, PermissionError, ValueError))
+            unknown = directory is not None or attempted and (getattr(exc, 'unknown', False) or not refused)
+            message = ('文件夹创建结果尚未确认，请先核对实际目录，不要重复创建' if unknown else
+                       '同名文件或文件夹已存在，不会覆盖' if isinstance(exc, FileExistsError) else
+                       str(exc) or '文件夹创建失败')
+            try:
+                self._directory_progress(value['id'], 'unknown' if unknown else 'failed', message)
+            except OSError:
+                # The durable pending/creating entry also becomes unknown after
+                # restart. Do not expose a retryable result on persistence loss.
+                with self.lock:
+                    self.directory_operations[value['id']].update(status='unknown',
+                        message='文件夹回执无法保存，请先核对实际目录，不要重复创建')
 
     @property
     def can_create(self):

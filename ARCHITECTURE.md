@@ -50,6 +50,8 @@ Codex 列表下拉刷新使用浮层提示与按动画帧更新的位移，不�
 
 Windows 网页项目创建只转交 Codex 桌面的受限工具管道：`list_hosts` 检查原生目录权限、`create_project` 创建、`move_project_to_sidebar_section` 保存分区。进程路径、同 Windows 会话和当前配置的原生项目 ID 均需核验。请求 UUID 与操作回执独立保存，项目列表仍只读桌面数据；信任提示由用户在桌面确认，写结果未知不得重放。原生列表、分区及桌面持久化读回一致后才返回完成，详见 `web/README.md`。
 
+项目文件夹选择器由 `web/features/chat/project-folder-browser.*` 提供导航、搜索和显式选择。新建目录由 `features/sessions/projects.py` 保存独立幂等回执，`clients/codex/projects.py` 在账号锁内只读核验本机聊天的原生目录授权，再由 `features/workspace/workspace.py` 在固定父目录身份下执行单层 mkdir。目录写入不启动/切换聊天，不扩展通用 workspace 写接口；碰撞不覆盖，结果未知不重放。
+
 ## 新建聊天
 
 登录后的 `GET /api/projects` 返回 App 已保存的本机及 SSH 项目；`POST /api/sessions` 接受项目键、名称和请求 UUID。服务端重新解析已保存项目，不接受客户端任意目录、主机、程序路径或配置覆盖。创建接口沿用 Host、Origin、登录和 CSRF 校验。

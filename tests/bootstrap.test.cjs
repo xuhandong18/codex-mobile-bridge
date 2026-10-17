@@ -37,7 +37,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
     }});
   const run=file=>vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
   if(missing!=='bootstrap')run('web/shared/bootstrap.js');
-  const dependencies=['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/chat/session-list.js','web/features/chat/reference-picker.js','web/features/accounts/account.js','web/features/accounts/accounts.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js'];
+  const dependencies=['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/chat/session-list.js','web/features/chat/reference-picker.js','web/features/chat/project-folder-browser.js','web/features/accounts/account.js','web/features/accounts/accounts.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js'];
   for(const file of dependencies){if(file.endsWith('/'+missing+'.js'))continue;run(file);}
   try{run('web/shell/app.js');}catch(e){error=e;dispatch('error',{target:window,message:e.message});}
   await new Promise(setImmediate);

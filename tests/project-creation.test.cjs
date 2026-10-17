@@ -5,14 +5,15 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 function fixture(responses){
   const nodes=[],timers=[],requests=[],toasts=[];
   const node=tag=>{
-    const n={tagName:tag.toUpperCase(),children:[],textContent:'',value:'',disabled:false,open:false,
-      append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},setAttribute(){},
-      addEventListener(){},focus(){},showModal(){this.open=true;},close(){this.open=false;},
+    const n={tagName:tag.toUpperCase(),children:[],dataset:{},textContent:'',value:'',disabled:false,open:false,
+      classList:{add(){}},append(...children){this.children.push(...children);},prepend(...children){this.children.unshift(...children);},replaceChildren(...children){this.children=children;},setAttribute(){},
+      addEventListener(){},dispatchEvent(){},focus(){},select(){},showModal(){this.open=true;},close(){this.open=false;},
       querySelectorAll(){return nodes.filter(n=>['INPUT','SELECT','BUTTON'].includes(n.tagName));}};
     nodes.push(n);return n;
   };
   const dialog=node('dialog'),list={querySelectorAll:()=>[]},controls={'list-mode':node('select'),search:node('input'),archived:node('input'),sessions:list};
-  const context=vm.createContext({desktopSessions:{dialog:()=>dialog},el:(tag,cls,text)=>Object.assign(node(tag),{textContent:text||''}),
+  const document={body:node('body'),createElement:node,createElementNS:(namespace,tag)=>Object.assign(node(tag),{namespaceURI:namespace})};
+  const context=vm.createContext({document,BridgeI18n:{t:s=>s},desktopSessions:{dialog:()=>dialog},el:(tag,cls,text)=>Object.assign(node(tag),{textContent:text||''}),
     t:s=>s,Option:function(text,value){return {text,value};},sidebarData:{sections:[]},
     currentId:null,currentHost:'local',state:null,listSource:'all',uuid:()=> 'request-uuid',
     $:id=>controls[id],loadList:async()=>{},toast:s=>toasts.push(s),
@@ -23,6 +24,7 @@ function fixture(responses){
     }});
   const source=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');
   const start=source.indexOf('function openNewProject(){'),end=source.indexOf('let applyingNewChat=',start);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/features/chat/project-folder-browser.js'),'utf8'),context);
   vm.runInContext(source.slice(start,end)+'\nopenNewProject();',context);
   const form=nodes.find(n=>n.tagName==='FORM'),inputs=nodes.filter(n=>n.tagName==='INPUT').slice(-2),submit=nodes.find(n=>n.textContent==='创建项目');
   inputs[0].value='Native';inputs[1].value='D:/workspace/child';
