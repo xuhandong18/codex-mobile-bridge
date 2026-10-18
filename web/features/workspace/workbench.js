@@ -478,19 +478,37 @@ class Workbench {
     const existing = session.files.find(t => t.id === id);
     if (existing) { if (fragment !== undefined) existing.fragment = fragment; this.select(id); return; }
     if (session.files.filter(t => t.id.startsWith('file:')).length >= 8) { this.notify(BridgeI18n.t('最多同时打开 8 个文件，请先关闭一个标签')); return; }
-    const tab = {id, name: entry.name, body: this.node('div', 'wb-preview'), controller: new AbortController(), fragment}; session.files.push(tab);
+    const tab = {id, name: entry.name || entry.path.split('/').pop(), entry, body: this.node('div', 'wb-preview'), fragment}; session.files.push(tab);
     tab.body.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取文件…'))); this.select(id);
+    return this.refreshPreview(session, tab);
+  }
+  async refreshPreview(session, tab) {
+    if (session !== this.current || this.sessions.get(session.key) !== session || !session.files.includes(tab) || tab.loading) return;
+    const entry = tab.entry, controller = tab.controller = new AbortController();
+    tab.loading = true; tab.body.setAttribute('aria-busy', 'true');
+    if (tab.refreshButton) tab.refreshButton.disabled = true;
+    tab.previewError?.remove(); tab.previewError = null;
+    const valid = () => !controller.signal.aborted && this.sessions.get(session.key) === session && session.files.includes(tab);
     try {
-      const pdf = /\.pdf$/i.test(entry.name);
+      const pdf = /\.pdf$/i.test(tab.name);
       const downloadUrl = this.url(session, 'download', entry.path);
       const result = pdf
-        ? {...await this.request(downloadUrl + '&info=1', undefined, tab.controller.signal), kind:'pdf'}
-        : await this.request(this.url(session, 'preview', entry.path), undefined, tab.controller.signal);
-      if (tab.controller.signal.aborted || !this.sessions.has(session.key) || !session.files.includes(tab)) return;
+        ? {...await this.request(downloadUrl + '&info=1', undefined, controller.signal), kind:'pdf'}
+        : await this.request(this.url(session, 'preview', entry.path), undefined, controller.signal);
+      if (!valid()) return;
+      const previous = tab.previewContent, position = {top:previous?.isConnected ? previous.scrollTop : this.scrollPositions?.get(previous) || previous?.scrollTop || 0, left:previous?.scrollLeft || 0};
+      const previousSource = previous?.querySelector?.('.wb-source-body');
+      const sourcePosition = {top:previousSource?.scrollTop || 0, left:previousSource?.scrollLeft || 0};
+      const wrapped = previous?.querySelector?.('.wb-source')?.dataset.wrap === 'true';
+      const restoreFocus = !!tab.refreshButton && document.activeElement === tab.refreshButton;
+      if (this.current === session) this.fileSelection?.close();
+      tab.pdf?.dispose(); tab.html?.dispose(); tab.pdf = tab.html = tab.markdown = null;
       const head = this.node('div', 'wb-preview-head'), title = this.node('div', 'wb-preview-title'), actions = this.node('div', 'wb-preview-actions');
       title.append(this.raw(this.node('strong', '', result.name)), this.node('small', '', this.size(result.size) + ' · ' + entry.path));
       head.append(title, actions);
       { const download = this.node('a', 'wb-download', '下载'); download.href = pdf && result.size > result.clickDownloadMiB * 1024 * 1024 ? downloadUrl + '&explicit=1' : downloadUrl; download.download = result.name; download.dataset.i18nAriaLabel = '下载文件'; download.setAttribute('aria-label', BridgeI18n.t('下载文件')); actions.append(download); }
+      const refresh = tab.refreshButton ||= this.button('刷新', () => this.refreshPreview(session, tab));
+      refresh.className = 'wb-preview-refresh'; refresh.disabled = true; actions.append(refresh);
       const content = this.node('div', 'wb-preview-content');
       let modes = null, copyAction = null;
       if (result.kind === 'pdf') {
@@ -516,6 +534,7 @@ class Workbench {
           preview.className = source.className = 'wb-preview-mode'; copy.className = 'wb-source-copy';
           modes.append(preview, source); copyAction = copy;
           const show = mode => {
+            tab.htmlMode = mode;
             tab.html?.dispose(); tab.html = null;
             preview.setAttribute('aria-pressed', String(mode === 'preview'));
             source.setAttribute('aria-pressed', String(mode === 'source'));
@@ -523,7 +542,7 @@ class Workbench {
             if (mode === 'preview') { tab.html = BridgeHtmlPreview.create({text:result.text, onEscape:() => { if (this.previewFullscreen?.tab === tab) this.closePreviewFullscreen(); }}); content.replaceChildren(tab.html.element); }
             else content.replaceChildren(BridgeSourceView.create({name:result.name, text:result.text}));
           };
-          show('preview');
+          show(tab.htmlMode || 'preview');
         }
         else {
           const copy = this.button('复制', () => window.BridgeClipboard.copy(() => result.text, copy), '复制代码');
@@ -531,17 +550,33 @@ class Workbench {
           content.append(BridgeSourceView.create({name:result.name, text:result.text}));
         }
       } else content.append(this.node('p', 'wb-empty', BridgeI18n.t(result.size > 512 * 1024 ? '文件超过 512 KB，无法在线预览。可下载后打开。' : '此文件不是 UTF-8 文本或可预览图片，可下载后打开。')));
-      if (['pdf','image','text'].includes(result.kind)) {
-        const fullscreen = this.button('全屏', () => this.previewFullscreen?.tab === tab ? this.closePreviewFullscreen() : this.openPreviewFullscreen(session, tab, content, fullscreen), '全屏预览');
+      if (['pdf','image','text'].includes(result.kind) || this.previewFullscreen?.tab === tab) {
+        const fullscreen = tab.fullscreenButton ||= this.button('全屏', () => this.previewFullscreen?.tab === tab ? this.closePreviewFullscreen() : this.openPreviewFullscreen(session, tab, tab.previewContent, tab.fullscreenButton), '全屏预览');
         fullscreen.className = 'wb-preview-expand'; actions.append(fullscreen);
+        if (this.previewFullscreen?.tab === tab) this.previewFullscreenLabel(fullscreen, true);
       }
       if (copyAction) actions.append(copyAction);
+      tab.previewContent = content;
       tab.body.replaceChildren(...(modes ? [head, modes, content] : [head, content]));
+      content.scrollTop = position.top; content.scrollLeft = position.left; this.scrollPositions?.set(content, content.isConnected ? content.scrollTop : position.top);
+      if (wrapped) content.querySelector?.('.wb-source-wrap')?.click();
+      const sourceBody = content.querySelector?.('.wb-source-body');
+      if (sourceBody) { sourceBody.scrollTop = sourcePosition.top; sourceBody.scrollLeft = sourcePosition.left; }
       if(result.kind==='text'||result.kind==='pdf'){tab.filePath=entry.path;this.fileSelection?.bindPreview(session,tab,actions);}
       if(this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===tab)this.syncPreviewFullscreen(tab);
       this.scrollMarkdown(tab);
       if (tab.pdf) tab.pdf.load();
-    } catch (error) { if (error.name !== 'AbortError') tab.body.replaceChildren(this.node('p', 'wb-status error', error.message), this.button(BridgeI18n.t('重试'), () => { this.close(id); this.preview(session, entry, tab.fragment); })); }
+      if (restoreFocus && this.isVisible(session, tab)) refresh.focus({preventScroll:true});
+    } catch (error) {
+      if (error.name !== 'AbortError' && valid()) {
+        const failure = tab.previewError = this.node('div', 'wb-preview-error'); failure.setAttribute('role', 'alert');
+        failure.append(this.node('p', 'wb-status error', error.message), this.button('重试', () => this.refreshPreview(session, tab)));
+        if (tab.previewContent) tab.body.append(failure); else tab.body.replaceChildren(failure);
+      }
+    } finally {
+      tab.loading = false; tab.body.setAttribute('aria-busy', 'false');
+      if (tab.refreshButton) tab.refreshButton.disabled = false;
+    }
   }
   uploadDialog(session, tab, directory) {
     const dialog = this.node('dialog', 'picker wb-upload'), form = this.node('form');

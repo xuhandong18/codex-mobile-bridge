@@ -123,7 +123,7 @@ test('file preview copies the original source rather than rendered tokens or lin
   assert.equal(parts(content.children[0]).code.textContent, original);
   assert.equal(head.children[0].className, 'wb-preview-title');
   assert.equal(head.children[1].className, 'wb-preview-actions');
-  assert.deepEqual(head.children[1].children.map(child=>child.className), ['wb-download','wb-preview-expand','wb-source-copy']);
+  assert.deepEqual(head.children[1].children.map(child=>child.className), ['wb-download','wb-preview-refresh','wb-preview-expand','wb-source-copy']);
   const copy = tokens(head).find(child=>child.className==='wb-source-copy');
   assert.ok(copy);
   await copy.onclick();
@@ -145,7 +145,7 @@ test('HTML preview keeps mode controls separate and its Escape signal exits only
   await workbench.preview(session, {name:'index.html', path:'index.html'});
   const tab = session.files[0], [head,modes,content] = tab.body.children;
   assert.equal(modes.className, 'wb-preview-modes');
-  assert.deepEqual(head.children[1].children.map(child=>child.className), ['wb-download','wb-preview-expand','wb-source-copy']);
+  assert.deepEqual(head.children[1].children.map(child=>child.className), ['wb-download','wb-preview-refresh','wb-preview-expand','wb-source-copy']);
   assert.equal(content.children[0].tagName, 'iframe');
   options.onEscape(); assert.equal(exits, 0);
   workbench.previewFullscreen = {tab}; options.onEscape(); assert.equal(exits, 1);
