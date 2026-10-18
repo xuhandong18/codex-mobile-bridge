@@ -279,7 +279,17 @@ public final class MainActivity extends Activity {
    final boolean saved=ok;runOnUiThread(()->{savingDownload=false;if(isFinishing()||isDestroyed())return;if(task==downloadTask){if(saved)cancelDownload();else renderDownload();Toast.makeText(this,L(saved?"文件已保存":"保存失败，请重试"),Toast.LENGTH_LONG).show();}else renderDownload();});
   });
  }
- boolean openIntent(Intent intent){try{String base=intent.getStringExtra("origin"),thread=intent.getStringExtra("thread"),host=intent.getStringExtra("host");Uri link=intent.getData();if(link!=null){if(!"codexbridge".equals(link.getScheme())||!"open".equals(link.getHost()))return false;base=link.getQueryParameter("origin");thread=link.getQueryParameter("thread");host=link.getQueryParameter("host");}if(base==null)return false;if(!saved().contains(base)){message(L("请先扫码保存通知对应的电脑，再打开聊天。"));return false;}connect(thread==null||thread.isEmpty()?base+"/":GatewayURL.chat(base,thread,host==null?"local":host));return true;}catch(Exception e){message(L("通知链接无效"));return false;}}
+ boolean openIntent(Intent intent){try{
+  String base=intent.getStringExtra("origin"),thread=intent.getStringExtra("thread"),host=intent.getStringExtra("host");Uri link=intent.getData();
+  if(link!=null){if(!"codexbridge".equals(link.getScheme())||!"open".equals(link.getHost()))return false;base=link.getQueryParameter("origin");thread=link.getQueryParameter("thread");host=link.getQueryParameter("host");}
+  if(base==null)return false;if(!saved().contains(base)){message(L("请先扫码保存通知对应的电脑，再打开聊天。"));return false;}
+  String target=thread==null||thread.isEmpty()?base+"/":GatewayURL.chat(base,thread,host==null?"local":host);
+  if(thread!=null&&!thread.isEmpty()&&web!=null&&base.equals(origin)&&GatewayURL.sameOrigin(web.getUrl(),base)){
+   resetExitGesture();String hash="#"+Uri.parse(target).getEncodedFragment();
+   web.evaluateJavascript("(()=>{const hash="+JSONObject.quote(hash)+";if(window.BridgeNavigation?.openChat){window.BridgeNavigation.openChat(hash);return;}location.hash=hash;})()",null);
+  }else connect(target);
+  return true;
+ }catch(Exception e){message(L("通知链接无效"));return false;}}
  @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);openIntent(intent);}
  Dialog panel(String title,LinearLayout content){
   resetExitGesture();
@@ -305,10 +315,10 @@ public final class MainActivity extends Activity {
    String clearKey="cleared:"+base+":"+data.optString("streamId");long cleared=prefs.getLong(clearKey,0);JSONArray events=new JSONArray();JSONArray all=data.optJSONArray("events");if(all!=null)for(int n=0;n<all.length();n++){JSONObject e=all.optJSONObject(n);if(e!=null&&e.optLong("sequence")>cleared)events.put(e);}
    if(events.length()>0)add(button(L("清空通知"),()->clearInbox(base,data,()->{prefs.edit().putLong(clearKey,data.optLong("cursor")).apply();renderComputerNotifications();android.app.NotificationManager nm=(android.app.NotificationManager)getSystemService(NOTIFICATION_SERVICE);Set<String> tags=new HashSet<>();if(all!=null)for(int n=0;n<all.length();n++){JSONObject e=all.optJSONObject(n);if(e!=null&&e.optLong("sequence")<=data.optLong("cursor"))tags.add(e.optString("id"));}for(android.service.notification.StatusBarNotification note:nm.getActiveNotifications()){Bundle extra=note.getNotification().extras;String prefix="bridge|"+base+"|";boolean remote=false;if(note.getTag()!=null&&note.getTag().startsWith(prefix)){try{remote=Long.parseLong(note.getTag().substring(prefix.length()))<=data.optLong("cursor");}catch(NumberFormatException ignored){}}if(remote||tags.contains(note.getTag())||(base.equals(extra.getString("bridgeOrigin"))&&extra.getLong("bridgeSequence",0)<=data.optLong("cursor")))nm.cancel(note.getTag(),note.getId());}dialog.dismiss();inbox();})),content,12);
    if(events.length()==0){LinearLayout empty=card();add(text(L("暂无通知"),18),empty,8);add(text(L("在聊天中开启“提醒”，任务完成或需要你处理时，会记录在这里。"),14),empty,0);add(empty,content,12);return;}
-   for(int i=events.length()-1;i>=0;i--){JSONObject event=events.optJSONObject(i);if(event==null)continue;LinearLayout item=card();TextView title=text(event.optString("title",L("任务提醒")),17);title.setTypeface(null,android.graphics.Typeface.BOLD);add(title,item,8);
+   for(int i=events.length()-1;i>=0;i--){JSONObject event=events.optJSONObject(i);if(event==null)continue;LinearLayout item=card();TextView title=text(event.optString("androidTitle",event.optString("title",L("任务提醒"))),17);title.setTypeface(null,android.graphics.Typeface.BOLD);add(title,item,8);
     if(!event.optString("body").isEmpty())add(text(event.optString("body"),14),item,8);
     if(event.has("createdAt")){TextView time=text(java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(new Date((long)(event.optDouble("createdAt")*1000))),12);time.setTextColor(0xff777b80);add(time,item,8);}
-    add(button(L("查看聊天  ↗"),()->{try{String target=GatewayURL.chat(base,event.getString("threadId"),event.getString("host"));dialog.dismiss();connect(target);}catch(Exception e){message(L("聊天链接无效"));}}),item,0);add(item,content,12);
+    add(button(L("查看聊天  ↗"),()->{try{Intent target=new Intent().putExtra("origin",base).putExtra("thread",event.getString("threadId")).putExtra("host",event.getString("host"));dialog.dismiss();openIntent(target);}catch(Exception e){message(L("聊天链接无效"));}}),item,0);add(item,content,12);
    }
   });}catch(Exception e){runOnUiThread(()->{if(ticket==generation){status.setVisibility(View.GONE);message(e.getMessage());}});}});
  }

@@ -6,6 +6,7 @@ import re
 import threading
 import time
 import uuid
+import unicodedata
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
@@ -13,6 +14,22 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPSHand
 
 from bridge.features.sessions.model import pending_requests, ordered_turns
 from bridge.features.auth.tls import client_context
+
+
+def android_notification_title(title, completed):
+    """Reserve room for the full state in a compact, single-line phone heading."""
+    suffix = ' · ' + ('已完成' if completed else '待确认')
+    text = ' '.join(str(title or '').split()) or '聊天'
+    width = lambda value: sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in value)
+    budget = 28 - width(suffix)
+    if width(text) > budget:
+        short = ''
+        for char in text:
+            if width(short + char + '…') > budget:
+                break
+            short += char
+        text = short.rstrip() + '…'
+    return text + suffix
 
 DEFAULTS = {'enabled': False, 'server': 'https://ntfy.sh', 'topic': '', 'token': '',
             'barkEnabled': False, 'barkServer': 'https://api.day.app', 'barkKey': '',
@@ -483,7 +500,8 @@ class Notifications:
             body = title[:120] + '\n' + body
         try:
             if channel == 'mobile':
-                self.mobile.append(pending, row, heading, body, completed)
+                self.mobile.append(pending, row, heading, body, completed,
+                                   android_title=android_notification_title(title, completed))
             else:
                 sender = {'ntfy': publish, 'bark': publish_bark, 'pushplus': publish_pushplus}[channel]
                 sender(config, heading, body, self.click_url(config, row['id'], row['host']))

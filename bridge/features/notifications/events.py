@@ -29,7 +29,7 @@ class MobileEvents:
         # Keep unread counts independent of the bounded inbox body history.
         return {key: event[key] for key in ('sequence', 'host', 'threadId', 'kind')}
 
-    def append(self, keys, row, title, body, completed):
+    def append(self, keys, row, title, body, completed, *, android_title=None):
         identity = hashlib.sha256('\n'.join(sorted(keys)).encode()).hexdigest()
         with self.lock:
             if any(event['id'] == identity for event in self.value['events']):
@@ -39,6 +39,8 @@ class MobileEvents:
             event = {'id': identity, 'sequence': cursor, 'threadId': row['id'], 'host': row['host'],
                      'kind': 'completion' if completed else 'request', 'title': title, 'body': body,
                      'createdAt': time.time()}
+            if android_title:
+                event['androidTitle'] = android_title
             updated = {**before, 'cursor': cursor, 'events': (before['events'] + [event])[-self.LIMIT:],
                        'pending': before['pending'] + [self.metadata(event)]}
             write_json(self.path, updated)

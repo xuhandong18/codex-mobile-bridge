@@ -212,7 +212,7 @@ class ClientNavigation {
   visibleClients(){return this.clients.filter(client=>client.enabled&&this.preference('switch:'+client.id));}
   icon(id){const n=document.createElement('span');n.className='client-icon client-'+id;n.setAttribute('aria-hidden','true');const img=document.createElement('img');img.src='/client-icons/'+id+'.png';img.alt='';n.append(img);return n;}
   applyClients(data){
-    this.clients=data.clients;this.gatewayRunning=data.gatewayRunning??this.gatewayRunning;
+    this.clients=data.clients;this.statusLoaded=true;this.gatewayRunning=data.gatewayRunning??this.gatewayRunning;
     this.windowsSession=data.windowsSession??this.windowsSession;
     this.syncViewClients();
     if(data.computer){this.computer.dataset.deviceName=data.computer;this.computerName.textContent=data.computer;document.dispatchEvent(new Event('bridge-computer'));}
@@ -224,7 +224,7 @@ class ClientNavigation {
   async refresh(){
     if(this.loading||this.pending.size||this.choosing||document.getElementById('app').hidden)return;
     this.loading=true;const revision=this.revision;
-    try{const data=await ClientLifecycle.request(signal=>this.request('/api/clients',undefined,signal),{timeout:this.statusTimeout??10000,uncertain:false,message:'客户端状态读取超时，请重试。'});if(revision===this.revision){this.statusPending=data.pending===true;if(data.refreshError)throw Error(data.refreshError);if(!this.statusPending){ClientLifecycle.reconcile(this.operationFailures,data.clients);this.applyClients(data);}}}
+    try{const data=await ClientLifecycle.request(signal=>this.request('/api/clients',undefined,signal),{timeout:this.statusTimeout??10000,uncertain:false,message:'客户端状态读取超时，请重试。'});if(revision===this.revision){this.statusPending=data.pending===true;if(data.refreshError)throw Error(data.refreshError);if(!this.statusPending){ClientLifecycle.reconcile(this.operationFailures,data.clients);const link=this.pendingChatLink;this.pendingChatLink=null;this.applyClients(data);if(link)await this.openChatLink(link.hash,link.openCodex);}}}
     catch(error){this.notify(error.message);}finally{this.loading=false;this.paint();}
   }
   poll(fast=false){
@@ -236,6 +236,7 @@ class ClientNavigation {
   syncViewClients(){this.view.setClientStates?.(this.clients.map(client=>({...client,operationFailure:this.operationFailures?.get(client.id),operationUncertain:this.hasUncertain(),pendingEnable:this.gatewayRunning!==false&&this.pending.has(client.id)&&client.enabled})),id=>this.toggle(id,true),id=>this.initialize(id),()=>this.refresh(),id=>this.reconnect(id));}
   retryOperation(id){const failure=this.operationFailures?.get(id);if(!failure||this.hasUncertain())return;return failure.action==='initialize'?this.initialize(id):this.toggle(id,failure.action==='enable');}
   async choose(id){
+    this.cancelChatLink();
     this.cancelListSwipe();
     if(id===this.provider&&this.view.provider===(id||'codex'))return;
     const restoreCodex=id==='codex'&&this.provider===null&&this.view.provider==='codex'&&!this.pending.has('codex');
@@ -259,11 +260,14 @@ class ClientNavigation {
       return {provider:'codex',id,host};
     }catch{return null;}
   }
+  cancelChatLink(){this.pendingChatLink=null;this.chatLinkRequest=(this.chatLinkRequest||0)+1;}
   async openChatLink(hash,openCodex){
     const target=this.chatTarget(hash);if(!target)return false;
+    this.cancelChatLink();
+    if(this.statusPending||!this.clients.length&&!this.statusLoaded){this.pendingChatLink={hash,openCodex};return true;}
     if(!this.clients.some(client=>client.id===target.provider&&client.enabled)){this.notify('尚未启用应用，请打开应用管理。');return true;}
-    const ready=this.choose(target.provider),generation=this.view.generation;await ready;
-    if(this.provider!==target.provider||generation!==this.view.generation)return true;
+    const ready=this.choose(target.provider),generation=this.view.generation,request=this.chatLinkRequest;await ready;
+    if(request!==this.chatLinkRequest||this.provider!==target.provider||generation!==this.view.generation)return true;
     if(target.provider==='codex')await openCodex(target.id,target.host);else await this.view.open(target.id);
     return true;
   }

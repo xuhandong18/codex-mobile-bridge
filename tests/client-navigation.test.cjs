@@ -145,9 +145,34 @@ test('notification routing rejects malformed targets and never enables a disable
   nav.clients.find(c=>c.id==='claude').enabled=false;
   assert.equal(await nav.openChatLink('#chat~desktop%3Aclaude',()=>{}),true);assert.equal(notices.length,1);assert.equal(nav.clients.find(c=>c.id==='claude').enabled,false);
 });
+
+test('notification waits for pending discovery instead of claiming the app is disabled',async()=>{
+ const {nav}=fixture(),notices=[],opened=[];nav.clients=[];nav.statusPending=true;nav.notify=text=>notices.push(text);nav.view.open=async id=>opened.push(id);
+ nav.request=async()=>({pending:false,clients:[{id:'claude',enabled:true,configured:true}]});
+ await nav.openChatLink('#chat~desktop%3Aclaude',()=>{});assert.deepEqual(notices,[]);assert.deepEqual(opened,[]);
+ await nav.refresh();await new Promise(setImmediate);assert.deepEqual(opened,['chat']);assert.deepEqual(notices,[]);
+});
+
+test('a newer notification or an explicit client switch supersedes a pending notification',async()=>{
+ for(const switched of [false,true]){
+  const {nav}=fixture(),opened=[];nav.clients=[];nav.statusPending=true;nav.view.open=async id=>opened.push(id);
+  await nav.openChatLink('#older~desktop%3Aclaude',()=>{});await nav.openChatLink('#newer~desktop%3Aclaude',()=>{});
+  if(switched)await nav.choose('deepseek');
+  nav.request=async()=>({clients:[{id:'claude',enabled:true,configured:true},{id:'deepseek',enabled:true,configured:true}]});await nav.refresh();await new Promise(setImmediate);
+  assert.deepEqual(opened,switched?[]:['newer']);
+ }
+});
 test('a slow notification link cannot reopen a chat after the user switches clients',async()=>{
   const {nav}=fixture();nav.provider=nav.view.provider='codex';let finish;nav.view.generation=0;nav.view.choose=function(id){this.provider=id;this.generation++;return id==='claude'?new Promise(resolve=>finish=resolve):Promise.resolve();};nav.view.open=async()=>{throw Error('stale notification opened');};
   const opening=nav.openChatLink('#chat~desktop%3Aclaude',()=>{});await nav.choose('deepseek');finish();await opening;assert.equal(nav.provider,'deepseek');
+});
+
+test('a slow notification cannot replace a newer notification for the same provider',async()=>{
+ const {nav}=fixture(),opened=[];nav.provider=nav.view.provider='codex';let finish;nav.view.generation=0;
+ nav.view.choose=async function(id){this.provider=id;this.generation++;if(id==='claude')await new Promise(resolve=>finish=resolve);};
+ nav.view.open=async id=>opened.push(id);
+ const older=nav.openChatLink('#older~desktop%3Aclaude',()=>{});await nav.openChatLink('#newer~desktop%3Aclaude',()=>{});finish();await older;
+ assert.deepEqual(opened,['newer']);
 });
 
 test('client preferences and observed runtime remain separate during a pending operation',async()=>{

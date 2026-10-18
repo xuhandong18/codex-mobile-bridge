@@ -52,7 +52,7 @@ class MobileEventTests(unittest.TestCase):
         self.assertNotIn(THREAD, json.dumps(value['summary']))
         self.assertEqual(MobileEvents(self.path).read(999)['summary'], value['summary'])
 
-    def test_inbox_delivery_preserves_global_policy_and_hides_private_title(self):
+    def test_inbox_delivery_preserves_global_policy_and_adds_compact_android_heading(self):
         manager = Notifications(None, self.path, lambda: ['https://gateway.example'])
         config = save_settings(self.path, {'mobileEnabled': True})
         row = {'id': THREAD, 'host': 'local'}
@@ -61,7 +61,10 @@ class MobileEventTests(unittest.TestCase):
         target = manager._targets(config)['mobile']
         key = manager._delivery_key(row, 'request', target=target)
         self.assertTrue(manager._send_keys(config, row, 'SECRET CHAT TITLE', 'mobile', target, [key], False))
-        self.assertNotIn('SECRET', json.dumps(manager.mobile.read()))
+        event = manager.mobile.read()['events'][0]
+        self.assertEqual(event['androidTitle'], 'SECRET CHAT TITLE · 待确认')
+        self.assertNotIn('SECRET', event['title'] + event['body'])
+        self.assertNotIn('SECRET', json.dumps(manager.mobile.read()['summary']))
         self.assertFalse(manager._send_keys(config, row, 'SECRET CHAT TITLE', 'mobile', target, [key], False))
         manager.policy(THREAD, 'local', {'requests': 'off', 'completion': 'off'})
         self.assertFalse(manager._send_keys(config, row, '', 'mobile', target, ['new'], False))

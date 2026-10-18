@@ -22,7 +22,7 @@
   "/fast-mode.js": "features/chat/fast-mode.js",
   "/list-sync.js": "features/chat/list-sync.js",
   "/message-actions.js": "features/chat/message-actions.js",
-  "/modes.js": "features/chat/modes.js",
+  "/modes.js": ["features/chat/composer-drafts.js", "features/chat/modes.js"],
   "/permissions.js": "features/chat/permissions.js",
   "/timeline.js": "features/chat/timeline.js",
   "/account.css": "features/accounts/account.css",

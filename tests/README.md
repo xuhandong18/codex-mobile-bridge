@@ -52,6 +52,8 @@ npm run test:updater
 
 `mobile/tests/` 中 Java/Swift 用例由相应 `scripts/test-mobile-*`、`scripts/test-ios-*` 驱动，可能编译测试程序；只在本次任务允许且环境具备时执行。Web 资源验证不代替 Android WebView 或 iOS WKWebView 的原生交互验证。
 
+Android 通知点击回归为 `python -B scripts/test-android-notification-navigation.py`：使用 JDK 编译实际 Intent 处理方法，替换系统界面，检查同电脑复用 WebView、跨电脑跳转以及配对和来源限制，不构建或安装 APK。普通聊天输入草稿的真实浏览器回归为 `node scripts/test-composer-drafts-browser.cjs`，使用 Playwright/Chromium 和合成 API，覆盖手机/平板上的通知跳转、页面重建、三种客户端的草稿恢复及发送后清理。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定已有运行时。
+
 `scripts/gateway-resources.json` 与源路径测试保证清单一致，但冻结导入、签名、安装和更新必须在获准打包后、目标系统上另外验证。不要根据 macOS 单机测试宣称 Windows/Linux 已实机通过。
 
 交互问题草稿的后端验证为 `python -B scripts/test-backend.py --source-only -p test_answer_drafts.py`，浏览器验证为 `node scripts/test-answer-drafts-browser.cjs`。后者使用独立手机/平板上下文、真实 DOM 和合成草稿服务，检查页面重建、跨设备恢复、并发冲突及断线核对；需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定测试运行时。详见 [答案草稿说明](../docs/answer-drafts.md)。

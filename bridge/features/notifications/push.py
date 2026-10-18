@@ -144,11 +144,12 @@ def payload(device, event):
     route = {'origin': device['origin'], 'thread': event['threadId'], 'host': event['host'],
              'provider': provider,
              'sequence': str(event['sequence']), 'streamId': event.get('streamId', '')}
-    # Push carries generic state only. Full inbox content stays behind gateway authentication.
+    # Android may include its compact chat heading. Full message bodies stay behind gateway authentication.
     title = '本轮已结束' if event['kind'] == 'completion' else '有任务等待你确认'
     client = {'claude': 'Claude', 'deepseek': 'DeepSeek Harness', 'codex': 'Codex'}[provider]
     heading = client + ' · Codex Bridge'
     if device['kind'] == 'fcm':
+        heading = event.get('androidTitle') or heading
         if device.get('sourceIcon'):
             return {'message': {'token': device['token'], 'data': {**route, 'title': heading, 'body': title},
                                 'android': {'priority': 'high', 'ttl': '3600s'}}}

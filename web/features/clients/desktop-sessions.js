@@ -1,8 +1,8 @@
 'use strict';
 // Desktop providers use the same conversation, composer and workspace presentation as Codex.
 class DesktopSessionsView {
-  constructor({root,select,request,notify,onSelect,csrf,onUnauthorized}) {
-    Object.assign(this,{root,select,request,notify,onSelect,csrf,onUnauthorized});this.provider='codex';this.generation=0;this.detailRevision=0;this.drafts=new Map();this.accountDrafts=new Map();this.pending=new Map();this.sendChoices=new Map();this.rows=[];this.messageNodes=new Map();this.providerViews=new Map();this.detailCache=new Map();this.activity=new SessionActivity({key:'bridge-desktop-session-activity'});try{this.collapsedGroups=new Set(JSON.parse(localStorage.getItem('bridge-desktop-session-groups')||'[]'));}catch{this.collapsedGroups=new Set();}
+  constructor({root,select,request,notify,onSelect,csrf,onUnauthorized,drafts=new Map()}) {
+    Object.assign(this,{root,select,request,notify,onSelect,csrf,onUnauthorized});this.provider='codex';this.generation=0;this.detailRevision=0;this.drafts=drafts;this.accountDrafts=new Map();this.pending=new Map();this.sendChoices=new Map();this.rows=[];this.messageNodes=new Map();this.providerViews=new Map();this.detailCache=new Map();this.activity=new SessionActivity({key:'bridge-desktop-session-activity'});try{this.collapsedGroups=new Set(JSON.parse(localStorage.getItem('bridge-desktop-session-groups')||'[]'));}catch{this.collapsedGroups=new Set();}
     this.readTasks=new Map();this.readEpoch=0;this.providerReadEpochs=new Map();this.accountEpochs=new Map();this.listPrefetchAt=new Map();this.detailCacheSizes=new Map();this.detailCacheBytes=0;
     this.container=this.node('section','desktop-sessions');root.append(this.container);this.container.hidden=true;
     this.list=this.node('aside','ds-list');this.main=this.node('main','ds-main');this.container.append(this.list,this.main);

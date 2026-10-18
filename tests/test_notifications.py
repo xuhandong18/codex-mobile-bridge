@@ -14,6 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NotificationTests(unittest.TestCase):
+    def test_android_heading_starts_with_short_chat_title_and_keeps_full_status(self):
+        import unicodedata
+        row = {'id': self.thread, 'host': 'remote'}
+        self.manager.watch(self.thread, 'remote', True, notify_on_completion=True)
+        config = settings(self.directory)
+        for number, (title, completed) in enumerate([('修复安卓通知', True), ('修复安卓通知', False),
+                                                    ('很长的聊天标题' * 20, True), ('🚀' * 100, False), (' \n\t ', True)]):
+            self.manager._send_keys(config, row, title, 'mobile', 'fixture', [f'heading-{number}'], completed)
+            event = self.manager.mobile.read()['events'][-1]
+            heading = event.get('androidTitle', event['title'])
+            self.assertTrue(heading.endswith(' · ' + ('已完成' if completed else '待确认')), heading)
+            self.assertLessEqual(sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in heading), 28)
+            if number < 2:
+                self.assertTrue(heading.startswith(title), heading)
+            if number in (2, 3):
+                self.assertIn('…', heading)
+            self.assertNotIn('\n', heading)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT/'.tmp')
         self.directory = Path(self.temp.name)

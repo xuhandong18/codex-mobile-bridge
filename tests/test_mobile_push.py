@@ -38,6 +38,16 @@ class NativePushTests(unittest.TestCase):
         result=payload(device,event);self.assertNotIn('private',str(result));self.assertEqual(result['message']['data']['thread'],THREAD)
         device['kind']='activity';self.assertEqual(payload(device,event)['aps']['content-state']['phase'],'waiting')
         event['kind']='completion';self.assertEqual(payload(device,event)['aps']['event'],'end')
+
+    def test_android_push_uses_the_compact_title_without_changing_other_platforms(self):
+        self.event(); event = self.feed.read()['events'][0]
+        event['androidTitle'] = '安卓通知修复 · 待确认'
+        for icons in (False, True):
+            device = {'origin': 'https://gateway.example', 'kind': 'fcm', 'token': 'sample', 'sourceIcon': icons}
+            message = payload(device, event)['message']
+            self.assertEqual(message['data' if icons else 'notification']['title'], event['androidTitle'])
+        device['kind'] = 'apns'
+        self.assertNotIn(event['androidTitle'], str(payload(device, event)))
     def test_source_icon_delivery_keeps_old_android_clients_compatible(self):
         self.event(); event = self.feed.read()['events'][0]
         for provider, host in [('codex', 'local'), ('claude', 'desktop:claude'), ('deepseek', 'desktop:deepseek')]:
