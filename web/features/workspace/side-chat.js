@@ -292,7 +292,7 @@ class SideChatPanel {
         else if(isMcp){const content={};for(const [key,get] of Object.entries(controls)){const value=get();if(value!==undefined)content[key]=value;}respond({action:'accept',content});}
         else respond({decision:'accept'});};
       card.append(actions,error);this.approvals.append(card);
-      AnswerDrafts.bind(card,{scope:[this.session.provider||'codex',this.session.host||'local','side',this.state.id,request.method,p.turnId||'',p.itemId||'',request.id],request:this.workbench.request});
+      window.AnswerDrafts?.bind(card,{scope:[this.session.provider||'codex',this.session.host||'local','side',this.state.id,request.method,p.turnId||'',p.itemId||'',request.id],request:this.workbench.request});
     }
   }
   schedule(){

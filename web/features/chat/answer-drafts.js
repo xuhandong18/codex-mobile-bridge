@@ -1,6 +1,8 @@
 'use strict';
 
 // Draft metadata is independent of native approval/respond operations.
+(()=>{
+if(window.AnswerDrafts)return;
 class AnswerDrafts {
   static entries=new Map();
   static prefix='answer-drafts:v1:';
@@ -123,6 +125,8 @@ class AnswerDrafts {
     try{for(let i=localStorage.length-1;i>=0;i--){const key=localStorage.key(i);if(key?.startsWith(this.prefix))localStorage.removeItem(key);}}catch{}
   }
 }
+window.AnswerDrafts=AnswerDrafts;
 document.addEventListener('bridge-logged-out',()=>AnswerDrafts.clear());
 document.addEventListener('bridge-auth-lost',()=>AnswerDrafts.clear());
 window.addEventListener('pagehide',()=>{for(const entry of AnswerDrafts.entries.values())AnswerDrafts.flush(entry);});
+})();

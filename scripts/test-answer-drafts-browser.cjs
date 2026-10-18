@@ -5,6 +5,9 @@ const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'),source=fs.readFileSync(path.join(root,'web/shell/app.js'),'utf8');
 const render=source.slice(source.indexOf('function renderApprovals('),source.indexOf('\nfunction ',source.indexOf('function renderApprovals(')+1));
 const draftFile=path.join(root,'web/features/chat/answer-drafts.js');
+const assets=require('../web/assets.json');
+const draftScripts=[...fs.readFileSync(path.join(root,'web/index.html'),'utf8').matchAll(/<script src="([^"]+)"[^>]*><\/script>/g)]
+  .map(match=>match[1].split('?')[0]).filter(url=>['/answer-drafts.js','/app.js'].includes(url));
 const providers=['web/features/workspace/side-chat.js','web/features/clients/desktop-sessions.js'].map(file=>fs.readFileSync(path.join(root,file),'utf8')).join('\n');
 const setup=`const $=id=>document.getElementById(id),t=x=>x;
 const el=(tag,cls,text)=>{const n=document.createElement(tag);n.className=cls||'';if(text!==undefined)n.textContent=text;return n;};
@@ -32,6 +35,7 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1');res.setHeader('Cache-Control','no-store');
   if(url.pathname==='/api/answer-drafts'){
     res.setHeader('Content-Type','application/json');
+    if(req.headers.referer?.includes('legacy=1')){res.statusCode=404;return res.end(JSON.stringify({error:'Old gateway: draft API unavailable'}));}
     if(req.method==='GET')return res.end(JSON.stringify({fields:drafts.get(url.searchParams.get('scope'))||{}}));
     let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw),fields=drafts.get(body.scope)||{},old=fields[body.field];writes++;
     writeLog.push({field:JSON.parse(body.field)[0],version:body.version,value:body.value});
@@ -41,9 +45,17 @@ const server=http.createServer(async(req,res)=>{
   }
   if(url.pathname==='/respond'){responses++;return res.end('{}');}
   if(url.pathname==='/'){
-    res.setHeader('Content-Type','text/html');return res.end('<!doctype html><meta charset="utf-8"><div id="approvals"></div><script src="/fixture.js"></script>');
+    const legacy=url.searchParams.get('legacy')==='1';
+    res.setHeader('Content-Type','text/html');return res.end('<!doctype html><meta charset="utf-8"><div id="approvals"></div>'+draftScripts.map(src=>'<script src="'+src+(legacy?'?legacy=1':'')+'"></script>').join(''));
   }
-  if(url.pathname==='/fixture.js'){res.setHeader('Content-Type','text/javascript');return res.end(setup+'\n'+(fs.existsSync(draftFile)?fs.readFileSync(draftFile,'utf8'):'')+'\n'+providers+'\n'+render+'\nshow();');}
+  if(url.pathname==='/answer-drafts.js'){
+    if(url.searchParams.get('legacy')==='1'){res.statusCode=401;return res.end('{}');}
+    res.setHeader('Content-Type','text/javascript');return res.end(fs.readFileSync(draftFile,'utf8'));
+  }
+  if(url.pathname==='/app.js'){
+    const draftBundle=[].concat(assets['/app.js']).filter(file=>file==='features/chat/answer-drafts.js').map(file=>fs.readFileSync(path.join(root,'web',file),'utf8')).join('\n');
+    res.setHeader('Content-Type','text/javascript');return res.end(setup+'\n'+draftBundle+'\n'+providers+'\n'+render+'\nshow();');
+  }
   res.writeHead(404);res.end();
 });
 (async()=>{
@@ -55,12 +67,21 @@ const server=http.createServer(async(req,res)=>{
     page.on('pageerror',e=>errors.push(e.message));
     const saved=p=>p.waitForFunction(()=>document.querySelector('[data-draft-status]')?.dataset.draftStatus==='saved');
     const origin='http://127.0.0.1:'+server.address().port;
+    const legacy=await phone.newPage(),legacyErrors=[];legacy.on('pageerror',error=>legacyErrors.push(error.message));
+    await legacy.goto(origin+'/?legacy=1');
+    check(await legacy.locator('#approvals textarea').count()===3,'旧网关未开放草稿脚本时仍显示提问框');
+    await legacy.locator('textarea').nth(1).fill('旧网关上的本机答案');await legacy.reload();
+    check(await legacy.locator('textarea').nth(1).inputValue()==='旧网关上的本机答案','旧网关不支持草稿接口时仍保留本机输入');
+    check(legacyErrors.length===0,'旧网关缺少草稿接口不产生页面脚本异常');await legacy.close();
     await page.goto(origin);await page.selectOption('select','选项二');await page.locator('textarea').nth(1).fill('手机写下的第二条回复');
+    const moduleIdentity=await page.evaluate(()=>{window.originalDraftModule=window.AnswerDrafts;return !!window.AnswerDrafts;});
+    await page.addScriptTag({url:origin+'/answer-drafts.js'});
+    check(moduleIdentity&&await page.evaluate(()=>window.originalDraftModule===window.AnswerDrafts),'旧页面重复加载独立脚本不会重定义或丢失草稿模块');
     await page.evaluate(()=>show());
     check(await page.locator('select').inputValue()==='选项二','离开再回来后保留已选答案');
     check(await page.locator('textarea').nth(1).inputValue()==='手机写下的第二条回复','离开再回来后保留自由回复');
     await saved(page);
-    const tablet=await browser.newContext({viewport:{width:820,height:1180}}),other=await tablet.newPage();await other.goto(origin);
+    const tablet=await browser.newContext({viewport:{width:820,height:1180}}),other=await tablet.newPage();other.on('pageerror',error=>errors.push(error.message));await other.goto(origin);
     await other.waitForFunction(()=>document.querySelector('select').value==='选项二');
     check(await other.locator('textarea').nth(1).inputValue()==='手机写下的第二条回复','新设备恢复已填的两条答案');
     check(await other.locator('textarea').nth(2).inputValue()==='','未填写的问题保持空白');

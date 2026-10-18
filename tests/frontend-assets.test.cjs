@@ -22,6 +22,14 @@ test('every public web entry resolves through the static asset allowlist',()=>{
   assert.ok(assets['/app.js']);assert.ok(assets['/style.css']);
 });
 
+test('approval drafts load through the existing app bundle for gateways with an older route allowlist',()=>{
+  const html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
+  assert.ok(!references(html).some(ref=>ref.split('?')[0]==='/answer-drafts.js'));
+  const bundle=[].concat(assets['/app.js']);
+  assert.ok(bundle.includes('features/chat/answer-drafts.js'));
+  assert.ok(bundle.indexOf('features/chat/answer-drafts.js')<bundle.indexOf('shell/app.js'));
+});
+
 test('desktop local resources exist and are included in the application package',()=>{
   const html=fs.readFileSync(path.join(root,'desktop/index.html'),'utf8');
   for(const ref of references(html)){
