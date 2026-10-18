@@ -2,6 +2,7 @@ import ctypes
 import json
 import tempfile
 import unittest
+from symlink_support import require_symlink_support
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -254,6 +255,7 @@ class ClaudeRegistryTests(unittest.TestCase):
                 claude_process.owned_child_start_filetime(1234, 5555)
 
     def test_fresh_profile_without_registry_is_idle_but_symlink_is_unknown(self):
+        require_symlink_support()
         self.registry.rmdir()
         assert_profile_idle(self.config)
         (self.config/'sessions').symlink_to(self.config)

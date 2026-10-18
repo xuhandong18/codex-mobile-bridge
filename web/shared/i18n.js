@@ -2,6 +2,15 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"跟随客户端":"Follow client",
+"可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。":"Continue across devices. Ending the side chat archives its Harness fork.",
+"结束此侧边聊天？正在运行的回复会停止，Harness 分叉记录会归档。":"End this side chat? Its running reply will stop and its Harness fork will be archived.",
+"首条消息后自动命名":"Name automatically after the first message",
+"当前任务正在运行":"A task is running",
+"请选择这条消息的发送方式。":"Choose how to send this message.",
+"请输入名称":"Enter a name",
+"文件夹管理需要启用网关密码保护":"Enable gateway password protection to manage folders.",
+"请先浏览并选择父文件夹后再创建":"Browse and select the parent folder before creating a folder.",
 "新建侧边聊天":"New side chat",
 "重命名侧边聊天":"Rename side chat",
 "修改侧边聊天名称":"Rename side chat",

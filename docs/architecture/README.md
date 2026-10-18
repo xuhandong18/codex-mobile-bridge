@@ -11,6 +11,7 @@
 | Ubuntu 安装发现、桌面启动和 IPC | `bridge/platforms/linux/`、`platforms/posix/` | [Linux 说明](../linux.md) |
 | 本机 Linux Codex 权限能力、侧边聊天权限确认 | `bridge/features/sessions/linux_permissions.py`、`linux_side_chat.py` | `bridge/clients/codex/catalog.py`、`web/features/chat/permissions.js` |
 | 某个客户端的消息、权限、模型、账号 | `bridge/clients/codex/`、`claude/`、`deepseek/` | `bridge/clients/manager.py`，对应 Web 功能模块 |
+| Harness 项目/分区、原生侧边分叉与标题 | `bridge/clients/deepseek/host.mjs`、`adapter.py` | `web/features/clients/desktop-sessions.js`、共享工作台；[功能对应](../deepseek-personal-features.md) |
 | 登录、配对、可信手机 | `bridge/features/auth/` | `bridge/api/httpd.py`，`mobile/` 的原生持久化 |
 | Codex 账号切换、API、额度、模型列表 | `bridge/features/accounts/` | `bridge/clients/desktop_app.py`，`web/features/accounts/` |
 | 本机 CLI 接入保存、选择与核验 | `bridge/features/accounts/cli_access.py`、`cli_sync.py` | `bridge/clients/claude/cli_session.py`，`web/features/accounts/cli-access.js` |

@@ -30,7 +30,14 @@ class ClaudeHandoff(unittest.IsolatedAsyncioTestCase):
         (self.directory/'response.json').write_text(self.desktop.pack(value), encoding='utf-8')
 
     def request(self):
-        return json.loads(json.loads((self.directory/'request.json').read_text(encoding='utf-8'))['payload'])
+        # A concurrent atomic mailbox replacement can briefly deny a Windows read.
+        for attempt in range(20):
+            try:
+                return json.loads(json.loads((self.directory/'request.json').read_text(encoding='utf-8'))['payload'])
+            except (PermissionError, FileNotFoundError):
+                if attempt == 19:
+                    raise
+                time.sleep(.005)
 
     async def wait_request(self, kind):
         for _ in range(100):

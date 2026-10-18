@@ -18,7 +18,7 @@ class SideChatPanel {
     this.head.append(this.caption,this.renameButton,this.newButton,this.endButton);
     this.landing=n('div','wb-side-landing');
     this.help=n('p','wb-side-help',BridgeI18n.t('继承当前会话的上下文，单独讨论一个问题。主会话的任务不会被接续执行。'));
-    this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t('可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
+    this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t(session.provider==='deepseek'?'可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。':'可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
     this.status=n('p','wb-status');this.status.setAttribute('role','status');
     this.messages=n('div','wb-side-messages');this.messages.setAttribute('data-i18n-aria-label','侧边聊天消息');this.messages.setAttribute('aria-label',BridgeI18n.t('侧边聊天消息'));
     this.approvals=n('div','wb-side-approvals');this.queued=n('div','wb-side-queue');
@@ -37,6 +37,7 @@ class SideChatPanel {
     const select=(label,rows)=>{const control=n('select');control.dataset.i18nAriaLabel=label;control.setAttribute('aria-label',BridgeI18n.t(label));for(const [value,text] of rows){const option=n('option','',BridgeI18n.t(text));option.value=value;control.append(option);}return control;};
     this.sendMode=select('发送方式',[['send','发送新消息'],['queue','完成后发送'],['steer','补充当前任务']]);
     this.workMode=select('工作模式',[['default','普通模式'],['plan','计划模式']]);
+    if(session.provider==='deepseek'){this.workMode.hidden=true;this.fileInput.accept='image/png,image/jpeg,image/gif,image/webp';}
     this.sendMode.onchange=()=>this.controls();this.workMode.onchange=()=>{this.modeSelected=true;this.controls();};
     actions.append(this.stopButton,this.sendButton);bottom.append(this.attachButton,this.fileInput,this.sendMode,this.workMode,actions);
     this.composerBody.append(this.attachmentList,this.input,bottom);this.form.append(tools,this.composerBody);
@@ -51,6 +52,9 @@ class SideChatPanel {
       onChange:()=>this.controls(),preview:(key,id)=>this.uploadUrl(key,id,'preview'),
       upload:(key,id,file)=>this.uploadFile(this.uploadUrl(key,id)+'&name='+encodeURIComponent(file.name),file),
       thumbnail:async(key,id,file)=>{const thumb=await this.attachments.thumbnailBlob(file);return this.uploadFile(this.uploadUrl(key,id,'thumb')+'&width='+thumb.width+'&height='+thumb.height,thumb.data);}});
+    if(session.provider==='deepseek'){
+      const add=this.attachments.add.bind(this.attachments);this.attachments.add=files=>{if(files.some(file=>!file.type?.startsWith('image/'))){this.attachments.error='此应用的消息附件仅支持图片；其他文件请使用文件传输。';this.attachments.render();return;}add(files);};
+    }
     this.form.onsubmit=e=>{e.preventDefault();this.send();};
     this.input.oninput=()=>{this.resizeInput();this.controls();};
     tab.body.append(this.head,this.landing,this.status,this.messages,this.approvals,this.queued,this.form);this.controls();this.load();this.schedule();
@@ -96,6 +100,7 @@ class SideChatPanel {
   }
   collapse(value){this.collapsed=value;this.composerBody.hidden=value;this.form.classList.toggle('is-collapsed',value);this.toggle.setAttribute('aria-expanded',String(!value));const label=value?'展开输入区':'收起输入区';this.toggle.dataset.i18nTitle=label;this.toggle.dataset.i18nAriaLabel=label;this.toggle.title=BridgeI18n.t(label);this.toggle.setAttribute('aria-label',BridgeI18n.t(label));if(!value)this.resizeInput();}
   uploadUrl(child,id,operation=''){
+    if(this.session.provider==='deepseek')return '/api/desktop-sessions/deepseek/uploads'+(operation?'/'+encodeURIComponent(id)+'/'+operation:'')+'?sessionId='+encodeURIComponent(child)+(operation?'':'&id='+encodeURIComponent(id));
     const path='/api/sessions/'+this.session.id+'/uploads'+(operation?'/'+encodeURIComponent(id)+'/'+operation:'')+'?host='+encodeURIComponent(this.session.host)+'&side='+encodeURIComponent(child)+(operation?'':'&id='+encodeURIComponent(id));
     return window.BridgeRelayURL?.(path)||path;
   }
@@ -113,7 +118,7 @@ class SideChatPanel {
   referenceContext(){
     if(this.disposed||this.busy||this.pending||!this.workbench.isVisible(this.session,this.tab)||this.state?.id&&!this.state.connected)return null;
     return {key:this.session.key+'|'+this.tab.id+'|'+(this.state?.id||'draft'),id:this.session.id,host:this.session.host,
-      cwd:this.state?.cwd||this.session.cwd||'',canSkills:!!this.state?.id,sideId:this.state?.id};
+      cwd:this.state?.cwd||this.session.cwd||'',canSkills:!!this.state?.id,sideId:this.state?.id,provider:this.session.provider||'codex',sid:this.state?.id||this.session.id};
   }
   async loadReferences(kind,options){
     if(kind!=='skills')return this.workbench.loadReferences(kind,options);
@@ -121,8 +126,15 @@ class SideChatPanel {
     const result=await this.workbench.request(this.url(),{action:'skills',id:target.sideId,query,offset,refresh},signal);
     return ChatReferencePicker.skillItems(result,offset);
   }
-  url(){return '/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host)+(this.tab.slot?'&slot='+encodeURIComponent(this.tab.slot):'');}
-  request(body){return this.workbench.request(this.url(),body);}
+  url(){return (this.session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(this.session.id):'/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host))+(this.tab.slot?'&slot='+encodeURIComponent(this.tab.slot):'');}
+  async request(body){
+    if(this.disposed)throw Error('此侧边聊天已关闭或已失效，请刷新标签');
+    if(this.session.provider!=='deepseek'||!body||['catalog','skills'].includes(body.action))return this.workbench.request(this.url(),body);
+    const key=JSON.stringify(body);this.mutations??=new Map();if(!this.mutations.has(key))this.mutations.set(key,uuid());
+    const value=await this.workbench.request(this.url(),{...body,operationId:this.mutations.get(key)});
+    if(value.status==='unknown')throw Error(value.message||'结果待核对，请检查桌面原会话');
+    this.mutations.delete(key);return value;
+  }
   controls(){
     const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
     this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created;this.head.hidden=false;this.messages.hidden=!created;this.queued.hidden=!created;
@@ -148,6 +160,7 @@ class SideChatPanel {
     document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();return dialog;
   }
   permissions(){
+    if(this.session.provider==='deepseek'){this.harnessPermissions();return;}
     const child=this.state.id,n=(...a)=>this.workbench.node(...a),dialog=this.dialog('会话权限'),error=n('p','error');
     dialog.append(n('p','muted',BridgeI18n.t('仅影响此侧边聊天，从下一轮生效。')));
     if(this.state.linuxPermissionChecks===true){
@@ -165,6 +178,12 @@ class SideChatPanel {
       },BridgeI18n.t(label));permissionOption(button,preset,label,help,this.state.permissionMode===preset);dialog.append(button);
     }dialog.append(error);
   }
+  async harnessPermissions(){
+    const child=this.state.id;
+    try{const value=await this.workbench.request('/api/desktop-sessions/deepseek/access?sessionId='+encodeURIComponent(child));if(this.disposed||this.state.id!==child)return;
+      const dialog=this.dialog('权限');for(const option of value.options||[]){const mode=option.value??option.id;dialog.append(this.workbench.button(option.label||option.name||mode,async()=>{try{this.apply(await this.request({action:'permissions',id:child,preset:mode}));dialog.close();}catch(error){this.status.textContent=BridgeI18n.t(error.message);}}));}
+    }catch(error){this.status.textContent=BridgeI18n.t(error.message);}
+  }
   async modelSettings(){
     const child=this.state.id,n=(...args)=>this.workbench.node(...args),b=(...args)=>this.workbench.button(...args);
     try{
@@ -178,7 +197,7 @@ class SideChatPanel {
       model.value=[...model.options].some(o=>o.value===catalog.currentModel)?catalog.currentModel:'__custom__';custom.value=catalog.currentModel||'';
       custom.setAttribute("data-i18n-aria-label",'模型 ID');custom.setAttribute('aria-label',BridgeI18n.t('模型 ID'));
       const fill=()=>{custom.hidden=model.value!=='__custom__';const known=catalog.models?.find(m=>m.id===model.value);const values=known?.efforts?.length?known.efforts:['none','minimal','low','medium','high','xhigh','max','ultra'];effort.replaceChildren(...values.map(value=>new Option(value,value)));effort.value=values.includes(catalog.currentEffort)?catalog.currentEffort:known?.defaultEffort||values[0];};
-      model.onchange=fill;fill();modelLabel.append(model,custom);effortLabel.append(effort);
+      model.onchange=fill;fill();if(this.session.provider==='deepseek'){manual.remove();if(model.value==='__custom__')model.value=model.options[0]?.value||'';const nativeFill=()=>{custom.hidden=true;const known=catalog.models?.find(m=>m.id===model.value),values=known?.efforts||[];effort.replaceChildren(new Option(BridgeI18n.t('默认'),''),...values.map(value=>new Option(value,value)));effort.value=values.includes(catalog.currentEffort)?catalog.currentEffort:known?.defaultEffort||'';effort.disabled=!values.length;};model.onchange=nativeFill;nativeFill();}modelLabel.append(model,custom);effortLabel.append(effort);
       const save=b(BridgeI18n.t('保存'),async()=>{save.disabled=true;try{const state=await this.request({action:'settings',id:child,model:model.value==='__custom__'?custom.value.trim():model.value,effort:effort.value});this.apply(state);dialog.close();}catch(e){status.textContent=BridgeI18n.t(e.message);}finally{save.disabled=false;}});
       dialog.append(head,n('p','muted',BridgeI18n.t('仅影响此侧边聊天，从下一轮生效。')),modelLabel,effortLabel,status,save);
       document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
@@ -212,7 +231,7 @@ class SideChatPanel {
       for(const turn of state.turns||[]){for(const message of turn.messages||[]){
         const card=this.workbench.node('article','wb-side-message '+message.role);
         if(message.role==='user'||message.role==='assistant'){
-          card.append(this.workbench.node('small','',message.role==='user'?BridgeI18n.t('你'):'Codex'));
+          card.append(this.workbench.node('small','',message.role==='user'?BridgeI18n.t('你'):this.session.provider==='deepseek'?'DeepSeek':'Codex'));
           const text=this.workbench.node('div','message-body');renderMarkdown(text,message.text||'');card.append(text);
           if(message.attachments?.length){const list=this.workbench.node('div','attachment-list');for(const file of message.attachments){
             const chip=this.workbench.node('div','attachment-chip');if(file.image){const image=this.workbench.node('img','attachment-thumb');image.src=this.uploadUrl(state.id,file.id,'preview');image.alt=file.name;image.dataset.imagePreview=image.src+'&variant=original';image.dataset.imageName=file.name;image.tabIndex=0;image.setAttribute('role','button');chip.append(image);}
@@ -298,7 +317,7 @@ class SideChatPanel {
   async action(action,fields={}){if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);}finally{this.busy=false;this.controls();}}
   async end(){
     if(this.busy)return false;if(!this.state?.id)return true;
-    if(!confirm(BridgeI18n.t('结束此侧边聊天？正在运行的回复会停止，临时内容将清除，所有设备都无法继续此聊天。')))return false;
+    if(!confirm(BridgeI18n.t(this.session.provider==='deepseek'?'结束此侧边聊天？正在运行的回复会停止，Harness 分叉记录会归档。':'结束此侧边聊天？正在运行的回复会停止，临时内容将清除，所有设备都无法继续此聊天。')))return false;
     this.readRevision=(this.readRevision||0)+1;
     this.busy=true;this.controls();
     try{await this.request({action:'close',id:this.state.id});this.apply({id:null,connected:false,turns:[],requests:[]});return true;}

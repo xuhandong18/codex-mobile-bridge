@@ -7,6 +7,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from symlink_support import require_symlink_support
 from unittest.mock import patch
 
 from bridge.clients.codex.remote import RemoteStore
@@ -142,6 +143,7 @@ class DownloadHttpTests(unittest.TestCase):
         self.assertEqual((status, headers['Content-Range'], data), (416, 'bytes */0', b''))
 
     def test_auth_host_path_symlink_and_live_size_limits_remain_enforced(self):
+        require_symlink_support()
         self.assertEqual(self.get({'Range': 'bytes=0-9'})[0], 401)
         auth = self.login()
         self.assertEqual(self.get({**auth, 'Host': 'evil.test', 'Range': 'bytes=0-9'})[0], 403)
@@ -166,6 +168,7 @@ class DownloadHttpTests(unittest.TestCase):
         self.assertEqual(self.get({**auth, 'Range': 'bytes=0-9'}, artifact)[0], 400)
 
     def test_artifact_parent_symlink_swap_cannot_escape(self):
+        require_symlink_support()
         folder = self.root / 'folder'; folder.mkdir()
         outside = self.root / 'outside'; outside.mkdir()
         (folder / 'secret').write_bytes(b'allowed'); (outside / 'secret').write_bytes(b'forbidden')
@@ -264,6 +267,7 @@ class FileActionsTests(unittest.TestCase):
                 with self.workspace.archive('folder'): pass
 
     def test_archive_and_info_reject_links_and_outside_paths(self):
+        require_symlink_support()
         (self.root / 'folder').mkdir(); (self.root / 'folder' / 'link').symlink_to(self.root.parent)
         with self.assertRaises(PermissionError):
             with self.workspace.archive('folder'): pass
@@ -274,6 +278,7 @@ class FileActionsTests(unittest.TestCase):
 
 class WorkspaceReferenceTests(unittest.TestCase):
     def test_relative_large_references_stay_inside_own_workspace(self):
+        require_symlink_support()
         from bridge.features.workspace.files import workspace_references
         with tempfile.TemporaryDirectory(dir=support.ROOT / '.tmp') as directory:
             root = Path(directory); project = root / 'project'; project.mkdir()

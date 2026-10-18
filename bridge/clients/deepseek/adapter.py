@@ -13,10 +13,10 @@ from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.deepseek.setup import MARKER, insertion, verified_directory, legacy_account_configured
 
 PLUGIN_ID = re.compile(r'''["']?id["']?\s*:\s*["']?codex-mobile-desktop(?:["'\s,}]|$)''')
-BRIDGE_REVISION = 4
-# Revisions 3 and 4 share the complete native-agent lifecycle schema. Revision
-# 4 only adds presentation fields; a verified revision 3 can prove safe restart.
-LIFECYCLE_REVISIONS = (3, BRIDGE_REVISION)
+BRIDGE_REVISION = 5
+# Revisions 3–5 share the complete native-agent lifecycle schema. Older verified
+# hosts can prove a safe restart before the feature protocol is upgraded.
+LIFECYCLE_REVISIONS = (3, 4, BRIDGE_REVISION)
 UPDATE_REASON = 'Harness 接入需要更新，请结束任务后点击“重启并接入”'
 
 
@@ -203,6 +203,11 @@ class DeepSeek:
                 value['capabilities'] = {name: False for name in (
                     'models', 'effort', 'permissions', 'attachments', 'skills', 'queue', 'steer', 'send')}
                 value['notice'] = UPDATE_REASON
+        if action in ('side-read', 'side-write', 'subagents') and 'records' in value:
+            records = value.pop('records')
+            value['turns'] = transcript_turns(records)
+            if action.startswith('side-'):
+                value['requests'] = [side_request(request) for request in value.get('requests', [])]
         if action == 'status' and self.legacy_protocol and value.get('connected') and 'configured' not in value:
             configured = False
             if legacy_account_configured(self.home):
@@ -262,7 +267,34 @@ def messages(records):
             for i, block in enumerate(content):
                 text = block.get('text') or block.get('thinking') or ('[图片]' if block.get('type') == 'image' else '')
                 if text:
-                    result.append({'id': str(event.get('seq'))+':'+str(i), 'role': 'reasoning' if block.get('type') in ('thinking', 'reasoning') else kind.split('/')[0], 'text': text})
+                    source = data.get('message', data).get('source') or {}
+                    source = source if isinstance(source, dict) else {}
+                    presentation = item.get('presentation') or {}
+                    result.append({'id': str(event.get('seq'))+':'+str(i), 'role': 'reasoning' if block.get('type') in ('thinking', 'reasoning') else kind.split('/')[0], 'text': text,
+                                   'model': source.get('model') or presentation.get('model', ''),
+                                   'effort': presentation.get('effort', '')})
         elif kind in ('tool/call', 'tool/result', 'todo/write'):
             result.append({'id': str(event.get('seq')), 'role': 'activity', 'title': data.get('name') or data.get('toolName') or kind, 'text': json.dumps(data, ensure_ascii=False, indent=2)})
     return result
+
+
+def transcript_turns(records):
+    """Keep native turn boundaries and project only public display records."""
+    result, current = [], None
+    endings = {turn['turnId']: turn for turn in turns(records)}
+    for record in records:
+        event = record.get('event', {})
+        if event.get('type') == 'turn/start' or current is None:
+            identifier = str((event.get('data') or {}).get('turn', 'history'))
+            current = {**endings.get(identifier, {'turnId': identifier, 'status': 'completed'}), 'messages': []}
+            result.append(current)
+        current['messages'].extend(messages([record]))
+    return result
+
+
+def side_request(request):
+    """Translate Harness's pending requests for the shared side composer."""
+    return {'id': request['id'], 'supported': True,
+            'method': 'tool/requestUserInput' if request.get('needsInput') else 'item/commandExecution/requestApproval',
+            'params': {**request.get('input', {}), 'reason': request.get('reason') or request.get('tool', ''),
+                       'availableDecisions': ['accept', 'decline']}}

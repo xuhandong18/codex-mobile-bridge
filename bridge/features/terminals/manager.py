@@ -24,7 +24,11 @@ class CommandJob:
         self.done = threading.Event(); self.created = time.monotonic()
         self.command = command; self.root = str(root)
         if os.name == 'nt':
-            args = [os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/s', '/c', command]
+            # CMD parses its own command tail. list2cmdline over the entire list
+            # escapes its embedded quotes with backslashes, which CMD treats as
+            # literal executable-name characters. /s consumes this outer pair.
+            prefix = [os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/s', '/c']
+            args = subprocess.list2cmdline(prefix) + ' "' + command + '"'
             options = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
         else:
             args = ['/bin/sh', '-c', command]

@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from symlink_support import require_symlink_support
 from pathlib import Path
 
 from bridge.app.service import LiveSession
@@ -46,6 +47,7 @@ class ContextUsageTests(unittest.TestCase):
 
 class DirectoryReferenceTests(unittest.TestCase):
     def test_app_directory_is_locatable_but_not_an_ordinary_download(self):
+        require_symlink_support()
         with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as directory:
             root = Path(directory); target = root / 'Gateway Preview.app'; target.mkdir()
             text = '[macOS网关APP](<' + str(target) + '>)'

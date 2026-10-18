@@ -37,7 +37,7 @@ function bindListActions(toolbar,archive,actions=[]){
   const label=archive.closest('label'),button=document.createElement('button');
   button.type='button';button.className='plain list-actions-more';button.textContent='⋯';button.setAttribute('aria-label',BridgeI18n.t('侧栏操作'));button.dataset.i18nAriaLabel='侧栏操作';
   label.replaceWith(button);
-  const menu=new ChatContextMenu(button,()=>[...actions,{label:(archive.checked?'✓ ':'')+BridgeI18n.t('已归档'),run:()=>{archive.checked=!archive.checked;archive.dispatchEvent(new Event('change',{bubbles:true}));}}],{touch:false,label:'侧栏操作'});
+  const menu=new ChatContextMenu(button,()=>[...(typeof actions==='function'?actions():actions),{label:(archive.checked?'✓ ':'')+BridgeI18n.t('已归档'),run:()=>{archive.checked=!archive.checked;archive.dispatchEvent(new Event('change',{bubbles:true}));}}],{touch:false,label:'侧栏操作'});
   button.onclick=()=>{const rect=button.getBoundingClientRect();menu.open(button,rect.right,rect.bottom);};
   // Keep the existing checkbox as the single source of filter state.
   label.hidden=true;label.style.display='none';toolbar.append(label);

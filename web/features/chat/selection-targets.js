@@ -4,7 +4,7 @@
 class ChatSelectionTargets {
   constructor(workbench){this.workbench=workbench;}
   current(session){const wb=this.workbench;return wb.current===session&&wb.sessions.get(session.key)===session;}
-  canCreate(session){return this.current(session)&&(!session.provider||session.provider==='codex')&&session.host==='local'&&session.access?.canUseSideChat!==false;}
+  canCreate(session){return this.current(session)&&(!session.provider||session.provider==='codex'||session.provider==='deepseek'&&session.access?.canUseSideChat===true)&&session.host==='local'&&session.access?.canUseSideChat!==false;}
   targets(session){
     const wb=this.workbench;if(!this.current(session))return [];
     const targets=[{id:'chat',name:BridgeI18n.t('主会话'),quotes:wb.fileQuotes,available:()=>this.current(session)&&wb.canQuoteMain?.()!==false&&session.access?.canSend!==false,

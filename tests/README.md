@@ -29,6 +29,10 @@ HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据�
 
 测试名仍保持在 `tests/` 顶层，方便按前缀发现并复用既有夹具。平台测试的模拟结果不能替代对应操作系统的实机结果。
 
+需要真实符号链接的夹具通过 `symlink_support.require_symlink_support()` 检查能力。Windows 账户缺少该权限（WinError 1314）时，仅跳过对应检查并显示原因；不修改系统安全策略，也不把这些检查算作通过。
+
+Harness 个人分支功能另有 `node scripts/test-deepseek-browser.cjs`：需要已有的 Playwright 与 Chromium（可通过 `NODE_PATH` 使用现有测试运行时），在四种屏幕尺寸执行实际 DOM 断言，仅使用隔离合成会话。详情见 [功能对应与验证](../docs/deepseek-personal-features.md)。
+
 ## Node 与浏览器
 
 ```sh

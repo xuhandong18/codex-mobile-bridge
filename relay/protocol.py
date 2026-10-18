@@ -66,6 +66,10 @@ def validate(method, path, size=0):
         return
     desktop = DESKTOP.fullmatch(p.path)
     if desktop:
+        if p.path.startswith('/api/desktop-sessions/deepseek/') and desktop[1] in (
+                {'side-chat', 'subagents', 'project-directories', 'project-directory-operations'} if method == 'GET'
+                else {'side-chat', 'manage', 'project-directories'}):
+            return
         if desktop[1] in (DESKTOP_READ if method == 'GET' else DESKTOP_WRITE):
             return
         if re.fullmatch('uploads/' + UUID + ('/preview' if method == 'GET' else '/thumb'), desktop[1]):

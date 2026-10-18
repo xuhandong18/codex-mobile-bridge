@@ -778,10 +778,19 @@ class HttpTests(unittest.TestCase):
         self.server.server_close()
 
     def request(self, method, path, body=None, headers=None):
-        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=3)
+        class FixtureConnection(http.client.HTTPConnection):
+            def send(self, data):
+                # Security tests deliberately reject requests before reading the
+                # body. Keep small fixture headers/body in one write so Windows
+                # cannot race a late body against the server's deliberate close.
+                self.packet.extend(data)
+        conn = FixtureConnection('127.0.0.1', self.port, timeout=3)
+        conn.packet = bytearray()
         base = {'Origin': self.origin, 'Content-Type': 'application/json'}
         base.update(headers or {})
         conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=base)
+        conn.connect()
+        conn.sock.sendall(conn.packet)
         response = conn.getresponse()
         status, response_headers, data = response.status, dict(response.getheaders()), response.read()
         conn.close()

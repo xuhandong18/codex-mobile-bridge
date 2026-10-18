@@ -463,16 +463,61 @@ class Handler(BaseHTTPRequestHandler):
                 sid = query.get('sessionId', [''])[0]
                 return self.output(200, self.server.notifications.policy(
                     sid, 'desktop:' + provider, self.read_json() if write else None))
+            if path in ('/api/desktop-sessions/deepseek/project-directories', '/api/desktop-sessions/deepseek/project-directory-operations'):
+                manager = self.server.desktop_sessions
+                if manager is None:
+                    return self.output(503, {'error': '桌面会话接入不可用'})
+                manager.require_enabled('deepseek')
+                if self.server.auth.config.get('mode') == 'none':
+                    raise PermissionError('文件夹管理需要启用网关密码保护')
+                owner = self.server.auth.key(self.token())
+                folders = manager.deepseek_directories
+                if path.endswith('project-directory-operations'):
+                    if write:
+                        return self.output(405, {'error': '请求方式无效'})
+                    return self.output(200, folders.directory_operation(query.get('id', [''])[0], owner))
+                if write:
+                    return self.output(202, folders.submit_directory(self.read_json(), owner))
+                return self.output(200, {**folders.browse(query.get('path', [''])[0], owner), 'canCreateDirectory': True})
+            if path == '/api/desktop-sessions/deepseek/side-chat':
+                manager = self.server.desktop_sessions
+                if manager is None:
+                    return self.output(503, {'error': '桌面会话接入不可用'})
+                manager.require_enabled('deepseek')
+                if self.server.auth.config.get('mode') == 'none':
+                    raise PermissionError('侧边聊天需要启用网关密码保护')
+                value = self.read_json() if write else {}
+                action = value.pop('action', 'read')
+                child = value.pop('id', None)
+                sid = query.get('sessionId', [None])[0]
+                body = {**value, 'operation': action, 'childId': child, 'slot': query.get('slot', [''])[0]}
+                read = action in ('read', 'catalog', 'skills')
+                if not write and action != 'read' or write and action == 'read':
+                    raise ValueError('无效侧边聊天操作')
+                if any(key in value for key in ('resolvedImages', 'resolvedFiles')):
+                    raise ValueError('附件格式无效')
+                if not read:
+                    body['id'] = value.get('creationId') if action == 'create' else value.get('submissionId') if action == 'send' else value.get('operationId')
+                if action == 'send':
+                    # Child identity is checked against the parent before resolving uploads.
+                    current = manager.call('deepseek', 'side-read', sid, {'slot': body['slot']})
+                    if current.get('id') != child:
+                        raise ValueError('侧边聊天已失效')
+                    images, files = self.server.desktop_uploads.resolve('deepseek', child, body.pop('attachments', []))
+                    if files:
+                        raise ValueError('此应用的消息附件仅支持图片；其他文件请使用文件传输。')
+                    body['resolvedImages'] = images
+                return self.output(200, manager.call('deepseek', 'side-read' if read else 'side-write', sid, body))
             desktop_workspace = re.fullmatch(r'/api/desktop-sessions/(deepseek|claude)/(workspace(?:/[a-z-]+)?|terminal)', path)
             if path.startswith('/api/desktop-sessions/') and not desktop_workspace:
                 parts = path.strip('/').split('/')
                 manager = self.server.desktop_sessions
                 if manager is None:
                     return self.output(503, {'error': '桌面会话接入不可用'})
-                if len(parts) != 4 or parts[2] not in ('deepseek', 'claude') or parts[3] not in (WRITES if write else READS):
+                if len(parts) != 4 or parts[2] not in ('deepseek', 'claude') or parts[3] in ('side-read', 'side-write') or parts[3] not in (WRITES if write else READS):
                     return self.output(404, {'error': '接口不存在'})
                 manager.require_enabled(parts[2])
-                body = self.read_json() if write else {}
+                body = self.read_json() if write else {key: query[key][0] for key in ('childId',) if key in query}
                 sid = body.pop('sessionId', None) if write else query.get('sessionId', [None])[0]
                 if write and any(key in body for key in ('resolvedImages', 'resolvedFiles')):
                     raise ValueError('附件格式无效')

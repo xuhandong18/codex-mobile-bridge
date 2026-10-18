@@ -315,3 +315,15 @@ class Projects:
             if context:
                 request['contextId'] = context
             return request if validate_only else self.native_creator(request)
+
+
+class SelectedDirectories(Projects):
+    """Folder-only service for clients without Codex's native directory grants."""
+    @property
+    def can_create_directory(self):
+        return True
+
+    def submit_directory(self, value, owner=None):
+        if not isinstance(value, dict) or 'selectionId' not in value:
+            raise PermissionError('请先浏览并选择父文件夹后再创建')
+        return super().submit_directory(value, owner)

@@ -67,9 +67,10 @@ for line in sys.stdin:
     request = json.loads(line)
     calls.append(request['method'])
     if 'id' in request:
-        result = {'thread': {'id': ''' + repr(tid) + '''}} if request['method'] == 'thread/start' else {}
+        result = {'thread': {'id': ''' + repr(tid) + ''', 'path': ''' + repr(str(self.root/'rollout.jsonl')) + '''}} if request['method'] in ('thread/start', 'thread/read') else {}
         print(json.dumps({'id': request['id'], 'result': result}), flush=True)
 Path(''' + repr(str(log)) + ''').write_text(json.dumps(calls), encoding='utf-8')
+Path(''' + repr(str(self.root/'rollout.jsonl')) + ''').write_text(json.dumps({'type': 'session_meta', 'payload': {'id': ''' + repr(tid) + '''}}), encoding='utf-8')
 ''', encoding='utf-8')
         real_popen = subprocess.Popen
         def launch(argv, **kwargs):

@@ -29,6 +29,10 @@ PREVIOUS_QUIT_SOURCES = ('2a9926ace79180be27c248bc68c6c6d9367c58c318c8dd8a8402a9
 PREVIOUS_CONTEXT_SOURCES = ('c60b404ff5efcadc4329b125ff8524293bc4e4c2e29224393ea9cec5753ea2a1',
                             '4fdfe35712002fc368a2db8fd4e18ab2cc851bacb31473f583ffde817d564068')
 
+# Revision 4 before personal-branch features; preserve both release newline forms.
+PREVIOUS_PERSONAL_SOURCES = ('7ff9ce99e26c3b1b9e54ade4db4a634976096f3a429b6f4d81e7401d3e067f8f',
+                             '2bd8e0711db16fe5c2d2a39f473f8e0f747e5f9067dae64572129c56ff0e7136')
+
 
 def insertion(text):
     """Read only our JSON flow insertion, including Harness's line wrapping.
@@ -136,7 +140,7 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES):
             return None
         return directory, digest not in current_sources
     except (OSError, ValueError, KeyError, TypeError, IndexError):

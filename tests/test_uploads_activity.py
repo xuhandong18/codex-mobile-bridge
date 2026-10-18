@@ -4,6 +4,7 @@ import http.client
 import json
 import time
 import unittest
+from symlink_support import require_symlink_support
 import uuid
 from pathlib import Path
 import hashlib
@@ -166,6 +167,7 @@ class UploadActivityTests(unittest.TestCase):
         self.assertEqual(Path(original_preview['previewPath']).read_bytes(),original)
 
     def test_upload_internal_directory_cannot_escape_upload_root(self):
+        require_symlink_support()
         thread=str(uuid.uuid4());identifier=str(uuid.uuid4())
         folder=self.bridge.uploads.root/thread/identifier
         folder.mkdir(parents=True)

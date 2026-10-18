@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import unittest
+from symlink_support import require_symlink_support
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -74,6 +75,7 @@ class CatalogIntegrationTests(unittest.TestCase):
             self.reader.validate_skills(workspace, [identifier])
 
     def test_runtime_discovered_external_skill_links_load_and_can_be_selected(self):
+        require_symlink_support()
         installed = self.root / 'installed'
         installed.mkdir()
         target = installed / 'SKILL.md'
@@ -93,6 +95,7 @@ class CatalogIntegrationTests(unittest.TestCase):
             self.reader._fetch.assert_called_once()
 
     def test_one_broken_link_does_not_block_other_installed_skills(self):
+        require_symlink_support()
         links = self.home / 'skills'
         links.mkdir()
         (links / 'missing').symlink_to(self.root / 'missing')

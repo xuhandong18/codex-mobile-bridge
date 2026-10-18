@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
+from symlink_support import require_symlink_support
 from unittest.mock import patch
 
 from bridge.features.workspace.workspace import Workspace, GitWorkspace, operate, MAX_PREVIEW
@@ -92,6 +93,7 @@ class GitWorkspaceTests(unittest.TestCase):
             self.assertTrue(self.status()['available'])
 
     def test_conflicts_and_symlink_boundary(self):
+        require_symlink_support()
         self.baseline(); self.git('checkout', '-qb', 'other'); (self.root / 'hello.txt').write_text('other\n'); self.git('commit', '-qam', 'other')
         self.git('checkout', '-q', 'main'); (self.root / 'hello.txt').write_text('main\n'); self.git('commit', '-qam', 'main')
         self.git('merge', 'other', check=False)

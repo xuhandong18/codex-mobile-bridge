@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from symlink_support import require_symlink_support
 from pathlib import Path
 from bridge.features.workspace.files import artifact_paths, reference_path, workspace_relative_path, workspace_references
 
@@ -20,6 +21,7 @@ class ArtifactCompatibilityTests(unittest.TestCase):
             'type': 'agentMessage', 'text': '\n'.join('[file](<' + ref + '>)' for ref in references)}]}]}, None)
 
     def test_file_aliases_share_one_id_without_granting_external_files(self):
+        require_symlink_support()
         file = self.project / 'report space.pdf'
         file.write_bytes(b'pdf fixture')
         outside = self.root / 'outside.pdf'

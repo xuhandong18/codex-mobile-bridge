@@ -30,6 +30,18 @@ class TerminalTests(unittest.TestCase):
         job=self.manager.get('owner','thread',key);self.assertTrue(job.done.wait(5));result=job.read()
         self.assertIn(str(self.root),result['output']);self.assertIn('你好',result['output']);self.assertEqual(result['exitCode'],7)
         self.assertEqual(job.read(result['cursor'])['output'],'')
+    def test_quoted_program_paths_keep_shell_operators(self):
+        folder = self.root/'command 中文 path'
+        folder.mkdir()
+        script = folder/'program.py'
+        script.write_text("import sys;print(sys.argv[1])", encoding='utf-8')
+        quote = subprocess.list2cmdline if os.name == 'nt' else shlex.join
+        first = quote([sys.executable, str(script), 'first output'])
+        second = quote([sys.executable, str(script), 'second output'])
+        job = CommandJob(self.root, first+' && '+second)
+        self.assertTrue(job.done.wait(5))
+        self.assertEqual(job.read()['output'].splitlines(), ['first output', 'second output'])
+        self.assertEqual(job.code, 0)
     def test_start_idempotent_and_scoped(self):
         key=self.identifier();command=self.python_command("with open('runs.txt','ab') as f:f.write(b'run\\n')")
         self.manager.start('owner','thread',key,self.root,command)

@@ -266,7 +266,7 @@ class Workbench {
     for (const [name, description, action] of [[BridgeI18n.t('文件'), BridgeI18n.t('浏览项目文件、上传与下载'), () => this.files()], ['Git', BridgeI18n.t('历史、暂存、提交与分支管理'), () => this.git()], [BridgeI18n.t('终端'), BridgeI18n.t('运行项目命令、构建与查看输出'), () => this.terminal()], [BridgeI18n.t('侧边聊天'), BridgeI18n.t('继承当前上下文，临时讨论并跨设备接续'), () => this.sideChat('',true)], [BridgeI18n.t('子智能体'), BridgeI18n.t('查看派生任务关系与执行记录'), () => this.agents()]]) {
       const button = this.button('', () => { dialog.close(); action(); }, name);
       button.append(this.node('strong', '', name), this.node('span', '', description));
-      if((this.current.provider||this.current.access?.canUseSideChat===false)&&['侧边聊天','子智能体'].map(BridgeI18n.t).includes(name)) {button.disabled=true;button.lastChild.textContent=BridgeI18n.t('当前客户端尚未提供此能力');}
+      if((this.current.provider&&!['codex','deepseek'].includes(this.current.provider)||this.current.provider==='deepseek'&&this.current.access?.canUseSideChat!==true||this.current.access?.canUseSideChat===false)&&['侧边聊天','子智能体'].map(BridgeI18n.t).includes(name)) {button.disabled=true;button.lastChild.textContent=BridgeI18n.t('当前客户端尚未提供此能力');}
       choices.append(button);
     }
     dialog.append(head, choices); dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
@@ -291,11 +291,12 @@ class Workbench {
   async refreshSideChats(){
     clearTimeout(this.sideChatTimer);
     const session=this.current;
-    if(!session||document.hidden||session.host!=='local'||session.provider&&session.provider!=='codex'||session.access?.canUseSideChat===false||this.sessions.get(session.key)!==session)return;
+    if(!session||document.hidden||session.host!=='local'||session.provider&&!['codex','deepseek'].includes(session.provider)||session.provider==='deepseek'&&session.access?.canUseSideChat!==true||session.access?.canUseSideChat===false||this.sessions.get(session.key)!==session)return;
     if(session.sideChatRead&&!session.sideChatRead.signal.aborted)return;
     const controller=session.sideChatRead=new AbortController();
     try{
-      const state=await this.request('/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host),undefined,controller.signal);
+      const url=session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(session.id):'/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host);
+      const state=await this.request(url,undefined,controller.signal);
       if(!controller.signal.aborted&&this.current===session&&!document.hidden&&session.access?.canUseSideChat!==false)this.syncSideChats(session,state.slots);
     }catch(error){
       if(!controller.signal.aborted&&error.status===401)this.onUnauthorized();
@@ -308,7 +309,7 @@ class Workbench {
     }
   }
   createSideChat(session,slot='') {
-    if(!session||session.access?.canUseSideChat===false||session.provider&&session.provider!=='codex')return;
+    if(!session||session.access?.canUseSideChat===false||session.provider==='deepseek'&&session.access?.canUseSideChat!==true||session.provider&&!['codex','deepseek'].includes(session.provider))return;
     const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;
     const number=session.sideChatSerial=(session.sideChatSerial||0)+1;
     const name=BridgeI18n.t('侧边聊天')+(number>1?' '+number:'');
