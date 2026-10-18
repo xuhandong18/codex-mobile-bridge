@@ -238,6 +238,120 @@ class MainAutoTitleTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.bridge.auto_titles.jobs, {})
 
+    def test_explicit_summary_uses_saved_first_message_without_activating_or_replaying(self):
+        first = '$some-skill\n请为开发流程增加程序化编排，减少上下文消耗。'
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET title=?, first_user_message=?', (first, first))
+            db.commit()
+        requests = list(self.fixture.requests)
+        with patch.object(self.bridge, '_attach', side_effect=AssertionError('Must not activate original chat')), \
+                patch.object(self.bridge.store, 'history', side_effect=AssertionError('Must not read history')):
+            self.assertEqual(self.bridge.title_summary_status(support.THREAD)['status'], 'ready')
+            self.bridge.summarize_title(support.THREAD)
+            self.assertTrue(self.started.wait(1))
+            self.assertEqual(self.bridge.title_summary_status(support.THREAD)['status'], 'running')
+            self.bridge.summarize_title(support.THREAD)
+            self.release.set()
+            wait_for(lambda: self.bridge.title_summary_status(support.THREAD)['status'] == 'complete')
+        self.assertEqual(self.calls[0][2], first)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.bridge.title_summary_status(support.THREAD)['title'], '修复侧边聊天同步')
+        self.assertEqual(self.fixture.requests, requests)
+        self.bridge.summarize_title(support.THREAD)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_explicit_summary_rejects_named_chats_and_never_retries_unknown_result(self):
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET first_user_message="原始消息", title="原始消息", name="我的名称"')
+            db.commit()
+        with self.assertRaises(ValueError):
+            self.bridge.summarize_title(support.THREAD)
+        self.assertEqual(self.calls, [])
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET name=NULL')
+            db.commit()
+        with patch('bridge.app.service.generate_title', side_effect=TimeoutError('unknown')):
+            self.bridge.summarize_title(support.THREAD)
+            wait_for(lambda: self.bridge.title_summary_status(support.THREAD)['status'] == 'unknown')
+        self.bridge.summarize_title(support.THREAD)
+        self.assertEqual(self.calls, [])
+
+    def test_explicit_summary_preserves_manual_name_chosen_during_generation(self):
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET first_user_message="原始消息", title="原始消息"')
+            db.commit()
+        self.bridge.summarize_title(support.THREAD)
+        self.assertTrue(self.started.wait(1))
+        self.bridge.rename(support.THREAD, '我刚设置的名称')
+        self.release.set()
+        wait_for(lambda: not self.bridge.auto_titles.cancels)
+        self.assertEqual(self.bridge.title_summary_status(support.THREAD)['status'], 'manual')
+        self.assertEqual(self.bridge.store.get(support.THREAD)['name'], '我刚设置的名称')
+
+    def test_old_gateway_auto_title_is_recovered_after_next_accepted_send_using_original_message(self):
+        first = '设计程序化编排与会话分叉机制，减少长期开发中的上下文消耗。'
+        self.bridge.creations['old-creation'] = {'id': support.THREAD, 'autoTitle': True, 'host': 'local', 'kind': 'desktop'}
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET title=?, first_user_message=?', (first, first))
+            db.commit()
+        self.bridge.list(local_only=True)
+        self.bridge.view(support.THREAD)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.bridge.send(support.THREAD, '继续讨论集成测试', str(uuid.uuid4()))['status'], 'accepted')
+        self.assertTrue(self.started.wait(1))
+        self.assertEqual(self.calls[0][2], first)
+        self.release.set()
+        wait_for(lambda: self.bridge.title_summary_status(support.THREAD)['status'] == 'complete')
+        self.bridge.send(support.THREAD, '又一条后续消息', str(uuid.uuid4()))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_explicit_summary_can_use_saved_model_without_connecting_the_original_chat(self):
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('ALTER TABLE threads ADD COLUMN model TEXT')
+            db.execute('ALTER TABLE threads ADD COLUMN model_provider TEXT')
+            db.execute('UPDATE threads SET first_user_message="原始需求", title="原始需求", model="recorded-model", model_provider="custom-api"')
+            db.commit()
+        self.bridge.live.pop(support.THREAD)
+        with patch.object(self.bridge, '_attach', side_effect=AssertionError('No attach')), \
+                patch.object(self.bridge.store, 'history', side_effect=AssertionError('No history')):
+            self.bridge.summarize_title(support.THREAD)
+            self.assertTrue(self.started.wait(1))
+            self.assertEqual(self.calls[0][3:5], ('recorded-model', 'custom-api'))
+            self.release.set()
+            wait_for(lambda: self.bridge.title_summary_status(support.THREAD)['status'] == 'complete')
+
+    def test_explicit_summary_never_falls_back_to_a_global_model_or_other_source(self):
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET first_user_message="原始需求", title="原始需求"')
+            db.commit()
+        self.bridge.live.pop(support.THREAD)
+        with self.assertRaisesRegex(ValueError, '模型接入'):
+            self.bridge.summarize_title(support.THREAD)
+        with patch.object(self.bridge, 'host', 'remote'), self.assertRaises(ValueError):
+            self.bridge.summarize_title(support.THREAD)
+        metadata = self.bridge.store.get(support.THREAD)
+        with patch.object(self.bridge.store, 'get', return_value={**metadata, 'origin': 'cli'}), self.assertRaises(ValueError):
+            self.bridge.summarize_title(support.THREAD)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.bridge.auto_titles.jobs, {})
+
+    def test_native_name_equal_to_first_message_still_skips_queued_inference(self):
+        busy, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        def blocker(cancel):
+            busy.set()
+            release.wait(2)
+            return {'title': '队列占位'}
+        self.bridge.auto_titles.submit('side:blocker', 'first', blocker, lambda title: True)
+        self.assertTrue(busy.wait(1))
+        self.bridge.send(support.THREAD, '原始消息', str(uuid.uuid4()))
+        with closing(sqlite3.connect(self.support.root / 'state_5.sqlite')) as db:
+            db.execute('UPDATE threads SET name="原始消息"')
+            db.commit()
+        release.set()
+        wait_for(lambda: self.bridge.auto_titles.status('main:' + support.THREAD) == 'skipped')
+        self.assertEqual(self.calls, [])
+
     def test_unknown_first_send_does_not_summarize_a_later_message(self):
         with patch.object(self.bridge, '_call', side_effect=support.IPCError('result unknown')):
             with self.assertRaises(support.IPCError):
@@ -275,3 +389,38 @@ class MainAutoTitleTests(unittest.TestCase):
         self.bridge._schedule_title(self.bridge.live[support.THREAD], 'first', candidate)
         wait_for(lambda: self.bridge.auto_titles.jobs['main:' + support.THREAD]['status'] == 'unknown')
         self.assertEqual(self.calls, [])
+
+
+class TitleSummaryHttpTests(unittest.TestCase):
+    setUpClass = classmethod(support.HttpTests.setUpClass.__func__)
+    tearDown = support.HttpTests.tearDown
+    request = support.HttpTests.request
+    login = support.HttpTests.login
+
+    def setUp(self):
+        support.HttpTests.setUp(self)
+        self.calls = []
+        self.server.bridge.title_summary_status = lambda identifier: {'status': 'ready', 'available': True}
+        self.server.bridge.summarize_title = lambda identifier: self.calls.append(identifier) or {'status': 'queued'}
+        self.route = '/api/sessions/' + support.THREAD + '/auto-title'
+
+    def test_authenticated_reads_never_generate_and_post_requires_csrf(self):
+        self.assertEqual(self.request('GET', self.route)[0], 401)
+        self.assertEqual(self.request('POST', self.route, {})[0], 401)
+        headers = self.login()
+        self.assertEqual(self.request('GET', self.route, headers=headers)[2]['status'], 'ready')
+        self.assertEqual(self.request('POST', self.route, {}, {'Cookie': headers['Cookie']})[0], 403)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.request('POST', self.route, {}, headers)[2]['status'], 'queued')
+        self.assertEqual(self.calls, [support.THREAD])
+        self.assertEqual(self.request('POST', self.route, {'text': 'Do not accept caller text'}, headers)[0], 400)
+        self.assertEqual(self.calls, [support.THREAD])
+
+    def test_relay_allows_only_exact_get_and_post_routes(self):
+        from relay.protocol import validate
+        validate('GET', self.route)
+        validate('POST', self.route, 2)
+        for method, route in [('DELETE', self.route), ('GET', self.route + '/anything'),
+                              ('POST', self.route + '/anything')]:
+            with self.subTest(method=method, route=route), self.assertRaises((PermissionError, ValueError)):
+                validate(method, route, 2 if method == 'POST' else 0)

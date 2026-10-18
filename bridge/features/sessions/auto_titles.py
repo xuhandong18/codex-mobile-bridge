@@ -30,6 +30,10 @@ class AutoTitles:
         with self.lock:
             return self.closed or bool(self.jobs.get(key, {}).get('manual'))
 
+    def status(self, key):
+        with self.lock:
+            return self.jobs.get(key, {}).get('status')
+
     def protect(self, key):
         with self.lock:
             if self.closed:

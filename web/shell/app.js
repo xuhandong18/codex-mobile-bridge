@@ -1224,7 +1224,7 @@ $('phone-language').onchange=()=>{
   $('new-chat-help').textContent=t($('new-chat-type').value==='cli'?'选择已有 CLI 项目目录，在此创建聊天。':'选择已有项目，或不选择项目创建独立聊天。电脑会打开这条聊天。');
   $('new-chat-submit').textContent=t($('new-chat-type').value==='cli'?'创建聊天':'创建并打开');
   renderLoginStatus();
-  for(const id of ['login-error','send-error','model-error','new-chat-error','notify-error','rename-error','pushplus-error','toast'])$(id).textContent=t($(id).textContent);
+  for(const id of ['login-error','send-error','model-error','new-chat-error','notify-error','rename-error','rename-summary-status','pushplus-error','toast'])$(id).textContent=t($(id).textContent);
   for(const option of $('new-chat-project').options){const project=newChatProjects.find(p=>p.key===option.value);if(project)option.textContent=project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel);}
   if($('model-select').querySelector('[value=__custom__]'))$('model-select').querySelector('[value=__custom__]').textContent=t('自定义模型…');
   if(state){approvalStamp='';renderState(state);[...$('approvals').querySelectorAll('input,textarea,select')].forEach((node,i)=>{if(replies[i]){node.value=replies[i].value;node.checked=replies[i].checked;if(node.tagName==='SELECT')node.dispatchEvent(new Event('change'));}});}
@@ -1236,11 +1236,20 @@ $('phone-language').onchange=()=>{
 BridgeI18n.apply();
 
 let renameTarget=null,renameBusy=false;
+const titleSummary=new ChatTitleSummary({dialog:$('rename-dialog'),button:$('rename-summary'),
+  input:$('rename-title'),status:$('rename-summary-status'),request:api,updated:(target,title)=>{
+    if(currentId===target.id&&currentHost===target.host){
+      if(state){state.title=title;state.titleSource='native';}
+      $('chat-title').textContent=title;$('details-title').textContent=title;
+    }
+    loadList(true).catch(()=>{});
+  }});
 $('rename-chat').onclick=()=>{
   if(!currentId||renameBusy||!currentAccess().canConfigure)return;
   renameTarget={id:currentId,host:currentHost};
   $('rename-title').value=state?.title||$('chat-title').textContent;
   $('rename-error').textContent='';$('chat-details-dialog').close();$('rename-dialog').showModal();
+  titleSummary.open(renameTarget,sessionUrl(renameTarget.id,'auto-title',renameTarget.host));
 };
 $('rename-form').onsubmit=async event=>{
   event.preventDefault();if(renameBusy||!renameTarget||!currentAccess().canConfigure)return;

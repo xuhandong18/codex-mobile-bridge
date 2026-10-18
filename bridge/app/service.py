@@ -2061,6 +2061,44 @@ class Bridge:
                 session.changed()
         return {'id': thread_id, 'host': self.host, 'title': title}
 
+    def title_summary_status(self, thread_id):
+        uuid.UUID(thread_id)
+        metadata = self.store.get(thread_id)
+        first = metadata.get('first_user_message')
+        status = self.auto_titles.status('main:' + thread_id)
+        available = (self.host == 'local' and metadata.get('origin') == 'desktop'
+                     and not metadata.get('name') and not metadata.get('archived')
+                     and isinstance(first, str) and bool(first.strip())
+                     and session_title_source(metadata) == 'preview')
+        return {'status': status or ('ready' if available else 'unavailable'),
+                'available': bool(available and status is None), 'title': session_title(metadata)}
+
+    @operation
+    def summarize_title(self, thread_id):
+        """Explicit recovery for old previews; never activate or read the chat history."""
+        status = self.title_summary_status(thread_id)
+        if status['status'] not in ('ready', 'unavailable'):
+            return status  # Repeated clicks/polls cannot replay a model request.
+        if not status['available']:
+            raise ValueError('此聊天已有名称或没有可摘要的首条文字')
+        metadata = self.store.get(thread_id)
+        session = self.session(thread_id, attach=False, background=True)
+        with session.condition:
+            current = session.state or {}
+            settings = {'model': current.get('latestModel') or
+                        (current.get('latestCollaborationMode') or {}).get('settings', {}).get('model') or metadata.get('model'),
+                        'modelProvider': current.get('modelProvider') or metadata.get('model_provider')}
+        if not all(settings.values()):
+            raise ValueError('尚未取得此聊天的模型接入，请先连接聊天后再生成名称')
+        candidate = {'title': metadata.get('title') or '', 'settings': settings,
+                     'stamp': access_stamp(self.codex_home)}
+        if not self._schedule_title(session, metadata['first_user_message'], candidate):
+            status = self.title_summary_status(thread_id)
+            if status['available']:
+                raise ValueError('标题任务队列已满，请稍后再试')
+            return status
+        return self.title_summary_status(thread_id)
+
     def _title_generator(self, text, settings, stamp):
         def generate(cancel):
             if self.closed.is_set() or stamp != access_stamp(self.codex_home):
@@ -2086,26 +2124,37 @@ class Bridge:
             lambda title: chat.apply_auto_title(title, revision))
 
     def _title_candidate(self, session, text, submission_key=None):
-        """Capture before dispatch; do not infer a first message from a tail page."""
+        """Capture before dispatch, using saved first-message metadata for recovery."""
         if self.host != 'local' or session.origin != 'desktop' or not text.strip():
             return None
-        with self.submit_lock:
-            if any(key != submission_key and key.startswith(session.id + ':') and
-                   row.get('status') in ('accepted', 'unknown', 'ignored')
-                   for key, row in self.submissions.items()):
-                return None
         try:
             metadata = self.store.get(session.id)
-            if 'first_user_message' not in metadata or metadata.get('first_user_message'):
+            if 'first_user_message' not in metadata or self.auto_titles.status('main:' + session.id):
                 return None
+            first = metadata.get('first_user_message')
+            if first:
+                # Only recover chats whose creation explicitly selected auto naming.
+                with self.create_lock:
+                    opted_in = any(row.get('id') == session.id and row.get('autoTitle') is True
+                                   and row.get('host') == 'local' and row.get('kind', 'desktop') == 'desktop'
+                                   for row in self.creations.values())
+                if not opted_in or session_title_source(metadata) != 'preview':
+                    return None
+                text = first
+            else:
+                with self.submit_lock:
+                    if any(key != submission_key and key.startswith(session.id + ':') and
+                           row.get('status') in ('accepted', 'unknown', 'ignored')
+                           for key, row in self.submissions.items()):
+                        return None
             if metadata.get('name') or metadata.get('archived'):
                 return None
             original = metadata.get('title') or ''
-            if original.strip() not in ('', '未命名聊天', '新聊天', 'New chat', 'New Chat', 'Untitled'):
+            if not first and original.strip() not in ('', '未命名聊天', '新聊天', 'New chat', 'New Chat', 'Untitled'):
                 return None
             with session.condition:
                 view = session.view()
-                if any(message['role'] == 'user' for turn in view['turns'] for message in turn['messages']):
+                if not first and any(message['role'] == 'user' for turn in view['turns'] for message in turn['messages']):
                     return None
                 current = session.state or {}
                 if current.get('name') or view['titleSource'] == 'native' and view['title'] != original:
@@ -2115,25 +2164,26 @@ class Bridge:
                             'modelProvider': current.get('modelProvider')}
                 if not all(settings.values()):
                     return None
-            return {'title': original, 'settings': settings, 'stamp': access_stamp(self.codex_home)}
+            return {'title': original, 'text': text, 'settings': settings, 'stamp': access_stamp(self.codex_home)}
         except (OSError, ValueError, KeyError, StoreUnavailable):
             return None  # Optional naming never prevents sending.
 
     def _schedule_title(self, session, text, candidate):
         if candidate is None:
             return
+        text = candidate.get('text', text)
         key = 'main:' + session.id
         infer = self._title_generator(text, candidate['settings'], candidate['stamp'])
 
         def generate(cancel):
             metadata = self.store.get(session.id)
             native = metadata.get('name') or metadata.get('title')
-            if native and native not in (candidate['title'], text, ' '.join(text.split())):
+            if metadata.get('name') or native and native not in (candidate['title'], text, ' '.join(text.split())):
                 return {'title': native, 'reusedNative': True}
             return infer(cancel)
 
-        self.auto_titles.submit(key, text, generate,
-                                lambda title: self._apply_generated_title(session, text, candidate, title))
+        return self.auto_titles.submit(key, text, generate,
+                                      lambda title: self._apply_generated_title(session, text, candidate, title))
 
     @operation
     def _apply_generated_title(self, session, text, candidate, title):

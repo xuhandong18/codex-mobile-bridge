@@ -26,6 +26,66 @@ window.BridgeClipboard={
   }
 };
 
+class ChatTitleSummary {
+  constructor({dialog,button,input,status,request,updated}){
+    Object.assign(this,{dialog,button,input,status,request,updated});
+    button.onclick=()=>this.start();
+    dialog.addEventListener('close',()=>{if(!dialog.open)this.close();});
+  }
+  close(){clearTimeout(this.timer);this.target=null;}
+  open(target,url){
+    this.close();
+    this.target={...target,url,input:this.input.value};
+    this.button.hidden=true;this.status.textContent='';
+    this.read(this.target);
+  }
+  active(target){return this.target===target&&this.dialog.open;}
+  schedule(target){
+    clearTimeout(this.timer);
+    if(this.active(target))this.timer=setTimeout(()=>this.read(target),1500);
+  }
+  async read(target){
+    try{
+      const result=await this.request(target.url);
+      if(this.active(target))this.render(target,result);
+    }catch(error){
+      if(!this.active(target))return;
+      this.status.textContent=actionText('暂时无法确认生成状态，请稍后重新打开此窗口。');
+      this.button.disabled=true;
+      if(target.submitted)this.schedule(target);
+    }
+  }
+  render(target,result){
+    const pending=['queued','running'].includes(result.status);
+    this.button.hidden=!result.available&&!pending&&result.status!=='unknown';
+    this.button.disabled=!result.available;
+    const messages={ready:'根据首条消息生成简短名称，会使用当前模型接入的额度。',
+      queued:'名称生成已排队…',running:'正在生成简短名称…',complete:'简短名称已生成并同步。',
+      skipped:'已保留聊天当前的名称。',unknown:'上次生成结果尚未确认，请先检查聊天名称；不会自动重复请求。'};
+    this.status.textContent=actionText(messages[result.status]||'');
+    if(['complete','skipped'].includes(result.status)&&result.title){
+      if(this.input.value===target.input)this.input.value=result.title;
+      this.updated(target,result.title);
+    }
+    if(pending)this.schedule(target);
+  }
+  async start(){
+    const target=this.target;
+    if(!target||!this.active(target)||this.button.disabled)return;
+    this.button.disabled=true;target.submitted=true;
+    this.status.textContent=actionText('正在生成简短名称…');
+    try{
+      const result=await this.request(target.url,{});
+      if(this.active(target))this.render(target,result);
+    }catch(error){
+      // A lost receipt is resolved with reads, never another model request.
+      if(!this.active(target))return;
+      this.status.textContent=actionText(error.message);
+      this.schedule(target);
+    }
+  }
+}
+
 class MessageActions {
   constructor({request,openChat,refresh,uuid,notify,busy}){
     Object.assign(this,{request,openChat,refresh,uuid,notify,busy});

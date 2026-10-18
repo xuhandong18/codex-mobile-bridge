@@ -44,7 +44,7 @@ from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 LOG = logging.getLogger(__name__)
 from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
-THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename|record-path|archive|unarchive|delete))?$")
+THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename|auto-title|record-path|archive|unarchive|delete))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
 UPLOAD_THUMB_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/thumb$")
 DESKTOP_IMAGE_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/desktop-images/([0-9a-f]{64})$")
@@ -931,6 +931,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.read_json() if write else {}
                 return self.output(200, self.server.notifications.policy(thread_id, bridge.host, body if write else None))
             if not write:
+                if action == 'auto-title':
+                    return self.output(200, bridge.title_summary_status(thread_id))
                 if action == 'record-path':
                     return self.output(200, bridge.session_record_path(thread_id))
                 if action == 'permissions':
@@ -973,6 +975,10 @@ class Handler(BaseHTTPRequestHandler):
                                      attachments=body.get('attachments'), ui_locale=body.get("uiLocale"))
             elif action == "rename":
                 result = bridge.rename(thread_id, body.get("title"))
+            elif action == 'auto-title':
+                if body:
+                    raise ValueError('标题生成参数无效')
+                result = bridge.summarize_title(thread_id)
             elif action in ('archive', 'unarchive', 'delete'):
                 if set(body) - {'confirmed'}:
                     raise ValueError('聊天操作参数无效')

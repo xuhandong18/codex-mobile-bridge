@@ -19,8 +19,14 @@
 
 ## 本次范围与验证
 
-本次覆盖网关电脑上的 Codex Desktop 主聊天及侧边聊天的新首条文字消息。CLI、SSH 聊天保留原生标题行为；已有历史聊天不会在读取时批量补生成或改名。首条仅有附件而无文字时不生成摘要。
+本次覆盖网关电脑上的 Codex Desktop 主聊天及侧边聊天的新首条文字消息。CLI、SSH 聊天保留原生标题行为；首条仅有附件而无文字时不生成摘要。
 
-回归入口：`python -B scripts/test-backend.py --source-only -p test_auto_titles.py`、`test_session_titles.py`、`test_side_chat.py`，以及 `npm run test:desktop`。`python -B scripts/smoke-auto-title.py` 使用真实 Codex 运行时和本地模拟模型，验证实际请求、隐藏历史、工具限制、用量与进程/目录清理，不使用真实账号。
+历史聊天不会在读取时批量补生成或改名。由本网关创建、当时选择自动标题、仍显示首条消息预览且没有标题任务记录的本机 Desktop 聊天，会在下一次普通发送成功后补生成一次，输入仍取数据库保存的原始首条文字，不取后续消息或分页历史。队列满而尚未提交的任务也可沿此路径补上；已有任务记录（包括结果未知）不自动重试。
+
+本机 Desktop 聊天的“修改聊天名称”窗口提供“生成简短名称”，可显式补生成已有聊天的预览标题。`GET /api/sessions/<id>/auto-title` 只读资格、状态与当前展示名称；`POST` 同一路径仅接受空对象，使用登录和 CSRF 校验，并复用一次性任务台账。它只从数据库及已取得的实时快照读取首条消息、模型与 provider，不读取聊天历史或激活原会话。缺少模型接入时提示先连接，不回退到全局模型。完成后通过原生名称写回，桌面和手机共同读取；已有原生名称、手动选择、归档和不支持的来源不能启动新摘要。
+
+生成窗口显示排队、运行、完成或结果未知；丢失提交回执只查询状态，不重复 POST。关闭或切换窗口后丢弃旧查询，生成期间用户手填的名称不会被回包覆盖。手动保存仍可取消后台摘要。输入与摘要沿用原模型接入的额度或计费。
+
+回归入口：`python -B scripts/test-backend.py --source-only -p test_auto_titles.py`、`test_session_titles.py`、`test_side_chat.py`，以及 `npm run test:desktop`。补生成按钮的真实 DOM 验证入口为 `node scripts/test-auto-titles-browser.cjs`，使用 Playwright/Chromium 与隔离合成聊天，覆盖电脑、手机、平板及回执丢失、手动输入和过期回包；不连接真实客户端或模型。`python -B scripts/smoke-auto-title.py` 使用真实 Codex 运行时和本地模拟模型，验证实际请求、隐藏历史、工具限制、用量与进程/目录清理，不使用真实账号。
 
 2026-10-18 在本机现有接入做过一次真实摘要请求，返回“修复移动端侧边聊天同步及多聊重命名”。原生统计为输入 5259、输出 28、总计 5287 token；这是包含原生附加上下文的一次样本，不能据标题长度估算用量，也不承诺后续请求固定消耗。

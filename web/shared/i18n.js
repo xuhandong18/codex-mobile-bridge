@@ -2,6 +2,18 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"生成简短名称":"Generate a short name",
+"根据首条消息生成简短名称，会使用当前模型接入的额度。":"Generate a short name from the first message using this chat's model access allowance.",
+"名称生成已排队…":"Name generation queued…",
+"正在生成简短名称…":"Generating a short name…",
+"简短名称已生成并同步。":"Short name generated and synced.",
+"已保留聊天当前的名称。":"The chat's current name has been kept.",
+"上次生成结果尚未确认，请先检查聊天名称；不会自动重复请求。":"The previous generation result is unconfirmed. Check the chat name; the request will not be repeated automatically.",
+"暂时无法确认生成状态，请稍后重新打开此窗口。":"Cannot confirm generation status. Reopen this window later.",
+"此聊天已有名称或没有可摘要的首条文字":"This chat already has a name or has no first text message to summarize",
+"尚未取得此聊天的模型接入，请先连接聊天后再生成名称":"This chat's model access is unavailable. Connect the chat before generating a name",
+"标题任务队列已满，请稍后再试":"The title generation queue is full. Try again later",
+"标题生成参数无效":"Invalid title generation parameters",
 "正在恢复答案…":"Restoring answers…",
 "正在保存答案…":"Saving answers…",
 "答案已保存":"Answers saved",
