@@ -2,6 +2,11 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"正在恢复答案…":"Restoring answers…",
+"正在保存答案…":"Saving answers…",
+"答案已保存":"Answers saved",
+"答案暂未同步，当前输入已保存在本机。":"Answers have not synced yet. Your input is saved on this device.",
+"其他设备已修改此答案，当前输入已保留。请核对后重新编辑。":"Another device changed this answer. Your input is kept here; review it before editing again.",
 "跟随客户端":"Follow client",
 "可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。":"Continue across devices. Ending the side chat archives its Harness fork.",
 "结束此侧边聊天？正在运行的回复会停止，Harness 分叉记录会归档。":"End this side chat? Its running reply will stop and its Harness fork will be archived.",

@@ -17,6 +17,7 @@
     "features/chat/project-folder-browser.css"
   ],
   "/activity.js": "features/chat/activity.js",
+  "/answer-drafts.js": "features/chat/answer-drafts.js",
   "/attachments.js": "features/chat/attachments.js",
   "/fast-mode.js": "features/chat/fast-mode.js",
   "/list-sync.js": "features/chat/list-sync.js",

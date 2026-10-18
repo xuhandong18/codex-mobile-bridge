@@ -53,3 +53,5 @@ npm run test:updater
 `mobile/tests/` 中 Java/Swift 用例由相应 `scripts/test-mobile-*`、`scripts/test-ios-*` 驱动，可能编译测试程序；只在本次任务允许且环境具备时执行。Web 资源验证不代替 Android WebView 或 iOS WKWebView 的原生交互验证。
 
 `scripts/gateway-resources.json` 与源路径测试保证清单一致，但冻结导入、签名、安装和更新必须在获准打包后、目标系统上另外验证。不要根据 macOS 单机测试宣称 Windows/Linux 已实机通过。
+
+交互问题草稿的后端验证为 `python -B scripts/test-backend.py --source-only -p test_answer_drafts.py`，浏览器验证为 `node scripts/test-answer-drafts-browser.cjs`。后者使用独立手机/平板上下文、真实 DOM 和合成草稿服务，检查页面重建、跨设备恢复、并发冲突及断线核对；需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定测试运行时。详见 [答案草稿说明](../docs/answer-drafts.md)。

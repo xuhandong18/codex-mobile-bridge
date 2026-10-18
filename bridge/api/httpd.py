@@ -33,6 +33,7 @@ from bridge.features.auth.auth import Auth, LoginRejected
 from bridge.features.updates.mobile import MobileUpdates
 from bridge.clients.codex.ipc import IPCError
 from bridge.features.sessions.goal import GoalError
+from bridge.features.sessions.answer_drafts import AnswerDrafts
 from bridge.clients.codex.catalog import CatalogError
 from bridge.features.sessions.store import StoreUnavailable
 from bridge.clients.codex.remote import RemoteUnavailable
@@ -58,11 +59,13 @@ class GatewayServer(ThreadingHTTPServer):
 
     def __init__(self, address, bridge, config, web_dir, data_dir=None, shared=None):
         self.transfer_directory = data_dir if shared is None else shared.transfer_directory
+        self.answer_drafts_owner = shared is None
         self.mobile_updates_owner = shared is None and data_dir is not None
         self.mobile_updates = MobileUpdates(data_dir) if self.mobile_updates_owner else getattr(shared, 'mobile_updates', None)
         self.local_access = config.get('localAccess', True)
         if shared is None:
             self.bridge = bridge
+            self.answer_drafts = AnswerDrafts(data_dir)
             self.notifications = None
             self.harness = Harness(data_dir) if data_dir else None
             self.desktop_sessions = DesktopSessions(data_dir, bridge, gateway_running=True) if data_dir else None
@@ -79,12 +82,13 @@ class GatewayServer(ThreadingHTTPServer):
         else:
             # Listeners serve one gateway: shared sessions, pairing, limits and
             # mutable tunnel origins, with a single notification manager.
-            for name in ('bridge', 'harness', 'desktop_sessions', 'desktop_uploads', 'notifications', 'instance_id', 'auth', 'origins', 'pairing', 'hosts', 'secure_hosts', 'web_dir', 'slots', 'ui_language_path'):
+            for name in ('bridge', 'answer_drafts', 'harness', 'desktop_sessions', 'desktop_uploads', 'notifications', 'instance_id', 'auth', 'origins', 'pairing', 'hosts', 'secure_hosts', 'web_dir', 'slots', 'ui_language_path'):
                 setattr(self, name, getattr(shared, name))
         try:
             super().__init__(address, Handler)
         except OSError:
             if shared is None:
+                self.answer_drafts.close()
                 if self.harness:
                     self.harness.close()
                 if self.desktop_sessions:
@@ -101,6 +105,8 @@ class GatewayServer(ThreadingHTTPServer):
     def server_close(self):
         if self.mobile_updates_owner:
             self.mobile_updates.close()
+        if self.answer_drafts_owner:
+            self.answer_drafts.close()
         super().server_close()
 
     def server_bind(self):
@@ -356,6 +362,11 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.authorized(write)
             if not auth:
                 return
+            if path == '/api/answer-drafts':
+                if write:
+                    status, result = self.server.answer_drafts.save(self.read_json())
+                    return self.output(status, result)
+                return self.output(200, self.server.answer_drafts.read(query.get('scope', [''])[0]))
             if path == SHELL_PATH:
                 if write or query:
                     return self.output(405, {'error': '请求方式无效'})

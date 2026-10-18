@@ -335,8 +335,8 @@ def normalize_request(request):
         "item/commandExecution/requestApproval": ("command", "cwd", "reason", "availableDecisions", "networkApprovalContext"),
         "item/fileChange/requestApproval": ("reason", "grantRoot", "changes"),
         "item/permissions/requestApproval": ("reason", "permissions"),
-        "item/tool/requestUserInput": ("questions",),
-        "tool/requestUserInput": ("questions",),
+        "item/tool/requestUserInput": ("questions", "turnId", "itemId"),
+        "tool/requestUserInput": ("questions", "turnId", "itemId"),
         "item/plan/requestImplementation": ("turnId", "planContent"),
         "mcpServer/elicitation/request": ("serverName", "message", "mode", "requestedSchema"),
     }

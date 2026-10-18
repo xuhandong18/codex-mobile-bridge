@@ -268,12 +268,12 @@ class SideChatPanel {
       if(p.permissions)card.append(n('pre','',JSON.stringify(p.permissions,null,2)));
       const isInput=method.includes('requestUserInput'),isMcp=method==='mcpServer/elicitation/request';
       if(isInput)for(const q of p.questions||[]){
-        const label=n('label','',q.question||q.header||q.id),input=n('textarea');input.rows=2;input.required=true;
+        const label=n('label','',q.question||q.header||q.id),input=n('textarea');label.dataset.answerKey=JSON.stringify([q.id,q]);input.rows=2;input.required=true;
         if(q.options?.length){const select=n('select');select.append(new Option(BridgeI18n.t('选择答案或自行填写'),''));for(const option of q.options)select.append(new Option(option.label,option.label));select.onchange=()=>{input.value=select.value;};label.append(select);}
         label.append(input);card.append(label);controls[q.id]=()=>input.value;
       }
       if(isMcp)for(const [key,field] of Object.entries(p.requestedSchema?.properties||{})){
-        const label=n('label','',field.title||key);let input;
+        const label=n('label','',field.title||key);label.dataset.answerKey=JSON.stringify([key,field]);let input;
         if(field.enum){input=n('select');input.append(new Option(BridgeI18n.t('请选择…'),''));for(const value of field.enum)input.append(new Option(String(value),String(value)));}
         else{input=n('input');input.type=field.type==='boolean'?'checkbox':['number','integer'].includes(field.type)?'number':'text';if(input.type==='number')input.step=field.type==='integer'?'1':'any';}
         input.required=(p.requestedSchema.required||[]).includes(key)&&input.type!=='checkbox';label.append(input);card.append(label);
@@ -292,6 +292,7 @@ class SideChatPanel {
         else if(isMcp){const content={};for(const [key,get] of Object.entries(controls)){const value=get();if(value!==undefined)content[key]=value;}respond({action:'accept',content});}
         else respond({decision:'accept'});};
       card.append(actions,error);this.approvals.append(card);
+      AnswerDrafts.bind(card,{scope:[this.session.provider||'codex',this.session.host||'local','side',this.state.id,request.method,p.turnId||'',p.itemId||'',request.id],request:this.workbench.request});
     }
   }
   schedule(){
