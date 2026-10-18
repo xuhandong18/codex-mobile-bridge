@@ -17,6 +17,8 @@ from bridge.resources import source_text
 
 from bridge.features.terminals.manager import TerminalManager
 from bridge.features.sessions.side_chat import SideChats
+from bridge.features.sessions.auto_titles import AutoTitles
+from bridge.clients.codex.title_runtime import generate_title, access_stamp, TitleError
 from bridge.features.sessions.activity import SubagentActivity
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
@@ -169,9 +171,10 @@ class Bridge:
         self.ipc = DesktopIPC(ipc_path or ipc_endpoint(codex_home), self._event, self._disconnected)
         self.subagent_activity = SubagentActivity(self.store, lambda: self.ipc.path, host)
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
-                                   executable_getter=executable_getter)
+                                   executable_getter=executable_getter, on_first_message=self._side_title)
         self.closed = threading.Event()
         Path(data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.auto_titles = AutoTitles(data_dir)
         self.ledger_path = Path(data_dir) / "submissions.json"
         self.submit_lock = threading.Lock()
         self.create_lock = threading.Lock()
@@ -2023,6 +2026,9 @@ class Bridge:
 
     @operation
     def rename(self, thread_id, title):
+        return self._rename(thread_id, title, manual=True)
+
+    def _rename(self, thread_id, title, *, manual):
         uuid.UUID(thread_id)
         if not isinstance(title, str) or not title.strip() or len(title) > 120 or any(unicodedata.category(c) in ('Cc', 'Zl', 'Zp') for c in title):
             raise ValueError('聊天名称需为 1–120 个字符，不能包含换行或控制字符')
@@ -2030,6 +2036,10 @@ class Bridge:
         self._require_desktop_feature(thread_id)
         session = self.session(thread_id, attach=False, background=True)
         with session.action_lock:
+            # Even choosing the current name is a manual choice. Cancel an
+            # outstanding summary before attempting the metadata write.
+            if manual:
+                self.auto_titles.protect('main:' + thread_id)
             if isinstance(self.store, RemoteStore):
                 source = source_text('features/sessions/create.py')
                 source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
@@ -2043,10 +2053,108 @@ class Bridge:
             with session.condition:
                 if session.state is not None:
                     session.state['title'] = title
+                    if 'name' in session.state:
+                        session.state['name'] = title
                 if session.saved_view is not None:
                     session.saved_view['title'] = title
+                    session.saved_view['titleSource'] = 'native'
                 session.changed()
         return {'id': thread_id, 'host': self.host, 'title': title}
+
+    def _title_generator(self, text, settings, stamp):
+        def generate(cancel):
+            if self.closed.is_set() or stamp != access_stamp(self.codex_home):
+                raise TitleError('标题任务的账号或配置已变化')
+            # Deliberately independent of the original chat cwd, owner and
+            # history. Only the model/provider/auth route is reused.
+            return generate_title(self.catalog_reader.executable, self.codex_home, text,
+                                  settings['model'], settings['modelProvider'], self.data_dir, cancel,
+                                  expected_stamp=stamp)
+        return generate
+
+    def _side_title(self, chat, text):
+        if not text.strip() or self.closed.is_set():
+            return
+        with chat.lock:
+            if chat.closed or chat.title_source == 'manual':
+                return
+            revision = chat.title_revision
+            settings = {'model': chat.state.get('latestModel'), 'modelProvider': chat.state.get('modelProvider')}
+            chat.cancel_title = lambda: self.auto_titles.protect('side:' + chat.id)
+        self.auto_titles.submit('side:' + chat.id, text,
+            self._title_generator(text, settings, chat.title_access_stamp),
+            lambda title: chat.apply_auto_title(title, revision))
+
+    def _title_candidate(self, session, text, submission_key=None):
+        """Capture before dispatch; do not infer a first message from a tail page."""
+        if self.host != 'local' or session.origin != 'desktop' or not text.strip():
+            return None
+        with self.submit_lock:
+            if any(key != submission_key and key.startswith(session.id + ':') and
+                   row.get('status') in ('accepted', 'unknown', 'ignored')
+                   for key, row in self.submissions.items()):
+                return None
+        try:
+            metadata = self.store.get(session.id)
+            if 'first_user_message' not in metadata or metadata.get('first_user_message'):
+                return None
+            if metadata.get('name') or metadata.get('archived'):
+                return None
+            original = metadata.get('title') or ''
+            if original.strip() not in ('', '未命名聊天', '新聊天', 'New chat', 'New Chat', 'Untitled'):
+                return None
+            with session.condition:
+                view = session.view()
+                if any(message['role'] == 'user' for turn in view['turns'] for message in turn['messages']):
+                    return None
+                current = session.state or {}
+                if current.get('name') or view['titleSource'] == 'native' and view['title'] != original:
+                    return None
+                settings = {'model': current.get('latestModel') or
+                            (current.get('latestCollaborationMode') or {}).get('settings', {}).get('model'),
+                            'modelProvider': current.get('modelProvider')}
+                if not all(settings.values()):
+                    return None
+            return {'title': original, 'settings': settings, 'stamp': access_stamp(self.codex_home)}
+        except (OSError, ValueError, KeyError, StoreUnavailable):
+            return None  # Optional naming never prevents sending.
+
+    def _schedule_title(self, session, text, candidate):
+        if candidate is None:
+            return
+        key = 'main:' + session.id
+        infer = self._title_generator(text, candidate['settings'], candidate['stamp'])
+
+        def generate(cancel):
+            metadata = self.store.get(session.id)
+            native = metadata.get('name') or metadata.get('title')
+            if native and native not in (candidate['title'], text, ' '.join(text.split())):
+                return {'title': native, 'reusedNative': True}
+            return infer(cancel)
+
+        self.auto_titles.submit(key, text, generate,
+                                lambda title: self._apply_generated_title(session, text, candidate, title))
+
+    @operation
+    def _apply_generated_title(self, session, text, candidate, title):
+        with session.action_lock:
+            if self.auto_titles.protected('main:' + session.id) or candidate['stamp'] != access_stamp(self.codex_home):
+                return False
+            metadata = self.store.get(session.id)
+            if metadata.get('name') or metadata.get('archived'):
+                return False
+            first = metadata.get('first_user_message') or text
+            if first != text:
+                return False
+            allowed = {candidate['title'], text, ' '.join(text.split())}
+            if (metadata.get('title') or '') not in allowed:
+                return False  # The desktop has already provided a real title.
+            with session.condition:
+                current = session.state or {}
+                if current.get('name') or current.get('title') and current['title'] not in allowed:
+                    return False
+            self._rename(session.id, title, manual=False)
+            return True
 
     def session_record_path(self, thread_id):
         uuid.UUID(thread_id)
@@ -2474,6 +2582,7 @@ class Bridge:
     def _dispatch(self, session, key, entry):
         submission_id = key.split(":")[1]
         text = entry["text"]
+        title_candidate = self._title_candidate(session, text, key) if entry['mode'] != 'steer' else None
         files = self.uploads.resolve(session.id, entry.get('attachments', []))
         request = {"threadId": session.id, "input": [{"type": "text", "text": text, "text_elements": []}], "clientUserMessageId": submission_id}
         request['input'].extend({'type': 'localImage', 'path': f['path']} for f in files if f['image'])
@@ -2503,6 +2612,10 @@ class Bridge:
             self._save_ledger()
         with session.condition:
             session.changed()
+        try:
+            self._schedule_title(session, text, title_candidate)
+        except Exception:
+            logging.getLogger(__name__).info('Automatic title scheduling failed; message remains accepted')
         return {"status": "accepted", "id": submission_id, "result": response}
 
     def interrupt(self, thread_id):
@@ -2621,6 +2734,8 @@ class Bridge:
         return self._call(session, mapping[method], payload)
 
     def close(self):
+        self.closed.set()
+        self.auto_titles.close()
         self.subagent_activity.close()
         self.terminals.close()
         self.side_chats.close()

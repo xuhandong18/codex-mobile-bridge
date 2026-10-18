@@ -211,17 +211,22 @@ def context_usage(state):
 def session_title(state, first_user_text=''):
     """Prefer the native name, then a short preview while auto-naming is pending."""
     title = state.get('name') or state.get('title')
-    if isinstance(title, str) and title.strip():
+    first = state.get('first_user_message') or first_user_text
+    raw_message_title = not state.get('name') and first and title == first
+    if isinstance(title, str) and title.strip() and not raw_message_title:
         return title
     preview = state.get('preview') or state.get('first_user_message') or first_user_text
     if isinstance(preview, str):
         summary = ' '.join(user_display_text(preview).split())
         if summary:
-            return summary[:80] + ('…' if len(summary) > 80 else '')
+            return summary[:28] + ('…' if len(summary) > 28 else '')
     return '未命名聊天'
 
 
 def session_title_source(state, first_user_text=''):
+    first = state.get('first_user_message') or first_user_text
+    if not state.get('name') and first and state.get('title') == first:
+        return 'preview'
     if any(isinstance(state.get(key), str) and state[key].strip() for key in ('name', 'title')):
         return 'native'
     if state.get('preview') or state.get('first_user_message'):

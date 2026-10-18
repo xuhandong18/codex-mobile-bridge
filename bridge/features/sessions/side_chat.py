@@ -162,6 +162,11 @@ class SideChat:
         self.error = None
         self.title = ''
         self.title_revision = 0
+        self.title_source = 'placeholder'
+        self.on_first_message = None
+        self.cancel_title = None
+        self.first_message_submission = None
+        self.first_message_accepted = False
         self.submissions = {}
         self.file_directory = None
         self.uploads = None
@@ -294,7 +299,7 @@ class SideChat:
                     request['supported'] = False
                     request['params'] = {'message': '此请求暂不支持在侧边聊天处理，请停止本次回复。'}
             return {**result, 'parentId': self.parent, 'error': self.error,
-                    'title': self.title, 'titleRevision': self.title_revision,
+                    'title': self.title, 'titleRevision': self.title_revision, 'titleSource': self.title_source,
                     'submissions': [{'id': k, 'status': v['status'], 'text': v['text'], 'mode': v.get('mode', 'send'), 'workMode': v.get('workMode', 'default'), 'attachments': v.get('attachments', []), 'error': v.get('error')} for k, v in self.submissions.items()]}
 
     def rename(self, title):
@@ -302,9 +307,25 @@ class SideChat:
         with self.lock:
             if self.closed:
                 raise SideChatError('此侧边聊天已关闭或已失效，请刷新标签')
-            if self.title != title:
+            if self.title != title or self.title_source != 'manual':
                 self.title, self.title_revision = title, self.title_revision + 1
+            self.title_source = 'manual'
+            if self.cancel_title:
+                self.cancel_title()
             return self.view()
+
+    def apply_auto_title(self, title, revision):
+        with self.lock:
+            if self.closed or self.title_source == 'manual' or self.title_revision != revision:
+                return False
+            self.title, self.title_source = title, 'summary'
+            self.title_revision += 1
+            return True
+
+    def title_info(self):
+        with self.lock:
+            return {'id': self.id, 'title': self.title, 'titleRevision': self.title_revision,
+                    'titleSource': self.title_source}
 
     def settings(self, model, effort, catalog):
         if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}", model):
@@ -430,12 +451,16 @@ class SideChat:
                     params['effort'] = self.state['latestReasoningEffort']
                 self.state['threadRuntimeStatus']['type'] = 'active'
             row['status'] = 'unknown'
+            if self.first_message_submission is None:
+                self.first_message_submission = submission
         try:
             response = self.runtime.request('turn/steer' if row['mode'] == 'steer' else 'turn/start', params)
         except SideChatError as error:
             if hasattr(error, 'rpc_error'):
                 with self.lock:
                     row['status'] = 'failed'
+                    if self.first_message_submission == submission:
+                        self.first_message_submission = None
                     row['error'] = str(error)
                     if row['mode'] != 'steer':
                         self.state['threadRuntimeStatus']['type'] = 'idle'
@@ -446,6 +471,21 @@ class SideChat:
             row['turnId'] = (response.get('turn') or {}).get('id') or row.get('turnId')
             if row['mode'] != 'steer':
                 self.state['latestCollaborationMode'] = params['collaborationMode']
+            first = self.first_message_submission == submission and not self.first_message_accepted
+            self.first_message_accepted = True
+            callback = self.on_first_message if first and self.title_source != 'manual' else None
+            if callback and row['text'].strip():
+                preview = ' '.join(row['text'].split())
+                self.title = preview[:28] + ('…' if len(preview) > 28 else '')
+                self.title_source = 'preview'
+                self.title_revision += 1
+        if callback:
+            try:
+                callback(self, row['text'])
+            except Exception:
+                # Naming is optional and must never turn an accepted send into
+                # a failed/unknown send which might be replayed by the client.
+                pass
         return {'id': submission, 'status': 'accepted'}
 
     def _queue_loop(self):
@@ -531,6 +571,8 @@ class SideChat:
             with self.lock:
                 self.closed = True
                 self.ready = False
+                if self.cancel_title:
+                    self.cancel_title()
                 self.queue_event.set()
             self.runtime.close()
             with self.lock:
@@ -543,9 +585,10 @@ class SideChat:
 
 
 class SideChats:
-    def __init__(self, executable, home, directory, host, factory=SideChat, *, executable_getter=None):
+    def __init__(self, executable, home, directory, host, factory=SideChat, *, executable_getter=None, on_first_message=None):
         self.executable, self.home, self.directory, self.host = executable, home, directory, host
         self.executable_getter = executable_getter
+        self.on_first_message = on_first_message
         if factory is SideChat:
             from bridge.features.sessions.linux_permissions import enabled
             if enabled(host):
@@ -564,7 +607,7 @@ class SideChats:
         with self.lock:
             chat = self.chats.get(key)
             if action == 'read':
-                slots = [{'slot': identifier[1], 'id': child.id, 'title': child.title, 'titleRevision': child.title_revision}
+                slots = [{'slot': identifier[1], **child.title_info()}
                          for identifier, child in self.chats.items()
                          if identifier[0] == parent]
                 view = chat.view() if chat else {'id': None, 'connected': False, 'turns': [], 'requests': []}
@@ -590,7 +633,14 @@ class SideChats:
                     check_runtime(executable, self.directory)
                     self.checked = True
                     self._checked_executable = executable
+                from bridge.clients.codex.title_runtime import access_stamp
+                try:
+                    stamp = access_stamp(self.home)
+                except OSError:
+                    stamp = None  # Optional naming cannot prevent creating a chat.
                 chat = self.factory(executable, self.home, parent, snapshot['cwd'], settings)
+                chat.on_first_message = self.on_first_message
+                chat.title_access_stamp = stamp
                 if title:
                     chat.rename(title)
                 chat.file_directory = tempfile.TemporaryDirectory(prefix='side-files-', dir=self.directory)

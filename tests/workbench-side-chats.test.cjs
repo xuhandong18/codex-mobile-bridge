@@ -145,3 +145,14 @@ test('side-chat titles sync to existing tabs while older reads cannot undo a ren
   tablet.wb.syncSideChats(session,[{slot,id:'child',title:'Stale title',titleRevision:1}]);assert.equal(tab.name,'保存');
   assert.equal(tab.customTitle,'保存');assert.equal(session.active,'chat');
 });
+
+test('background summary updates the existing side-chat tab and keeps its draft and selected tab',async()=>{
+  const tablet=device(async()=>({id:'child',slots:[{slot,id:'child',title:'首条消息的简短预览',titleRevision:1,titleSource:'preview'}]}));
+  tablet.wb.open('parent','local');await tablet.flush();
+  const session=tablet.wb.current,tab=session.files[0];tab.sideChat.input={value:'尚未发送的草稿'};
+  tablet.wb.syncSideChats(session,[{slot,id:'child',title:'修复侧边聊天同步',titleRevision:2,titleSource:'summary'}]);
+  assert.equal(session.files[0],tab);assert.equal(tab.name,'修复侧边聊天同步');
+  assert.equal(tab.sideChat.input.value,'尚未发送的草稿');assert.equal(session.active,'chat');
+  tablet.wb.syncSideChats(session,[{slot,id:'child',title:'过期预览',titleRevision:1,titleSource:'preview'}]);
+  assert.equal(tab.name,'修复侧边聊天同步');
+});

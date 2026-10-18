@@ -48,7 +48,7 @@ class SessionTitleTests(unittest.TestCase):
 
     def test_title_preview_is_a_bounded_single_line_and_native_names_win(self):
         self.assertEqual(session_title({'first_user_message': '  第一行\n 第二行  '}), '第一行 第二行')
-        self.assertEqual(session_title({'preview': '字' * 100}), '字' * 80 + '…')
+        self.assertEqual(session_title({'preview': '字' * 100}), '字' * 28 + '…')
         self.assertEqual(session_title({'name': '原生标题', 'title': '旧标题', 'preview': '首条消息'}), '原生标题')
 
     def test_list_uses_first_message_metadata_without_reading_rollout_or_exposing_the_prompt(self):
