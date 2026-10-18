@@ -31,13 +31,18 @@ window.BridgeFileActions = (() => {
       const info=await workbench.request(url.pathname+url.search);
       if(!box.open||session!==workbench.current)return box.close();
       status.textContent=info.name+(info.kind==='directory'?'':' · '+workbench.size(info.size));
+      if(info.kind!=='directory'){
+        const opened=session.files.some(tab=>tab.id==='file:'+info.path);
+        const open=node('button',t(opened?'切换到已打开的标签页':'在标签页打开'),'plain');open.type='button';open.disabled=!info.locatable||!info.path;
+        open.onclick=()=>{box.close();workbench.preview(session,{path:info.path,name:info.name,size:info.size,kind:'file'}).catch(error=>workbench.notify(t(error.message)));};box.append(open);
+      }
       const locate=node('button',t('定位并打开所在文件夹'),'plain');locate.type='button';locate.disabled=!info.locatable||!info.path;
       locate.onclick=()=>{box.close();workbench.locate(session,info.path).catch(error=>workbench.notify(t(error.message)));};box.append(locate);
       if(info.kind!=='directory'){
         if(info.size<=info.clickDownloadMiB*1024*1024)download(box,anchor.href,info.name);
-        else box.append(node('p',t('文件超过点击下载阈值，请在文件标签页中定位后长按下载。'),'muted'));
+        else box.append(node('p',t('文件超过点击下载阈值；可在标签页打开，或定位后长按下载。'),'muted'));
       }
-      if(locate.disabled)box.append(node('p',t('此文件位于聊天项目之外，无法在当前文件标签页中定位。'),'muted'));
+      if(locate.disabled)box.append(node('p',t('此文件位于聊天项目之外，无法在当前工作台中打开或定位。'),'muted'));
     }catch(error){status.textContent=t(error.message);status.className='error';}
   }
   document.addEventListener('click',event=>{
@@ -51,7 +56,7 @@ window.BridgeFileActions = (() => {
     const field=node('fieldset',undefined,'appearance-section'),legend=node('legend',t('文件传输')),label=node('label'),input=node('input'),save=node('button',t('保存点击下载阈值'),'plain'),message=node('p','','muted');
     legend.dataset.i18n='文件传输';input.type='number';input.min='1';input.max='1048576';input.step='1';input.required=true;save.type='button';save.dataset.i18n='保存点击下载阈值';
     const caption=node('span',t('点击下载阈值（MiB）'));caption.dataset.i18n='点击下载阈值（MiB）';label.append(caption,input);
-    const hint=node('p',t('超过阈值仅显示定位；文件标签页中长按或右键下载不限此大小。'),'muted');hint.dataset.i18n='超过阈值仅显示定位；文件标签页中长按或右键下载不限此大小。';field.append(legend,label,hint,save,message);container.append(field);
+    const hint=node('p',t('超过阈值仍可在标签页打开或定位；文件列表中长按或右键下载不限此大小。'),'muted');hint.dataset.i18n='超过阈值仍可在标签页打开或定位；文件列表中长按或右键下载不限此大小。';field.append(legend,label,hint,save,message);container.append(field);
     let dirty=false,loading=false;input.oninput=e=>{e.stopPropagation();dirty=true;};input.onchange=e=>e.stopPropagation();
     const read=async()=>{if(dirty||loading||document.hidden||container.hidden||('open' in container&&!container.open)||!ready())return;loading=true;try{const value=await request();if(!dirty){input.value=value.clickDownloadMiB;message.textContent='';}}catch(e){message.textContent=t(e.message);}finally{loading=false;}};
     save.onclick=async()=>{if(!input.reportValidity())return;save.disabled=true;const value=Number(input.value);try{await request({clickDownloadMiB:value});if(Number(input.value)===value)dirty=false;message.textContent=t('已保存，立即生效');}catch(e){message.textContent=t(e.message);}finally{save.disabled=false;}};
