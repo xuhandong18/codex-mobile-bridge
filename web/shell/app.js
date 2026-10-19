@@ -255,13 +255,7 @@ function projectChatRows(row){
   const button=[...$('sessions').querySelectorAll('.session')].find(button=>button.dataset.id===row.id&&button.dataset.host===row.host);
   const group=button?.closest('.project-group');
   if(!group)return [];
-  const chats=projectRows(row.projectKey),native=$('list-mode').value==='codex';
-  if(native){
-    const order=sidebarData.threadOrders?.[row.projectKey.slice(row.projectKey.indexOf('|')+1)]?.threadIds||[];
-    const rank=chat=>{const i=order.indexOf(chat.id);return i<0?order.length:i;};
-    chats.sort((a,b)=>rank(a)-rank(b)||Number(a.section_position||0)-Number(b.section_position||0));
-  }
-  return projectThreadOrder.sort(row.projectKey,chats.map(chat=>chat.id));
+  return projectThreadOrder.sort(row.projectKey,projectRows(row.projectKey).map(chat=>chat.id));
 }
 function moveProjectChat(row,before){
   const ids=projectChatRows(row);
@@ -407,12 +401,14 @@ function renderList(){
     }
   }
   if(native){
+    const chatOrder=new Map(listRows.map((chat,index)=>[chat.host+'|'+chat.id,index]));
     const sortChildren=(root,keys=[])=>{
       const [summary,...items]=Array.from(root.children);
       items.sort((a,b)=>{const rank=node=>{const i=keys.indexOf(node.dataset.itemKey);return i<0?keys.length:i;};return rank(a)-rank(b)||(Number(a.dataset.sectionPosition||0)-Number(b.dataset.sectionPosition||0));});
-      root.replaceChildren(summary,...items);
+      // Preserve project positions; native saved chat positions must not hide recent activity.
+      const chats=items.filter(node=>node.dataset.id).sort((a,b)=>chatOrder.get(a.dataset.host+'|'+a.dataset.id)-chatOrder.get(b.dataset.host+'|'+b.dataset.id));let next=0;
+      root.replaceChildren(summary,...items.map(node=>node.dataset.id?chats[next++]:node));
     };
-    for(const [key,root] of groups){const id=key.slice(key.indexOf('|')+1);sortChildren(root,(sidebarData.threadOrders?.[id]?.threadIds||[]).map(id=>'codex:thread:'+id));}
     for(const [id,root] of sectionRoots)sortChildren(root,sidebarData.sections.find(section=>section.id===id)?.itemKeys||[]);
   }
   if(native)for(const [id,root] of sectionRoots)sortSectionProjects(root,id);

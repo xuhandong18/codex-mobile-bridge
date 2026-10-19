@@ -43,6 +43,50 @@ test('native sections contain projects, empty projects and directly assigned thr
   assert.equal(prevented,true);assert.equal(selected[0].key,'local|p');
 });
 
+test('native project chats keep recent order before pagination despite older desktop positions',()=>{
+  const {context,nodes}=fixture();
+  context.listRows=Array.from({length:9},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i,section_position:8-i}));
+  context.sidebarData.threadOrders={p:{threadIds:context.listRows.map(row=>row.id).reverse()}};
+  context.renderList();
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['chat-0','chat-1','chat-2','chat-3','chat-4']);
+  vm.runInContext(source.slice(source.indexOf('function projectChatRows('),source.indexOf('function sidebarEntry(')),context);
+  assert.deepEqual(Array.from(context.projectChatRows(context.listRows[0])),context.listRows.map(row=>row.id));
+  context.listRows[8].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
+  assert.deepEqual(ids(),['chat-8','chat-0','chat-1','chat-2','chat-3']);
+});
+
+test('native direct section and pinned chats keep recent order while projects retain their positions',()=>{
+  const {context,nodes}=fixture();
+  context.sidebarData.sections[0].itemKeys=['codex:thread:old','codex:project:p','codex:thread:new'];
+  context.sidebarData.pinnedThreadIds=['pinned-old','pinned-new'];
+  context.listRows=[
+    {id:'new',recency:4,thread_section_id:'native',section_position:3},
+    {id:'pinned-new',recency:3,section_position:3},
+    {id:'old',recency:2,thread_section_id:'native',section_position:0},
+    {id:'pinned-old',recency:1,section_position:0},
+  ].map(row=>({...row,host:'local',projectKey:'local|p',projectName:'Project',title:row.id}));
+  context.renderList();
+  const section=id=>nodes.sessions.children.find(node=>node.dataset.section===id);
+  assert.deepEqual(section('custom').children.slice(1).map(node=>node.dataset.id||node.dataset.projectKey),['new','local|p','old']);
+  assert.deepEqual(section('pinned').children.slice(1).map(node=>node.dataset.id),['pinned-new','pinned-old']);
+});
+
+for(const mode of ['codex','project'])test('explicit local chat moves still persist over recent defaults in '+mode+' mode',()=>{
+  const {context,nodes}=fixture(mode);
+  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);
+  context.listRows=[3,2,1].map(recency=>({id:'chat-'+recency,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+recency,recency}));
+  context.sidebarData.threadOrders={p:{threadIds:['chat-1','chat-2','chat-3']}};
+  context.renderList();
+  vm.runInContext(source.slice(source.indexOf('function projectChatRows('),source.indexOf('function sidebarEntry(')),context);
+  context.shiftProjectChat(context.listRows[0],1);
+  const ids=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p').children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['chat-2','chat-3','chat-1']);
+  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);context.listRenderStamp='';context.renderList();
+  assert.deepEqual(ids(),['chat-2','chat-3','chat-1']);
+});
+
 test('each project displays five chats then ten more per click without expanding another project',async()=>{
   const {context,nodes}=fixture('project');
   context.listRows=Array.from({length:27},(_,i)=>({id:'chat-'+i,host:'local',title:'Chat '+i,projectKey:'local|p',projectName:'Project',recency:100-i}));

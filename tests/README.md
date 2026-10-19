@@ -44,6 +44,8 @@ npm run test:updater
 
 `test:desktop` 通过 `scripts/test-frontend.cjs` 自动递归发现 `tests/` 和 `mobile/tests/` 中 `*.test.js`、`*.test.cjs`、`*.test.mjs`。新增 Node 用例不需编辑长命令清单；资源路径检查包含在该入口。
 
+侧栏聊天排序可运行 `node --test tests/sidebar-sync.test.cjs tests/project-thread-order.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-order-browser.cjs`。后者在手机、平板和电脑宽度检查三种列表方式、最新五条与加载更多、分区/置顶/独立聊天、交互更新、折叠展开和刷新，并保留显式手动顺序。仅使用合成数据，需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
+
 导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
 长聊天消息目录运行 `python -B scripts/test-backend.py --source-only -p test_message_index.py`，覆盖 5000 条目录缓存、增量追加、替换/截断、未写完尾行、附件摘要、过期/跨聊天/跨主机标识、只读 HTTP、文件边界及独立 SSH 源码执行。真实浏览器驱动为 `node scripts/test-message-navigation-browser.cjs`，复用已有 Playwright/Chromium，在 390、820、1280 像素下实际执行 `message-navigation.browser.js` 和原有时间线、显隐、公开思考摘要夹具，检查完整目录、虚拟条目、早期/中间定位、双向正文窗口、实时阅读隔离、竞态与网络重试；仅使用合成数据，不操作真实客户端。
