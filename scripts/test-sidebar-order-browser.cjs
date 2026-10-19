@@ -77,6 +77,19 @@ const server=http.createServer(async(req,res)=>{
         check((await ids(buttons)).slice(0,2),[id(1),id(8)],'显式手动下移使用屏幕当前顺序 '+label);
         await page.reload();await loaded();
         check((await ids(buttons)).slice(0,2),[id(1),id(8)],'显式手动顺序在整页刷新后保留 '+label);
+        rows[6].recency=300;
+        await page.evaluate(id=>bumpRecency(id,'local',300),id(7));
+        check((await ids(buttons)).includes(id(7)),false,'保存的手动顺序可以将最新聊天挤到加载更多 '+label);
+        const heading=page.locator(group+' > summary');
+        if(width<1000){
+          await heading.dispatchEvent('pointerdown',{pointerType:'touch',isPrimary:true,clientX:100,clientY:180});
+          await page.locator('.chat-context-menu').waitFor();
+          await heading.dispatchEvent('pointerup',{pointerType:'touch',isPrimary:true});
+        }else await heading.click({button:'right'});
+        await page.getByRole('button',{name:'聊天按最近交互排序',exact:true}).click();
+        check((await ids(buttons)).slice(0,2),[id(7),id(8)],'项目菜单恢复最近排序并显示隐藏的最新聊天 '+label);
+        await page.reload();await loaded();
+        check((await ids(buttons)).slice(0,2),[id(7),id(8)],'恢复最近排序后整页刷新不再回到手动顺序 '+label);
       }
       await context.close();
     }

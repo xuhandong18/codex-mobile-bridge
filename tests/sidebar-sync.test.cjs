@@ -171,6 +171,29 @@ function bindSidebarMenu({context}){
   vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nfunction currentSidebarEntry(')),context);
 }
 
+for(const mode of ['codex','project'])test('project menu restores recent chats hidden by a saved manual order in '+mode+' mode',()=>{
+  const f=fixture(mode),{context,nodes}=f;
+  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);
+  context.listRows=Array.from({length:9},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
+  const originalIds=context.listRows.map(row=>row.id);
+  context.projectThreadOrder.move('local|p',originalIds,'chat-8','chat-0');
+  context.projectThreadOrder.move('ssh|other',['a','b'],'b','a');
+  context.projectPins.toggle('local|p','chat-7');
+  context.listRows[6].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);
+  context.renderList();bindSidebarMenu(f);
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.ok(!ids().includes('chat-6'),'The latest chat is initially hidden behind load more');
+  const restore=context.menuItems(group().children[0]).find(item=>item.label==='聊天按最近交互排序');
+  assert.ok(restore,'The project menu offers a way back to recent ordering');
+  restore.run();
+  assert.deepEqual(ids(),['chat-7','chat-6','chat-0','chat-1','chat-2','chat-3']);
+  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);
+  context.listRenderStamp='';context.renderList();
+  assert.deepEqual(ids(),['chat-7','chat-6','chat-0','chat-1','chat-2','chat-3']);
+  assert.deepEqual(Array.from(context.projectThreadOrder.sort('ssh|other',['a','b'])),['b','a']);
+});
+
 for(const mode of ['codex','project'])test('native project management retains sibling ordering in '+mode+' mode',()=>{
   const f=fixture(mode),{context,nodes}=f;
   context.sidebarData.projects=context.sidebarData.projects.filter(project=>project.key!=='local|empty');

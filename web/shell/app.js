@@ -782,7 +782,11 @@ function sidebarPlacementActions(item){
 function sidebarProjectOrderActions(item){
   const {ids}=sectionProjectRows(item),index=ids.indexOf(item.id);
   return index<0?[]:[{label:'上移',disabled:index===0,run:()=>shiftSectionProject(item,-1)},
-    {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)}];
+    {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)},
+    {label:'聊天按最近交互排序',run:()=>{
+      try{projectThreadOrder.reset(item.id);listRenderStamp='';renderList();}
+      catch{toast('无法保存会话顺序，请检查设备存储权限。');}
+    }}];
 }
 function currentSidebarEntry(item){
   let row;

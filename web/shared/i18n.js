@@ -100,6 +100,7 @@ const en={
 "侧栏条目已变化，请刷新后重试。":"The sidebar item has changed. Refresh and try again.",
 "无法保存侧栏设置，请检查设备存储权限。":"Could not save sidebar settings. Check device storage permissions.",
 "在项目中上移":"Move up in project",
+"聊天按最近交互排序":"Sort chats by recent activity",
 "在项目内置顶":"Pin in project",
 "取消项目内置顶":"Unpin from project",
 "项目内置顶":"Pinned in project",
