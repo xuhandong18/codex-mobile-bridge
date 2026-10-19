@@ -22,7 +22,7 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 
 这些脚本不会由 `npm run test:desktop` 执行。该命令只发现 `tests/` 和 `mobile/tests/` 下的 `*.test.js`、`*.test.cjs`、`*.test.mjs`；浏览器检查应单独记录实际执行与未执行情况。
 
-`session-list.browser.js` 的 `runSessionListBrowserTests()` 依赖同一项目包含多个聊天的隔离列表夹具，验证项目内移动、刷新保留排序，以及实时标题同时更新聊天头部和侧栏。新建成功但后台列表仍旧时的条目保留、鼠标拖动、手机长按和整页刷新后的顺序应由夹具驱动另外检查。
+`session-list.browser.js` 的 `runSessionListBrowserTests()` 依赖同一项目包含多个聊天的隔离列表夹具，验证项目内聊天不提供手动调序、刷新保留最近交互排序，以及实时标题同时更新聊天头部和侧栏。新建成功但后台列表仍旧时的条目保留、手机长按和整页刷新后的顺序应由夹具驱动另外检查。
 
 `project-pagination.browser.js` 的 `runProjectPaginationBrowserTests()` 使用含 27 条会话的项目和占据中间全局分页的另一个项目，验证 5→15→25→27、项目间隔离、刷新保留加载进度以及跨页排序。驱动还需使用真实定时器验证新会话标题自动同步，覆盖侧栏滚动超过 24 像素、手机侧栏收起，以及聊天实时数据反复返回旧“新聊天”占位标题；不以手动调用列表刷新替代定时同步检查。
 

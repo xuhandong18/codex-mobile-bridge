@@ -26,7 +26,7 @@ function fixture(mode='codex'){
   const selected=[];
   const context={$:id=>nodes[id],el:(...args)=>new Element(...args),localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},t:x=>x,BridgeI18n:{locale:()=> 'zh'},
     currentId:null,currentHost:'local',availableSources:[],listSource:'all',listRenderStamp:'',listComplete:true,listReadFinished:true,listHasMore:false,listLoading:0,listFilterKey:'fixture',projectChatPages:new Map(),
-    renderActivity(){},scheduleActivityRefresh(){},projectThreadOrder:{sort:(key,ids)=>ids},sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),
+    renderActivity(){},scheduleActivityRefresh(){},sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),
     sidebarData:{sections:[{id:'custom',name:'Daily',itemKeys:['codex:project:p'],hostSectionIds:{local:'native'}}],projects:[{key:'local|p',name:'Project',host:'local',cwd:'/work'},{key:'local|empty',name:'Empty',host:'local',cwd:'/empty'}]},
     listRows:[{id:'thread',host:'local',projectKey:'local|p',projectName:'Project',title:'Chat',recency:1},{id:'direct',host:'local',projectKey:'local|p',projectName:'Project',thread_section_id:'native',title:'Direct',recency:2}]};
   vm.createContext(context);vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.projectPins=vm.runInContext('new SidebarProjectPins(localStorage,"project-pins:")',context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
@@ -52,8 +52,6 @@ test('native project chats keep recent order before pagination despite older des
   const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
   const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
   assert.deepEqual(ids(),['chat-0','chat-1','chat-2','chat-3','chat-4']);
-  vm.runInContext(source.slice(source.indexOf('function projectChatRows('),source.indexOf('function sidebarEntry(')),context);
-  assert.deepEqual(Array.from(context.projectChatRows(context.listRows[0])),context.listRows.map(row=>row.id));
   context.listRows[8].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
   assert.deepEqual(ids(),['chat-8','chat-0','chat-1','chat-2','chat-3']);
 });
@@ -83,11 +81,7 @@ for(const mode of ['codex','project'])test('project pins have independent recent
   const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
   assert.deepEqual(ids(),['chat-18','chat-19','chat-0','chat-1','chat-2','chat-3','chat-4']);
   assert.equal(JSON.stringify(context.listRows),original,'Pinning only changes display preferences');
-  vm.runInContext(source.slice(source.indexOf('function projectChatRows('),source.indexOf('function sidebarEntry(')),context);
-  assert.equal(context.projectChatRows(context.listRows[19]).length,0,'Pins cannot be moved into the ordinary order');
   context.listRows[19].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
-  assert.deepEqual(ids().slice(0,2),['chat-19','chat-18']);
-  context.shiftProjectChat(context.listRows.find(row=>row.id==='chat-19'),1);
   assert.deepEqual(ids().slice(0,2),['chat-19','chat-18']);
   context.toggleProjectPin(context.listRows.find(row=>row.id==='chat-18'));
   assert.deepEqual(ids(),['chat-19','chat-0','chat-1','chat-2','chat-3','chat-4']);
@@ -95,18 +89,24 @@ for(const mode of ['codex','project'])test('project pins have independent recent
   assert.throws(()=>context.toggleProjectPin(stale),/侧栏条目已变化/);
 });
 
-for(const mode of ['codex','project'])test('explicit local chat moves still persist over recent defaults in '+mode+' mode',()=>{
+for(const mode of ['codex','project'])test('project chats ignore legacy manual order and keep pins before recent ordinary chats in '+mode+' mode',()=>{
   const {context,nodes}=fixture(mode);
-  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);
-  context.listRows=[3,2,1].map(recency=>({id:'chat-'+recency,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+recency,recency}));
-  context.sidebarData.threadOrders={p:{threadIds:['chat-1','chat-2','chat-3']}};
+  context.listRows=Array.from({length:9},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
+  context.localStorage.setItem('legacy|project-thread-order:local|p',JSON.stringify(context.listRows.map(row=>row.id).reverse()));
+  // Recreate the old reader so this test also catches the previous renderer.
+  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"legacy|project-thread-order:")',context);
+  context.projectPins.toggle('local|p','chat-7');context.projectPins.toggle('local|p','chat-8');
   context.renderList();
-  vm.runInContext(source.slice(source.indexOf('function projectChatRows('),source.indexOf('function sidebarEntry(')),context);
-  context.shiftProjectChat(context.listRows[0],1);
-  const ids=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p').children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
-  assert.deepEqual(ids(),['chat-2','chat-3','chat-1']);
-  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);context.listRenderStamp='';context.renderList();
-  assert.deepEqual(ids(),['chat-2','chat-3','chat-1']);
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['chat-7','chat-8','chat-0','chat-1','chat-2','chat-3','chat-4']);
+  assert.ok(group().children.filter(node=>node.dataset.id).every(node=>!node.draggable));
+  context.listRows.find(row=>row.id==='chat-6').recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
+  assert.deepEqual(ids(),['chat-7','chat-8','chat-6','chat-0','chat-1','chat-2','chat-3']);
+  context.listRows.find(row=>row.id==='chat-8').recency=300;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
+  assert.deepEqual(ids(),['chat-8','chat-7','chat-6','chat-0','chat-1','chat-2','chat-3']);
+  context.listRenderStamp='';context.renderList();
+  assert.deepEqual(ids(),['chat-8','chat-7','chat-6','chat-0','chat-1','chat-2','chat-3']);
 });
 
 test('each project displays five chats then ten more per click without expanding another project',async()=>{
@@ -171,27 +171,15 @@ function bindSidebarMenu({context}){
   vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nfunction currentSidebarEntry(')),context);
 }
 
-for(const mode of ['codex','project'])test('project menu restores recent chats hidden by a saved manual order in '+mode+' mode',()=>{
+for(const mode of ['codex','project'])test('project and chat menus do not offer manual chat ordering in '+mode+' mode',()=>{
   const f=fixture(mode),{context,nodes}=f;
-  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);
-  context.listRows=Array.from({length:9},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
-  const originalIds=context.listRows.map(row=>row.id);
-  context.projectThreadOrder.move('local|p',originalIds,'chat-8','chat-0');
-  context.projectThreadOrder.move('ssh|other',['a','b'],'b','a');
-  context.projectPins.toggle('local|p','chat-7');
-  context.listRows[6].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);
   context.renderList();bindSidebarMenu(f);
-  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
-  const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
-  assert.ok(!ids().includes('chat-6'),'The latest chat is initially hidden behind load more');
-  const restore=context.menuItems(group().children[0]).find(item=>item.label==='聊天按最近交互排序');
-  assert.ok(restore,'The project menu offers a way back to recent ordering');
-  restore.run();
-  assert.deepEqual(ids(),['chat-7','chat-6','chat-0','chat-1','chat-2','chat-3']);
-  context.projectThreadOrder=vm.runInContext('new SidebarItemOrder(localStorage,"chat-order:")',context);
-  context.listRenderStamp='';context.renderList();
-  assert.deepEqual(ids(),['chat-7','chat-6','chat-0','chat-1','chat-2','chat-3']);
-  assert.deepEqual(Array.from(context.projectThreadOrder.sort('ssh|other',['a','b'])),['b','a']);
+  const group=nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  assert.ok(!context.menuItems(group.children[0]).some(item=>item.label==='聊天按最近交互排序'));
+  context.sidebarManagement=null;
+  const button=group.children.find(node=>node.dataset.id),labels=context.menuItems(button).map(item=>item.label);
+  assert.ok(labels.includes('在项目内置顶'));
+  assert.ok(!labels.includes('在项目中上移')&&!labels.includes('在项目中下移'));
 });
 
 for(const mode of ['codex','project'])test('native project management retains sibling ordering in '+mode+' mode',()=>{

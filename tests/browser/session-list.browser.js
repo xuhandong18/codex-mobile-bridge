@@ -5,12 +5,12 @@ async function runSessionListBrowserTests(){
   check(buttons().length>=2,'A project contains multiple conversations');
   const first=buttons()[0],id=first.dataset.id;
   first.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:100,clientY:150,cancelable:true}));
-  const down=[...document.querySelectorAll('.chat-context-menu button')].find(button=>button.textContent==='在项目中下移');
-  check(!!down&&!down.disabled,'Project context menu offers moving down');down.click();
-  await new Promise(resolve=>setTimeout(resolve,20));
-  check(buttons()[1].dataset.id===id,'Moving down changes the actual project order');
+  const actions=[...document.querySelectorAll('.chat-context-menu button')];
+  check(!actions.some(button=>/在项目中[上下]移/.test(button.textContent)),'Project chats do not offer manual ordering');
+  actions.find(button=>button.textContent==='取消').click();
+  check(buttons().every(button=>!button.draggable),'Project chats cannot be dragged into a manual order');
   await loadList(true);
-  check(buttons()[1].dataset.id===id,'A background list refresh preserves manual order');
+  check(buttons()[0].dataset.id===id,'A background list refresh preserves recent order');
   await openChat(buttons()[0].dataset.id,buttons()[0].dataset.host);
   const title='根据首条消息生成的标题';renderState({...state,title});
   check(document.getElementById('chat-title').textContent===title,'Live metadata updates the conversation heading');

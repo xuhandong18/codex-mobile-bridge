@@ -38,7 +38,7 @@ test('copy session path returns the native thread link for local, remote and CLI
   for(const [host,origin,archived] of [['local','desktop',false],['ssh:fixture','desktop',true],['local','cli',false]]){
     const button={dataset:{id,host},closest:()=>null},copyButton={},copies=[];let items;
     const context=vm.createContext({$:()=>({}),sidebarManagement:null,ChatContextMenu:class{constructor(_root,callback){items=callback;}},
-      listRows:[{id,host,archived,access:{source:origin}}],sidebarEntry:()=>({}),sidebarPlacementActions:()=>[],projectChatRows:()=>[],sessionAccess:access=>access,sessionUrl:()=>'/fixture/record-path',
+      listRows:[{id,host,archived,access:{source:origin}}],sidebarEntry:()=>({}),sidebarPlacementActions:()=>[],sessionAccess:access=>access,sessionUrl:()=>'/fixture/record-path',
       api:()=>{throw Error('Copying a chat link must not read its rollout file');},
       window:{BridgeClipboard:{copy:async(getText,button)=>copies.push({text:await getText(),button})}}});
     vm.runInContext(menu,context);

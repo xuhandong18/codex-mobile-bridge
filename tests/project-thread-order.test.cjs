@@ -57,7 +57,7 @@ test('confirmed created rows survive an older list response, then yield to the a
   const source=fs.readFileSync('web/shell/app.js','utf8');
   const row={id:'created',host:'local',title:'Created',access:{source:'desktop'}};
   const ctx=vm.createContext({createdChats:new Map([['local|created',row]])});
-  vm.runInContext(source.slice(source.indexOf('function mergeCreatedChats('),source.indexOf('function projectChatRows(')),ctx);
+  vm.runInContext(source.slice(source.indexOf('function mergeCreatedChats('),source.indexOf('function sidebarEntry(')),ctx);
   assert.deepEqual(ids(ctx.mergeCreatedChats([],'local','',false,'all')).map(row=>row.id),['created']);
   for(const args of [['ssh','',false,'all'],['local','search',false,'all'],['local','',true,'all'],['local','',false,'cli']])assert.equal(ctx.mergeCreatedChats([],...args).length,0);
   const fresh={...row,title:'Authoritative title'};

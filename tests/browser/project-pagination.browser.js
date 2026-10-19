@@ -15,12 +15,10 @@ async function runProjectPaginationBrowserTests(){
   check(count('local|fixture')===25,'The next click adds exactly ten more chats');
   await more('local|fixture').onclick();
   check(count('local|fixture')===27&&!more('local|fixture'),'The final partial page removes its load-more control');
-  const last=group('local|fixture').querySelector('.session:last-of-type');
-  const first=group('local|fixture').querySelector('.session');
-  const row=listRows.find(row=>row.id===last.dataset.id);
-  moveProjectChat(row,first.dataset.id);
-  check(group('local|fixture').querySelector('.session').dataset.id===row.id,'Project ordering still works after pagination');
+  const expected=listRows.filter(row=>row.projectKey==='local|fixture').map(row=>row.id);
+  const ids=()=>[...group('local|fixture').querySelectorAll('.session')].map(button=>button.dataset.id);
+  check(ids().join(',')===expected.join(','),'All loaded project chats stay in recent order');
   await loadList(true);
-  check(group('local|fixture').querySelector('.session').dataset.id===row.id,'A refresh retains the order across loaded pages');
+  check(ids().join(',')===expected.join(','),'A refresh retains recent order across loaded pages');
   return checks;
 }

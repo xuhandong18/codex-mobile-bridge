@@ -19,11 +19,9 @@ let listComplete=false, listReadFinished=false, listIdentity='', listFilterKey='
 let listHostIds=[],sidebarData={sections:[],projects:[]};
 const createdChats=new Map();
 const projectChatPages=new Map();
-const projectThreadOrder=new SidebarItemOrder(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|project-thread-order:');
 const projectPins=new SidebarProjectPins(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|project-pins');
 const sectionProjectOrder=new SidebarItemOrder(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|section-project-order:');
 const sidebarPlacements=new SidebarPlacements(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|sidebar-placement:');
-let draggedProjectChat=null;
 let sourceFilterStamp='';
 let chatTimeline=null,reconnectFailure=null;
 const dismissedHostFaults=new Map();
@@ -72,7 +70,7 @@ function renderHostErrors(hosts){
 }
 function clearListSnapshot(){
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:'))sessionStorage.removeItem(key);}
-  createdChats.clear();projectChatPages.clear();draggedProjectChat=null;
+  createdChats.clear();projectChatPages.clear();
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
@@ -252,22 +250,6 @@ function mergeCreatedChats(rows,host,query,archived,source){
   }
   return merged;
 }
-function projectChatRows(row){
-  const button=[...$('sessions').querySelectorAll('.session')].find(button=>button.dataset.id===row.id&&button.dataset.host===row.host);
-  const group=button?.closest('.project-group');
-  if(!group||isProjectPinned(row))return [];
-  return projectThreadOrder.sort(row.projectKey,projectRows(row.projectKey).filter(chat=>!isProjectPinned(chat)).map(chat=>chat.id));
-}
-function moveProjectChat(row,before){
-  const ids=projectChatRows(row);
-  try{if(projectThreadOrder.move(row.projectKey,ids,row.id,before)){listRenderStamp='';renderList();}}
-  catch{toast('无法保存会话顺序，请检查设备存储权限。');}
-}
-function shiftProjectChat(row,direction){
-  const ids=projectChatRows(row),index=ids.indexOf(row.id),target=index+direction;
-  if(index<0||target<0||target>=ids.length)return;
-  moveProjectChat(row,direction<0?ids[target]:ids[target+1]||null);
-}
 function sidebarEntry(kind,row){
   const id=kind==='project'?row.key:row.id,host=row.host||'local';
   const itemKey='codex:'+kind+':'+(kind==='project'?id.slice(id.indexOf('|')+1):id);
@@ -395,22 +377,8 @@ function renderList(){
     button.append(el('span','session-source',source==='desktop'?'APP':sourceLabel({source})||t('其他来源')));
     const meta=el('small');meta.append(el('span','',chat.projectName+' · '+(chat.host==='local'?t('此电脑'):chat.hostLabel)),el('time','',dateText(chat.recency/1000)));
     button.append(meta);button.onclick=()=>openChat(chat.id,chat.host).catch(e=>toast(e.message));parent.append(button);
-    if(groups.get(chat.projectKey)===parent){
-      if(isProjectPinned(chat)){
-        button.dataset.projectPinned='true';button.setAttribute('aria-label',chat.title+' · '+t('项目内置顶'));
-        continue;
-      }
-      button.draggable=true;
-      button.ondragstart=event=>{draggedProjectChat={id:chat.id,host:chat.host,projectKey:chat.projectKey};event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',chat.id);};
-      button.ondragend=()=>{draggedProjectChat=null;};
-      const sameProject=()=>draggedProjectChat&&draggedProjectChat.host===chat.host&&draggedProjectChat.projectKey===chat.projectKey&&draggedProjectChat.id!==chat.id&&!projectPins.read(chat.projectKey).has(draggedProjectChat.id);
-      button.ondragover=event=>{if(sameProject()){event.preventDefault();event.dataTransfer.dropEffect='move';}};
-      button.ondrop=event=>{
-        if(!sameProject())return;event.preventDefault();event.stopPropagation();
-        const row=listRows.find(row=>row.id===draggedProjectChat.id&&row.host===draggedProjectChat.host);
-        const ids=projectChatRows(chat),after=event.clientY>button.getBoundingClientRect().top+button.offsetHeight/2;
-        draggedProjectChat=null;if(row)moveProjectChat(row,after?ids[ids.indexOf(chat.id)+1]||null:chat.id);
-      };
+    if(groups.get(chat.projectKey)===parent&&isProjectPinned(chat)){
+      button.dataset.projectPinned='true';button.setAttribute('aria-label',chat.title+' · '+t('项目内置顶'));
     }
   }
   if(native){
@@ -427,10 +395,11 @@ function renderList(){
   if(native)for(const [id,root] of sectionRoots)sortSectionProjects(root,id);
   else if(grouped)sortSectionProjects($('sessions'),'projects');
   if(grouped)for(const [key,root] of groups){
-    const [summary,...items]=Array.from(root.children),byId=new Map(items.map(node=>[node.dataset.id,node]));
+    const [summary,...items]=Array.from(root.children);
     const pins=projectPins.read(key),pinned=items.filter(node=>pins.has(node.dataset.id));
-    const page=projectPage(key),ordered=projectThreadOrder.sort(key,items.filter(node=>!pins.has(node.dataset.id)).map(node=>node.dataset.id));
-    root.replaceChildren(summary,...pinned,...ordered.slice(0,page.limit).map(id=>byId.get(id)));
+    // listRows is already recent-first; pins always precede ordinary pagination.
+    const page=projectPage(key),ordered=items.filter(node=>!pins.has(node.dataset.id));
+    root.replaceChildren(summary,...pinned,...ordered.slice(0,page.limit));
     if(ordered.length>page.limit||listHasMore){
       const more=el('button','plain project-load-more',t(page.loading?'正在读取…':'加载更多'));more.type='button';more.disabled=page.loading||!!listLoading;
       more.onclick=()=>loadProjectChats(key);root.append(more);
@@ -762,11 +731,6 @@ new ChatContextMenu($('sessions'),target=>{
   items.push({label:'标记为未读',run:()=>{sessionActivity.markUnread(chatKey(row.id,row.host));renderActivity();}});
   items.push(...sidebarPlacementActions(sidebarEntry('thread',row)));
   if(button.closest('.project-group')&&row.projectKey!==row.host+'|independent')items.push({label:isProjectPinned(row)?'取消项目内置顶':'在项目内置顶',run:()=>toggleProjectPin(row)});
-  const projectIds=projectChatRows(row),position=projectIds.indexOf(row.id);
-  if(projectIds.length>1){
-    items.push({label:'在项目中上移',disabled:position===0,run:()=>shiftProjectChat(row,-1)});
-    items.push({label:'在项目中下移',disabled:position===projectIds.length-1,run:()=>shiftProjectChat(row,1)});
-  }
   if(sessionAccess(row.access).source==='desktop'){
     items.push({label:row.archived?'取消归档':'归档聊天',run:()=>manageChat(row,row.archived?'unarchive':'archive')});
     items.push({label:'永久删除聊天',run:()=>manageChat(row,'delete')});
@@ -782,11 +746,7 @@ function sidebarPlacementActions(item){
 function sidebarProjectOrderActions(item){
   const {ids}=sectionProjectRows(item),index=ids.indexOf(item.id);
   return index<0?[]:[{label:'上移',disabled:index===0,run:()=>shiftSectionProject(item,-1)},
-    {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)},
-    {label:'聊天按最近交互排序',run:()=>{
-      try{projectThreadOrder.reset(item.id);listRenderStamp='';renderList();}
-      catch{toast('无法保存会话顺序，请检查设备存储权限。');}
-    }}];
+    {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)}];
 }
 function currentSidebarEntry(item){
   let row;

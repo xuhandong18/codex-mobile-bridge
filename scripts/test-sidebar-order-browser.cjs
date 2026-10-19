@@ -45,14 +45,17 @@ const server=http.createServer(async(req,res)=>{
       rows=initialRows.map(row=>({...row}));
       const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
-      await context.addInitScript(mode=>{localStorage.setItem('list-mode',mode);localStorage.setItem('navigation:sidebar','open');},mode);
+      await context.addInitScript(({mode,project,order})=>{
+        localStorage.setItem('list-mode',mode);localStorage.setItem('navigation:sidebar','open');
+        localStorage.setItem(location.origin+'|project-thread-order:'+project,JSON.stringify(order));
+      },{mode,project,order:initialRows.filter(row=>row.projectKey===project).map(row=>row.id).reverse()});
       const loaded=()=>page.waitForFunction(()=>listReadFinished&&listRows.length===14);
       const ids=selector=>page.locator(selector).evaluateAll(nodes=>nodes.map(node=>node.dataset.id));
       const group='#sessions .project-group[data-project-key="'+project+'"]',buttons=group+' > .session',label=mode+' '+width;
       await page.goto('http://127.0.0.1:'+server.address().port+'/');await loaded();
       if(mode==='recent')check(await ids('#sessions .session'),initialRows.map(row=>row.id),'最近列表从新到旧 '+label);
       else{
-        check(await ids(buttons),initialRows.slice(0,5).map(row=>row.id),'项目首屏先显示最新五条 '+label);
+        check(await ids(buttons),initialRows.slice(0,5).map(row=>row.id),'忽略旧手动顺序并在项目首屏显示最新五条 '+label);
         await page.locator(group+' > summary').click();await page.locator(group+' > summary').click();
         check(await ids(buttons),initialRows.slice(0,5).map(row=>row.id),'折叠后重新展开保持最新在前 '+label);
         await page.locator(group+' > .project-load-more').click();
@@ -73,23 +76,22 @@ const server=http.createServer(async(req,res)=>{
       check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(8),'整页刷新保持最新在前 '+label);
       if(mode!=='recent'){
         await page.locator(buttons).first().dispatchEvent('contextmenu',{clientX:100,clientY:180});
-        await page.getByRole('button',{name:'在项目中下移',exact:true}).click();
-        check((await ids(buttons)).slice(0,2),[id(1),id(8)],'显式手动下移使用屏幕当前顺序 '+label);
-        await page.reload();await loaded();
-        check((await ids(buttons)).slice(0,2),[id(1),id(8)],'显式手动顺序在整页刷新后保留 '+label);
+        check(await page.getByRole('button',{name:/在项目中[上下]移/}).count(),0,'普通聊天菜单不再提供手动调序 '+label);
+        await page.getByRole('button',{name:'取消',exact:true}).click();
+        check(await page.locator(buttons).evaluateAll(nodes=>nodes.every(node=>!node.draggable)),true,'项目内聊天不再支持拖动排序 '+label);
         rows[6].recency=300;
         await page.evaluate(id=>bumpRecency(id,'local',300),id(7));
-        check((await ids(buttons)).includes(id(7)),false,'保存的手动顺序可以将最新聊天挤到加载更多 '+label);
+        check((await ids(buttons))[0],id(7),'旧手动顺序不再将最新聊天挤到加载更多 '+label);
         const heading=page.locator(group+' > summary');
         if(width<1000){
           await heading.dispatchEvent('pointerdown',{pointerType:'touch',isPrimary:true,clientX:100,clientY:180});
           await page.locator('.chat-context-menu').waitFor();
           await heading.dispatchEvent('pointerup',{pointerType:'touch',isPrimary:true});
         }else await heading.click({button:'right'});
-        await page.getByRole('button',{name:'聊天按最近交互排序',exact:true}).click();
-        check((await ids(buttons)).slice(0,2),[id(7),id(8)],'项目菜单恢复最近排序并显示隐藏的最新聊天 '+label);
+        check(await page.getByRole('button',{name:'聊天按最近交互排序',exact:true}).count(),0,'项目菜单无需恢复最近排序选项 '+label);
+        await page.getByRole('button',{name:'取消',exact:true}).click();
         await page.reload();await loaded();
-        check((await ids(buttons)).slice(0,2),[id(7),id(8)],'恢复最近排序后整页刷新不再回到手动顺序 '+label);
+        check((await ids(buttons)).slice(0,2),[id(7),id(8)],'整页刷新始终按最近交互排序 '+label);
       }
       await context.close();
     }

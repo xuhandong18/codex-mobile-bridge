@@ -10,7 +10,6 @@ class SidebarItemOrder {
     const saved=this.read(project),known=new Set(saved),visible=new Set(ids);
     return [...ids.filter(id=>!known.has(id)),...saved.filter(id=>visible.has(id))];
   }
-  reset(project){this.storage.removeItem(this.prefix+project);}
   move(project,ids,id,before){
     if(!ids.includes(id)||before!==null&&!ids.includes(before)||id===before)return false;
     const order=ids.filter(value=>value!==id),index=before===null?order.length:order.indexOf(before);

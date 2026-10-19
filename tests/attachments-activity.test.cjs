@@ -28,7 +28,7 @@ test('sidebar context menu marks the selected host-qualified chat unread without
  const row={id:'a',host:'ssh',access:{}},button={dataset:{id:'a',host:'ssh'},closest:()=>null};
  const ctx=vm.createContext({sidebarManagement:null,ChatContextMenu:class{constructor(root,items){menu=items;}},$:()=>({}),listRows:[row],
   window:{BridgeClipboard:{}},chatKey:(id,host)=>host+'|'+id,sessionActivity:{markUnread:key=>marked=key},renderActivity:()=>renders++,
-  sidebarPlacementActions:()=>[],sidebarEntry:()=>({}),projectChatRows:()=>['a'],sessionAccess:()=>({source:'cli'})});
+  sidebarPlacementActions:()=>[],sidebarEntry:()=>({}),sessionAccess:()=>({source:'cli'})});
  vm.runInContext(source.slice(start,end)+"},{label:'侧栏操作'});",ctx);
  const items=menu({closest:selector=>selector==='.session'?button:null});
  items.find(item=>item.label==='标记为未读').run();
