@@ -35,7 +35,9 @@ class Timeline:
         rows, details = [], {}
         for turn in view['turns']:
             occurrences = {}
-            first_user = next((m for m in turn['messages'] if m['role'] == 'user'), None)
+            first_user = next((m for m in turn['messages'] if m['role'] == 'user'
+                               and not m.get('isUserContext')
+                               and (not m.get('requestId') or m['requestId'] not in activation_ids)), None)
             for message in turn['messages']:
                 if message.get('requestId') and message['requestId'] in activation_ids:
                     continue
@@ -86,6 +88,7 @@ class Timeline:
         self.meta = {k: v for k, v in view.items() if k != 'turns'}
         self.meta['latestUserTurnId'] = next((t['id'] for t in reversed(view['turns'])
                                               if any(m['role'] == 'user'
+                                                     and not m.get('isUserContext')
                                                      and (not m.get('requestId') or m['requestId'] not in activation_ids)
                                                      for m in t['messages'])), None)
         self.versions[self.sequence] = {row['key']: hashlib.sha256(encoded(row)).digest() for row in rows}

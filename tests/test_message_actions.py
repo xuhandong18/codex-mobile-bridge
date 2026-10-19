@@ -108,6 +108,27 @@ class MessageActionTests(unittest.TestCase):
         self.assertIs(self.call.call_args.args[0], child)
         self.assertEqual(self.call.call_args.args[2]['turnId'], 'first')
 
+    def test_project_context_does_not_take_the_real_first_message_edit_action(self):
+        context = '# AGENTS.md instructions for /work\n\n<INSTRUCTIONS>\n项目规则\n</INSTRUCTIONS>\n<environment_context>\n<cwd>/work</cwd>\n</environment_context>'
+        turn = self.session.state['turns'][0]
+        turn['items'].insert(0, {'id': 'project-context', 'type': 'userMessage',
+                                 'content': [{'type': 'text', 'text': context}]})
+        self.session.timeline.update(self.session.view())
+        rows = [r for r in self.session.timeline.rows if r['turnId'] == 'first' and r['role'] == 'user']
+        self.assertFalse(rows[0]['editable'])
+        self.assertTrue(rows[1]['editable'])
+        body = {'id': str(uuid.uuid4()), 'action': 'edit-fork',
+                'key': self.session.timeline.cursor(rows[1]['key']), 'version': rows[1]['version'], 'text': '修改后的提问'}
+        child = LiveSession(self.child)
+        child.connected = True
+        child.owner = 'child-owner'
+        self.target.side_effect = [self.session, child]
+        result = self.bridge.message_action(self.source, body)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertIs(self.call.call_args.args[0], child)
+        self.assertEqual(self.call.call_args.args[2]['turnId'], 'first')
+        self.assertEqual(self.call.call_args.args[2]['message'], '修改后的提问')
+
     def test_activation_failure_retains_branch_and_unsent_edit(self):
         self.target.side_effect = [self.session, IPCError('offline')]
         body = self.body('first', 'edit-fork')

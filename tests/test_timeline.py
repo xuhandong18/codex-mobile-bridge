@@ -13,6 +13,33 @@ def view(count=320, sequence=1):
 
 
 class TimelineTests(unittest.TestCase):
+    def test_context_envelopes_do_not_steal_the_user_edit_action(self):
+        contexts = [
+            '# AGENTS.md instructions for /work\n\n<INSTRUCTIONS>\nRules\n</INSTRUCTIONS>',
+            '# AGENTS.md instructions for /work\r\n\r\n<INSTRUCTIONS>Rules</INSTRUCTIONS>\r\n<environment_context><cwd>/work</cwd></environment_context>',
+            '<user_instructions>Rules</user_instructions>\n<environment_context><cwd>/work</cwd></environment_context>',
+            '<environment_context><cwd>/work</cwd></environment_context>',
+        ]
+        for context in contexts:
+            with self.subTest(context=context):
+                state = {'turns': [{'turnId': 'first', 'status': 'completed', 'items': [
+                    {'id': 'context', 'type': 'userMessage', 'content': [{'type': 'text', 'text': context}]},
+                    {'id': 'request', 'type': 'userMessage', 'content': [{'type': 'text', 'text': 'Actual request'}]},
+                    {'id': 'steer', 'type': 'steeringUserMessage', 'input': [{'type': 'text', 'text': 'Additional request'}]},
+                ]}]}
+                timeline = Timeline();timeline.update({**normalize_state(state), 'sequence': 1})
+                self.assertEqual([r['editable'] for r in timeline.rows], [False, True, False])
+                self.assertEqual(timeline.meta['latestUserTurnId'], 'first')
+
+    def test_context_only_tail_does_not_change_the_latest_editable_turn(self):
+        state = {'turns': [
+            {'turnId': 'request', 'items': [{'id': 'u', 'type': 'userMessage', 'content': [{'type': 'text', 'text': 'Explain <environment_context> syntax'}]}]},
+            {'turnId': 'context', 'items': [{'id': 'c', 'type': 'userMessage', 'content': [{'type': 'text', 'text': '<environment_context><cwd>/work</cwd></environment_context>'}]}]},
+        ]}
+        timeline = Timeline();timeline.update({**normalize_state(state), 'sequence': 1})
+        self.assertEqual([r['editable'] for r in timeline.rows], [True, False])
+        self.assertEqual(timeline.meta['latestUserTurnId'], 'request')
+
     def test_desktop_hydration_cannot_relabel_completed_history_with_current_model(self):
         session=LiveSession('chat')
         with session.condition:

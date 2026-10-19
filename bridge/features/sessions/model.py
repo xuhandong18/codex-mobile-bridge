@@ -96,6 +96,17 @@ def user_display_text(text):
     return request or text
 
 
+def is_user_context(text):
+    """Recognize complete desktop context envelopes, not quoted user requests."""
+    text = text.strip()
+    environment = r'<environment_context>.*?</environment_context>'
+    if text.startswith('# AGENTS.md instructions for '):
+        _, separator, body = text.partition('\n')
+        return bool(separator and re.fullmatch(r'\s*<INSTRUCTIONS>.*?</INSTRUCTIONS>(?:\s*' + environment + r')?\s*', body, re.S))
+    envelope = r'(?:<user_instructions>.*?</user_instructions>|' + environment + r')'
+    return bool(re.fullmatch(envelope + r'(?:\s*' + envelope + r')*', text, re.S))
+
+
 def normalize_item(item):
     kind = item.get("type", "unknown")
     row = {"id": item.get("id"), "kind": kind, "status": item.get("status")}
@@ -107,6 +118,8 @@ def normalize_item(item):
         if request_id:
             row["requestId"] = str(submission_request_id)
         text = user_display_text(text_content(item.get("content", [])))
+        if is_user_context(text):
+            row['isUserContext'] = True
         replies = question_replies(text)
         if replies:
             text = "\n\n".join(str(r.get("question", "")) + "\n" + str(r.get("answer", "")) for r in replies)
