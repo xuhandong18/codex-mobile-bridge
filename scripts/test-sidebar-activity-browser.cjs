@@ -7,6 +7,7 @@ const project='local|fixture-project',access={source:'desktop',canSend:false,can
 const rows=Array.from({length:36},(_,i)=>({id:'11111111-1111-4111-8111-'+String(i+1).padStart(12,'0'),host:'local',title:'自动状态测试 '+(i+1),
   cwd:'/fixture',projectKey:project,projectName:'测试项目',projectId:'fixture-project',updatedAt:100-i,recency:100-i,access}));
 const observations=[],writes=[],errors=[];
+let coldMetadataReady=false;
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
   if(p.startsWith('/api/')){
@@ -19,7 +20,9 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/api/activity'){
       let data='';for await(const part of req)data+=part;
       const hosts=JSON.parse(data).hosts;observations.push(hosts);
-      value={sessions:Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>({id,host,connected:true,activityConnected:true,status:'active',turnId:id+'-turn',turnStatus:'inProgress'})))};
+      value={sessions:Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>id===rows[1].id?
+        {id,host,connected:false,activityConnected:coldMetadataReady,status:coldMetadataReady?'notLoaded':'unknown',turnId:id+'-turn',turnStatus:'completed'}:
+        {id,host,connected:true,activityConnected:true,status:'active',turnId:id+'-turn',turnStatus:'inProgress'}))};
     }else if(p.endsWith('/reconnect')||p.endsWith('/send')||p.endsWith('/timeline')||p.endsWith('/updates'))writes.push(p);
     res.end(JSON.stringify(value));return;
   }
@@ -37,6 +40,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     for(const width of [390,820,1280]){
+      coldMetadataReady=false;
       const context=await browser.newContext({viewport:{width,height:720}}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
       await context.addInitScript(()=>{localStorage.setItem('list-mode','recent');localStorage.setItem('navigation:sidebar','open');});
@@ -49,6 +53,11 @@ const server=http.createServer(async(req,res)=>{
       });
       const initial=observations.slice(start).at(-1)?.local||[];
       check(initial.length>0&&initial.length<rows.length&&initial.every(id=>expected.includes(id)),'首次只订阅可见条目 '+width);
+      const coldSelector='#sessions .session[data-id="'+rows[1].id+'"]';
+      check(await page.locator(coldSelector+' .session-indicator.unknown').count()===1,'未取得原生元数据前保留未知状态 '+width);
+      coldMetadataReady=true;
+      await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded',rows[1].id);
+      check(await page.locator(coldSelector+' .session-indicator').count()===0&&await page.evaluate(()=>currentId===null),'未加载且已完成的聊天自动消除灰点，无需打开 '+width);
       const scrollStart=observations.length;
       await page.locator('#sessions').evaluate(node=>{node.scrollTop=node.scrollHeight;});
       await page.waitForFunction(id=>!!document.querySelector('#sessions .session[data-id="'+id+'"] .session-indicator.running'),rows.at(-1).id);

@@ -120,6 +120,47 @@ class UploadActivityTests(unittest.TestCase):
             self.bridge._disconnected()
             self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'unknown')
 
+    def test_unloaded_visible_chat_uses_verified_metadata_without_creating_a_writable_owner(self):
+        from unittest.mock import Mock
+        self.bridge.list()
+        native = Mock()
+        native.read.return_value = {THREAD: {'status': 'notLoaded', 'turnId': 'done', 'turnStatus': 'completed'}}
+        with patch.object(self.bridge, 'desktop_activity', native, create=True), \
+                patch.object(self.bridge, '_attach'), \
+                patch.object(self.bridge.subagent_activity, 'read', return_value={THREAD: {'runningSubagents': 0, 'subagentsKnown': True}}), \
+                patch('bridge.app.service.open_in_desktop', side_effect=AssertionError('No navigation')), \
+                patch.object(self.bridge.store, 'history', side_effect=AssertionError('No transcript reads')):
+            row = self.bridge.activity([THREAD])[0]
+        self.assertEqual(row['status'], 'notLoaded')
+        self.assertTrue(row['activityConnected'])
+        self.assertFalse(row['connected'])
+        self.assertEqual((row['turnId'], row['turnStatus']), ('done', 'completed'))
+        self.assertIsNone(self.bridge.live[THREAD].owner)
+        native.read.assert_called_once_with([THREAD])
+
+    def test_native_display_status_does_not_override_a_live_owner(self):
+        from unittest.mock import Mock
+        self.bridge.list()
+        session = self.bridge.session(THREAD)
+        native = Mock()
+        native.read.return_value = {THREAD: {'status': 'notLoaded', 'turnId': 'old', 'turnStatus': 'completed'}}
+        session.state['threadRuntimeStatus']['type'] = 'active'
+        with patch.object(self.bridge, 'desktop_activity', native, create=True):
+            self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'active')
+        self.assertNotIn(THREAD, native.read.call_args.args[0] if native.read.called else [])
+
+    def test_native_desktop_metadata_does_not_claim_a_disconnected_cli_session(self):
+        from unittest.mock import Mock
+        self.bridge.list()
+        session = self.bridge.session(THREAD)
+        session.connected = False
+        session.origin = 'cli'
+        native = Mock()
+        native.read.return_value = {THREAD: {'status': 'notLoaded', 'turnId': 'old', 'turnStatus': 'completed'}}
+        with patch.object(self.bridge, 'desktop_activity', native, create=True), patch.object(self.bridge, '_attach'):
+            self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'unknown')
+        native.read.assert_called_once_with([])
+
     def test_opening_activity_only_session_still_loads_saved_prefix(self):
         self.fixture.state['turnsPagination'] = {'hasLoadedOldest': False}
         self.bridge.list();self.bridge.activity([THREAD]);session=self.bridge.live[THREAD]

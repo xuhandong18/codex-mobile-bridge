@@ -7,7 +7,10 @@ from pathlib import Path
 
 def endpoints():
     prefix = '\\\\.\\pipe\\'
-    return [prefix + name for name in os.listdir(prefix) if name.startswith('codex-browser-use-')][:32]
+    names = os.listdir(prefix)
+    current = [name for name in names if name.startswith('codex-app-tools-')]
+    legacy = [name for name in names if name.startswith('codex-browser-use-')]
+    return [prefix + name for name in current + legacy][:32]
 
 
 def verify_server(stream, executable):

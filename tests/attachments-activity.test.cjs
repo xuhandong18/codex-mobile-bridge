@@ -58,6 +58,16 @@ test('temporarily missing turn history does not resurrect a read completion',()=
  a.update([status('a','local','idle')]);assert.equal(a.indicator('local|a'),null);
 });
 
+test('verified unloaded desktop metadata clears unknown without claiming a running or writable chat',()=>{
+ const activity=new SessionActivity({storage:storage()});
+ activity.update([{id:'cold',host:'local',connected:false,activityConnected:false,status:'unknown'}]);
+ assert.equal(activity.indicator('local|cold').kind,'unknown');
+ activity.update([{id:'cold',host:'local',connected:false,activityConnected:true,status:'notLoaded',turnId:'last',turnStatus:'completed'}]);
+ assert.equal(activity.indicator('local|cold'),null);
+ assert.equal(activity.rows['local|cold'].offline,false);
+ assert.equal(activity.rows['local|cold'].status,'notLoaded');
+});
+
 test('a parent completion stays running while descendants work and finishes only after the subtree settles',()=>{
  const a=new SessionActivity({storage:storage()});
  const row={...status('a','local','idle'),parentStatus:'idle',status:'active',runningSubagents:2,subagentsKnown:true,activityConnected:true};

@@ -22,6 +22,7 @@ from bridge.clients.codex.title_runtime import generate_title, access_stamp, Tit
 from bridge.features.sessions.activity import SubagentActivity
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
+from bridge.clients.codex.activity import DesktopActivity
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
@@ -170,6 +171,7 @@ class Bridge:
         self.lock = threading.RLock()
         self.ipc = DesktopIPC(ipc_path or ipc_endpoint(codex_home), self._event, self._disconnected)
         self.subagent_activity = SubagentActivity(self.store, lambda: self.ipc.path, host)
+        self.desktop_activity = DesktopActivity(self)
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
                                    executable_getter=executable_getter, on_first_message=self._side_title)
         self.closed = threading.Event()
@@ -1067,19 +1069,23 @@ class Bridge:
             recencies = {}
         rows = []
         descendants = self.subagent_activity.read([session.id for session in sessions])
+        native_status = self.desktop_activity.read([s.id for s in sessions if not s.connected and s.origin == 'desktop'])
         for session in sessions:
             with session.condition:
                 state = session.state or {}
                 turns = ordered_turns(state)
                 last = next((t for t in reversed(turns) if t.get('turnId')), {})
-                parent_status = state.get('threadRuntimeStatus', {}).get('type') if session.connected else 'unknown'
+                native = None if session.connected or session.origin != 'desktop' else native_status.get(session.id)
+                parent_status = state.get('threadRuntimeStatus', {}).get('type') if session.connected else native['status'] if native else 'unknown'
+                if native:
+                    last = {'turnId': native['turnId'], 'status': native['turnStatus']}
                 activity = descendants[session.id]
                 status = 'active' if activity['runningSubagents'] else parent_status
                 if status != 'active' and not activity['subagentsKnown']:
                     status = 'unknown'
                 rows.append({'id': session.id, 'host': self.host, 'recency': recencies.get(session.id, 0), 'connected': session.connected,
                              'status': status, 'parentStatus': parent_status,
-                             'activityConnected': session.connected or bool(activity['runningSubagents']), **activity,
+                             'activityConnected': session.connected or native is not None or bool(activity['runningSubagents']), **activity,
                              'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
         return rows
 
@@ -2787,6 +2793,7 @@ class Bridge:
         self.closed.set()
         self.auto_titles.close()
         self.subagent_activity.close()
+        self.desktop_activity.close()
         self.terminals.close()
         self.side_chats.close()
         self.closed.set()
