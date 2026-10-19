@@ -620,8 +620,12 @@ class GitWorkspace:
         code, gitdir, _ = self.run(['rev-parse', '--absolute-git-dir'])
         if code: raise ValueError('无法读取 Git 仓库位置')
         self.gitdir = Path(os.fsdecode(gitdir.rstrip(b'\n')))
-        prefix = self.workspace.root.relative_to(repository).as_posix()
-        self.prefix = '' if prefix == '.' else prefix + '/'
+        # Git knows the repository-relative scope even when Windows session cwd
+        # uses an extended-length path and --show-toplevel does not.
+        code, raw_prefix, truncated = self.run(['rev-parse', '--show-prefix'])
+        if code or truncated: raise ValueError('无法读取 Git 项目范围')
+        self.prefix = os.fsdecode(raw_prefix.rstrip(b'\n'))
+        prefix = self.prefix.rstrip('/') or '.'
         code, raw, truncated = self.run(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all',
                                           '--renames', '--ignore-submodules=dirty', '--', '.'])
         if code or truncated: raise ValueError('Git 变更列表过大或不可读取，请在电脑上检查仓库')

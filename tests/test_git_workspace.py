@@ -92,6 +92,30 @@ class GitWorkspaceTests(unittest.TestCase):
         with patch.dict(os.environ, {'GIT_DIR': '/nonexistent', 'GIT_WORK_TREE': '/nonexistent'}):
             self.assertTrue(self.status()['available'])
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows extended-length session paths')
+    def test_extended_length_session_cwd_preserves_git_scope_and_diff(self):
+        self.baseline(); nested = self.root / 'nested 中文'; nested.mkdir()
+        (nested / 'file.txt').write_text('nested\n')
+        self.git('add', '.'); self.git('commit', '-qm', 'nested')
+        (self.root / 'hello.txt').write_text('outside\n')
+        (nested / 'file.txt').write_text('inside\n')
+        before = (self.root / '.git/index').read_bytes()
+        for directory, scope, paths, target in (
+                (self.root, '.', ['hello.txt', nested.name + '/file.txt'], 'hello.txt'),
+                (nested, nested.name, ['file.txt'], 'file.txt')):
+            with self.subTest(scope=scope):
+                cwd = '\\\\?\\' + str(directory.resolve())
+                bridge = SimpleNamespace(host='local', store=SimpleNamespace(get=lambda _: {'cwd': cwd}))
+                state = Bridge.workspace(bridge, support.THREAD, 'git-status', {})
+                self.assertTrue(state['available'])
+                self.assertEqual(state['scope'], scope)
+                self.assertEqual([entry['path'] for entry in state['entries']], paths)
+                diff = Bridge.workspace(bridge, support.THREAD, 'git-diff', {'path': target, 'section': 'unstaged'})
+                self.assertIn('+outside' if scope == '.' else '+inside', diff['text'])
+                with self.assertRaises((ValueError, PermissionError)):
+                    Bridge.workspace(bridge, support.THREAD, 'git-diff', {'path': '../hello.txt', 'section': 'unstaged'})
+        self.assertEqual(before, (self.root / '.git/index').read_bytes())
+
     def test_conflicts_and_symlink_boundary(self):
         require_symlink_support()
         self.baseline(); self.git('checkout', '-qb', 'other'); (self.root / 'hello.txt').write_text('other\n'); self.git('commit', '-qam', 'other')
