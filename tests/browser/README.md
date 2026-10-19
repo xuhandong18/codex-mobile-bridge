@@ -1,5 +1,7 @@
 # 浏览器检查
 
+`message-navigation.browser.js` 由 `node scripts/test-message-navigation-browser.cjs` 执行。使用生产 `ChatTimeline`、CSS 和合成只读 API，在手机、平板与电脑尺寸验证 5000 条完整目录、虚拟滚动、单次触屏定位最早/中间消息、纯附件、双向正文分页、历史阅读与实时更新隔离、连续点击与已加载消息抢占、切换后的旧回包，以及目录/窗口网络失败与重试。驱动还逐一执行本目录原时间线的三个检查函数；不能只加载脚本就报告通过。
+
 `file-refresh.browser.js` 的 `runFileRefreshBrowserChecks()` 由 `node scripts/test-file-refresh-browser.cjs` 执行。需要已有 Playwright 和 Chromium，可通过 `NODE_PATH` 指向现有依赖、`BROWSER_EXECUTABLE` 指定测试浏览器。驱动在电脑、手机、平板和横屏尺寸分别验证中文与英文，实际刷新 Markdown、HTML 预览／源码、源码、图片、PDF 与仅下载文件，覆盖全屏、文本阅读位置、错误重试、重复点击、八标签上限、关闭／重置后的旧回包，以及 SSH 和其他客户端的读取归属。所有会话和文件均为合成夹具，不访问已安装客户端。
 
 `selection-gestures.browser.js` 的 `runSelectionGestureBrowserTests()` 使用同一合成文件夹具，但目录响应故意省略 `root`。它分阶段模拟手机选词、扩大/缩小范围和重复长按，分别检查文件、聊天消息及活动正文：所有触屏 contextmenu 均不被网页取消，所有长按都不显示自定义菜单或浮动按钮，只有主动点击“引用选区”或“选区操作”才执行草稿操作，且菜单获得焦点后清空选区仍能引用先前完整文本。驱动需覆盖手机、平板和横屏，并确认选择/引用没有发出聊天发送请求。

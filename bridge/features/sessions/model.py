@@ -99,6 +99,7 @@ def user_display_text(text):
 def normalize_item(item):
     kind = item.get("type", "unknown")
     row = {"id": item.get("id"), "kind": kind, "status": item.get("status")}
+    row.update({key: item[key] for key in ('navigationId', 'navigationPosition') if key in item})
     if kind in ("userMessage", "steeringUserMessage"):
         if kind == "steeringUserMessage":
             item = {**item, "content": item.get("input", [])}
@@ -247,6 +248,8 @@ def normalize_state(state, connected=True):
                            'role': 'activity', 'title': item.get('name') or '工具调用',
                            'text': str(item.get('arguments', item.get('input', '')))}
                 calls[message['id']] = message
+                if 'navigationPosition' in item:
+                    message['navigationPosition'] = item['navigationPosition']
                 messages.append(message)
             elif kind in ('function_call_output', 'custom_tool_call_output') and item.get('call_id') in calls:
                 output = item.get('output', '')
@@ -263,7 +266,7 @@ def normalize_state(state, connected=True):
         effort = params.get('effort') or params.get('reasoningEffort') or settings.get('reasoning_effort') or turn.get('reasoningEffort')
         result.append({"model": model, "effort": effort, "id": turn.get("turnId") or str(ordinal), "status": turn.get("status"),
                        "startedAt": turn.get("turnStartedAtMs"), "messages": messages,
-                       "actionable": bool(turn.get("turnId")) and turn.get("turnId") != "history",
+                       "actionable": turn.get('actionable', True) and bool(turn.get("turnId")) and turn.get("turnId") != "history",
                        "error": turn.get("error"), "diff": turn.get("diff")})
     history = state.get("turnHistory", {}).get("history", {})
     settings = state.get('latestThreadSettings') or {}

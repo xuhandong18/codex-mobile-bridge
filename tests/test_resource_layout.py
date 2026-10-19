@@ -35,6 +35,8 @@ PUBLIC_URLS = set('''
 SSH_SOURCES = {
     'bridge/clients/claude/remote_worker.py': ['profile', 'command', 'resume'],
     'bridge/features/sessions/store.py': ['SessionStore'],
+    'bridge/features/sessions/model.py': ['normalize_item', 'normalize_state'],
+    'bridge/features/sessions/message_index.py': ['scan_rollout', 'read_window', 'MessageNavigation'],
     'bridge/clients/codex/catalog.py': ['Catalog'],
     'bridge/features/sessions/create.py': ['create_empty', 'fork_copy', 'rename_thread'],
     'bridge/features/accounts/models.py': ['model_ids'],

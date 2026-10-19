@@ -1,69 +1,76 @@
 'use strict';
 const timelineText=source=>typeof BridgeI18n==='undefined'?source:BridgeI18n.t(source);
+const messageSummary=row=>(row.text||row.attachments?.map(item=>(item.name||item.path||item.type||'').replace(/\\/g,'/').split('/').pop()).join('、')||timelineText('消息')).replace(/\s+/g,' ').slice(0,100);
 
-// A view of loaded user messages; navigation never activates a session or sends a request.
+// The navigation directory is independent of the bounded body reading window.
 class ChatMessageMap {
   constructor(timeline){
-    this.timeline=timeline;this.abort=new AbortController();
-    const signal=this.abort.signal;
-    this.root=document.createElement('nav');this.root.className='chat-message-map';
-    this.root.setAttribute('aria-label',timelineText('我的消息导航'));
+    this.timeline=timeline;this.abort=new AbortController();const signal=this.abort.signal;
+    this.root=document.createElement('nav');this.root.className='chat-message-map';this.root.setAttribute('aria-label',timelineText('我的消息导航'));
     this.rail=document.createElement('div');this.rail.className='chat-message-map-rail';
     this.panel=document.createElement('div');this.panel.className='chat-message-map-panel';
     this.list=document.createElement('div');this.list.className='chat-message-map-list';
-    this.earlier=document.createElement('button');this.earlier.type='button';this.earlier.className='chat-message-map-earlier';
-    this.earlier.onclick=()=>timeline.loadOlder(100);
-    this.panel.append(this.list,this.earlier);this.root.append(this.rail,this.panel);timeline.viewport.parentElement.append(this.root);
-    // Keep the rail stationary so moving to the corner panel cannot lose the first click.
-    this.root.addEventListener('pointerenter',event=>{if(event.pointerType==='mouse')this.root.classList.add('is-open');},{signal});
+    this.directoryStatus=document.createElement('button');this.directoryStatus.type='button';this.directoryStatus.className='chat-message-map-status';
+    this.directoryStatus.onclick=()=>timeline.loadMessageIndex?.(true);
+    this.earlier=document.createElement('button');this.earlier.type='button';this.earlier.className='chat-message-map-earlier';this.earlier.onclick=()=>timeline.loadOlder(100);
+    this.panel.append(this.directoryStatus,this.list,this.earlier);this.root.append(this.rail,this.panel);timeline.viewport.parentElement.append(this.root);
+    this.root.addEventListener('pointerenter',event=>{if(event.pointerType==='mouse'){this.root.classList.add('is-open');this.paint(this.list,44);}},{signal});
     document.addEventListener('pointerdown',event=>{if(!this.root.contains(event.target))this.close();},{signal});
     this.root.addEventListener('keydown',event=>{if(event.key==='Escape'){this.close();document.activeElement?.blur();event.stopPropagation();}},{signal});
+    this.list.addEventListener('scroll',()=>this.paint(this.list,44),{passive:true,signal});
+    this.rail.addEventListener('scroll',()=>this.paint(this.rail,7),{passive:true,signal});
     this.position=()=>{
       const rect=timeline.viewport.getBoundingClientRect();
-      this.root.hidden=!this.list.children.length||!rect.width||!rect.height;
+      this.root.hidden=!this.entries?.length&&!timeline.indexBusy&&!timeline.indexError&&!timeline.hasMore;
       this.root.style.top=(rect.top+rect.height/2)+'px';this.root.style.right=Math.max(0,window.innerWidth-rect.right+4)+'px';
       this.root.style.setProperty('--map-right',Math.max(0,window.innerWidth-rect.right+4)+'px');
       this.root.style.setProperty('--map-bottom',Math.max(8,window.innerHeight-rect.bottom+8)+'px');
       this.root.style.setProperty('--map-width',Math.max(22,Math.min(280,rect.width-24))+'px');
       this.root.style.setProperty('--map-height',Math.max(44,Math.min(320,rect.height-80))+'px');
+      if(!rect.width||!rect.height)this.root.hidden=true;
     };
-    this.resize=new ResizeObserver(this.position);this.resize.observe(timeline.viewport);
-    window.addEventListener('resize',this.position,{signal});
-    window.addEventListener('scroll',this.position,{capture:true,passive:true,signal});
-    this.update();
+    this.resize=new ResizeObserver(this.position);this.resize.observe(timeline.viewport);window.addEventListener('resize',this.position,{signal});
+    window.addEventListener('scroll',this.position,{capture:true,passive:true,signal});this.update();
   }
   close(){this.root.classList.remove('is-open');}
+  jump(entry){
+    if(this.timeline.navigateMessage){this.timeline.navigateMessage(entry);return;}
+    const timeline=this.timeline,node=timeline.nodes.get(entry.rowKey)?.node;if(!node)return;
+    timeline.following=false;timeline.viewport.scrollTop+=node.getBoundingClientRect().top-timeline.viewport.getBoundingClientRect().top-12;
+    timeline.lastTop=timeline.viewport.scrollTop;timeline.anchor=timeline.capture();this.close();
+  }
+  paint(root,height){
+    const scroll=root.scrollTop||0,entries=this.entries||[],virtual=entries.length>120;
+    const first=virtual?Math.max(0,Math.floor((root.scrollTop||0)/height)-8):0;
+    const end=virtual?Math.min(entries.length,first+Math.ceil((root.clientHeight||320)/height)+16):entries.length;
+    const visible=entries.slice(first,end),keep=new Set(visible.map(entry=>entry.id||entry.rowKey));
+    for(const child of [...root.children])if(!keep.has(child.dataset.key))child.remove();
+    const buttons=new Map([...root.children].map(child=>[child.dataset.key,child]));
+    const spacer=pixels=>{const node=document.createElement('div');node.style.height=pixels+'px';node.style.flex='0 0 '+pixels+'px';node.setAttribute('aria-hidden','true');return node;};
+    if(virtual)root.append(spacer(first*height));
+    for(let i=first;i<end;i++){
+      const entry=entries[i],key=entry.id||entry.rowKey;let button=buttons.get(key);
+      if(!button){button=document.createElement('button');button.type='button';button.dataset.key=key;button.append(document.createElement('i'));if(root===this.list)button.append(document.createElement('span'));}
+      const label=((entry.order??i)+1)+'. '+entry.summary;
+      if(root===this.list)button.lastChild.textContent=label;
+      button.setAttribute('aria-label',label);button.title=label;
+      button.onclick=()=>{this.jump(entry);button.blur();};root.append(button);
+    }
+    if(virtual)root.append(spacer((entries.length-end)*height));
+    if(virtual)root.scrollTop=scroll;
+    if(!entries.length&&root===this.rail){
+      const handle=document.createElement('button');handle.type='button';handle.textContent='⋯';handle.setAttribute('aria-label',timelineText('我的消息导航'));
+      handle.onclick=()=>{this.root.classList.add('is-open');this.paint(this.list,44);};root.append(handle);
+    }
+  }
   update(){
     const timeline=this.timeline;
-    const rows=[...timeline.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order);
-    const keep=new Set(rows.map(row=>row.key));
-    for(const button of [...this.list.children])if(!keep.has(button.dataset.key))button.remove();
-    for(const button of [...this.rail.children])if(!keep.has(button.dataset.key))button.remove();
-    const buttons=new Map([...this.list.children].map(button=>[button.dataset.key,button]));
-    const markers=new Map([...this.rail.children].map(button=>[button.dataset.key,button]));
-    rows.forEach((row,index)=>{
-      let button=buttons.get(row.key);
-      if(!button){
-        button=document.createElement('button');button.type='button';button.dataset.key=row.key;
-        const line=document.createElement('i'),label=document.createElement('span');button.append(line,label);
-        button.onclick=()=>{
-          const node=timeline.nodes.get(row.key)?.node;if(!node)return;
-          timeline.following=false;
-          timeline.viewport.scrollTop+=node.getBoundingClientRect().top-timeline.viewport.getBoundingClientRect().top-12;
-          timeline.lastTop=timeline.viewport.scrollTop;timeline.anchor=timeline.capture();
-          for(const item of this.list.children)item.removeAttribute('aria-current');
-          button.setAttribute('aria-current','true');this.close();button.blur();
-        };
-      }
-      const summary=(row.text||row.attachments?.map(item=>item.name||item.type).join('、')||timelineText('消息')).replace(/\s+/g,' ').slice(0,100);
-      const label=(index+1)+'. '+summary;
-      button.lastChild.textContent=label;button.setAttribute('aria-label',label);button.title=label;
-      this.list.append(button);
-      let marker=markers.get(row.key);
-      if(!marker){marker=document.createElement('button');marker.type='button';marker.dataset.key=row.key;marker.append(document.createElement('i'));}
-      marker.setAttribute('aria-label',label);marker.title=label;marker.onclick=button.onclick;this.rail.append(marker);
-    });
-    this.earlier.hidden=!timeline.hasMore;this.earlier.disabled=timeline.busy;
+    this.entries=timeline.directoryRows?timeline.directoryRows():[...timeline.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order).map((row,i)=>({rowKey:row.key,order:i,summary:messageSummary(row)}));
+    this.paint(this.rail,7);this.paint(this.list,44);
+    this.directoryStatus.hidden=!timeline.indexBusy&&!timeline.indexError;
+    this.directoryStatus.disabled=!!timeline.indexBusy;
+    this.directoryStatus.textContent=timelineText(timeline.indexError?'目录加载失败，点击重试':'正在整理消息目录…');
+    this.earlier.hidden=!timeline.hasMore||!!timeline.indexReady;this.earlier.disabled=timeline.busy;
     this.earlier.textContent=timelineText('查看更早内容');this.position();
   }
   dispose(){this.abort.abort();this.resize.disconnect();this.root.remove();}
@@ -80,23 +87,101 @@ class ChatTimeline {
     this.abort=new AbortController();this.rows=new Map();this.nodes=new Map();this.details=new Map();
     this.files=new Map();this.sequence=-1;this.epoch='';this.before=null;this.hasMore=false;
     this.busy=false;this.generation=0;this.windowRevision=0;this.following=true;this.lastTop=0;this.retryCount=0;
+    this.messageIndex=new Map();this.indexBusy=false;this.indexReady=false;this.indexError=false;this.indexRevision='';this.indexTail=null;this.indexUpdated=0;this.indexRetryAt=0;
+    this.navigationMode=false;this.navigationRequest=0;this.navigationBusy=false;this.liveCursor=null;this.hasLiveChanges=false;
     this.showReasoning=document.documentElement.dataset.showReasoning!=='false';
     this.showProcess=document.documentElement.dataset.showProcess!=='false';
     this.onScroll=()=>{
       if(this.suppress||!this.viewport.clientHeight)return;
       const upward=this.viewport.scrollTop<this.lastTop;
-      this.lastTop=this.viewport.scrollTop;this.following=this.atBottom();this.anchor=this.capture();
+      this.lastTop=this.viewport.scrollTop;this.following=!this.navigationMode&&this.atBottom();this.anchor=this.capture();
       if(this.following)this.newer.hidden=true;
       if(upward&&this.nearTop()&&!this.retryCount)this.loadOlder(100);
     };
     this.viewport.addEventListener('scroll',this.onScroll,{passive:true});
     this.older.onclick=()=>this.sequence<0?this.start():this.loadOlder(this.retryCount||100);
-    this.newer.onclick=()=>{this.jumpBottom();this.anchor=this.capture();};
+    this.newer.onclick=()=>{if(this.navigationMode){this.loadLatest();return;}this.jumpBottom();this.anchor=this.capture();};
+    this.later=document.createElement('button');this.later.type='button';this.later.className='plain timeline-later';this.later.hidden=true;
+    this.later.textContent=timelineText('查看后续内容');this.later.onclick=()=>this.pageNavigation('after');this.viewport.append(this.later);
     this.resize=new ResizeObserver(()=>this.restore(this.anchor,this.following));
     this.resize.observe(this.container);
     this.messageMap=new ChatMessageMap(this);
   }
-  dispose(){this.messageMap.dispose();this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;}
+  dispose(){this.navigationRequest++;this.messageMap.dispose();this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;this.later.remove();}
+  directoryRows(){
+    const entries=[...this.messageIndex.values()].sort((a,b)=>a.order-b.order).map(entry=>({...entry})),matched=new Set();
+    const byId=new Map(entries.map(entry=>[entry.id,entry])),byKey=new Map(entries.map(entry=>[entry.rowKey,entry])),byText=new Map();
+    for(const entry of entries){const key=JSON.stringify([entry.turnId,entry.summary]),list=byText.get(key)||[];list.push(entry);byText.set(key,list);}
+    const loaded=[...this.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order);
+    for(const row of loaded){
+      const summary=messageSummary(row),sameText=byText.get(JSON.stringify([row.turnId,summary]))||[];
+      const candidate=byId.get(row.navigationId)||byKey.get(row.key)||(sameText.length===1?sameText[0]:null);
+      const match=candidate&&!matched.has(candidate.id)&&candidate.summary===summary?candidate:null;
+      if(match){matched.add(match.id);match.loadedKey=row.key;continue;}
+      entries.push({id:row.navigationId||'loaded:'+row.key,rowKey:row.key,turnId:row.turnId,summary,order:entries.length});
+    }
+    return entries;
+  }
+  async loadMessageIndex(full=false){
+    if(this.indexBusy||this.abort.signal.aborted||this.indexUnsupported)return;
+    this.indexBusy=true;this.indexError=false;this.messageMap.update();
+    let cursor=null,first=true;
+    try{
+      do{
+        const params={limit:200,...(cursor?{cursor}:!full&&this.indexTail?{since:this.indexTail}:{})};
+        const page=await this.read('message-index',params);if(this.abort.signal.aborted)return;
+        if(!Array.isArray(page.items)){this.indexUnsupported=true;return;}
+        if(first&&(page.reset||this.indexRevision&&page.revision!==this.indexRevision))this.messageIndex.clear();
+        this.indexRevision=page.revision;
+        for(const entry of page.items)this.messageIndex.set(entry.id,entry);
+        cursor=page.nextCursor;this.indexTail=page.tailCursor;this.indexReady=true;first=false;this.messageMap.update();
+      }while(cursor&&!this.abort.signal.aborted);
+      this.indexUpdated=Date.now();
+    }catch(error){if(this.abort.signal.aborted)return;if(error.status===404)this.indexUnsupported=true;else{this.indexError=true;this.indexRetryAt=Date.now()+15000;}}
+    finally{this.indexBusy=false;if(!this.abort.signal.aborted)this.messageMap.update();}
+  }
+  focusMessage(key){
+    const node=this.nodes.get(key)?.node;if(!node)return false;
+    this.following=false;this.suppress=true;this.viewport.scrollTop+=node.getBoundingClientRect().top-this.viewport.getBoundingClientRect().top-12;
+    this.lastTop=this.viewport.scrollTop;this.anchor=this.capture();this.messageMap.close();requestAnimationFrame(()=>this.suppress=false);return true;
+  }
+  async navigateMessage(entry){
+    const ticket=++this.navigationRequest;this.generation++;
+    const candidate=this.rows.get(entry.loadedKey||entry.rowKey)?.row;
+    const loaded=candidate&&messageSummary(candidate)===entry.summary?candidate.key:[...this.rows.values()].find(value=>value.row.navigationId===entry.id)?.row.key;
+    if(loaded&&this.focusMessage(loaded)){this.navigationBusy=false;this.historyStatus();return;}
+    if(!entry.id||entry.id.startsWith('loaded:'))return;
+    this.navigationBusy=true;this.historyStatus();
+    const live=this.liveCursor||{epoch:this.epoch,sequence:this.sequence,start:this.before||''};
+    try{
+      const page=await this.read('timeline',{around:entry.id,limit:100});
+      if(this.abort.signal.aborted||ticket!==this.navigationRequest)return;
+      if(!page.navigationWindow||!page.targetKey)throw Error(timelineText('这条消息已变化，请刷新消息目录'));
+      this.navigationMode=true;this.liveCursor=live;this.following=false;this.apply(page,true);this.focusMessage(page.targetKey);
+      this.newer.textContent=timelineText(this.hasLiveChanges?'有新内容 ↓':'返回最新内容 ↓');this.newer.hidden=false;
+    }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest){this.status(error.message);this.loadMessageIndex(true);}}
+    finally{if(ticket===this.navigationRequest){this.navigationBusy=false;this.historyStatus();}}
+  }
+  async pageNavigation(direction){
+    const cursor=direction==='before'?this.before:this.after;
+    if(!this.navigationMode||!cursor||this.navigationBusy||this.abort.signal.aborted)return;
+    const ticket=++this.navigationRequest;this.navigationBusy=true;this.generation++;this.historyStatus();
+    try{
+      const page=await this.read('timeline',{[direction]:cursor,limit:100});
+      if(this.abort.signal.aborted||ticket!==this.navigationRequest)return;
+      this.following=false;this.apply(page,true);this.viewport.scrollTop=direction==='before'?this.viewport.scrollHeight-this.viewport.clientHeight:0;
+      this.lastTop=this.viewport.scrollTop;this.anchor=this.capture();
+    }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest)this.status(error.message);}
+    finally{if(ticket===this.navigationRequest){this.navigationBusy=false;this.historyStatus();}}
+  }
+  async loadLatest(){
+    const ticket=++this.navigationRequest;this.generation++;this.navigationBusy=true;
+    try{
+      const page=await this.read('timeline',{limit:20});if(this.abort.signal.aborted||ticket!==this.navigationRequest)return;
+      this.navigationMode=false;this.liveCursor=null;this.hasLiveChanges=false;this.following=true;this.apply(page,true);this.jumpBottom();
+    }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest)this.status(error.message);}
+    finally{if(ticket===this.navigationRequest){this.navigationBusy=false;this.historyStatus();}}
+  }
   atBottom(){return this.viewport.scrollHeight-this.viewport.scrollTop-this.viewport.clientHeight<110;}
   nearTop(){const nodes=[...this.container.children].filter(n=>!n.hidden);return nodes.length>0&&nodes.slice(0,11).some(n=>n.getBoundingClientRect().bottom>=this.viewport.getBoundingClientRect().top);}
   capture(accept=()=>true){if(!this.viewport.clientHeight)return this.anchor;const top=this.viewport.getBoundingClientRect().top;const nodes=[...this.container.children].filter(n=>!n.hidden&&accept(n));const node=nodes.find(n=>n.getBoundingClientRect().bottom>top)||nodes[nodes.length-1];return node?{key:node.dataset.key,offset:node.getBoundingClientRect().top-top}:null;}
@@ -132,19 +217,22 @@ class ChatTimeline {
     try{
       const page=await this.read('timeline',{limit:20});
       if(this.abort.signal.aborted)return;
-      this.apply(page,true);this.updates();
+      this.apply(page,true);this.loadMessageIndex();this.updates();
       // Give the first 20 records a paint before quietly filling the 100-row window.
       requestAnimationFrame(()=>requestAnimationFrame(()=>this.fillRecent()));
     }catch(e){if(this.abort.signal.aborted)return;this.older.disabled=false;this.older.textContent=timelineText('读取失败，点击重试');this.status(e.message);this.startRetry=setTimeout(()=>this.start(),3000);}
     finally{this.starting=false;}
   }
   fillRecent(){
+    if(this.navigationMode||this.navigationBusy)return;
     const filtered=!this.showReasoning||!this.showProcess,target=filtered?20:100;
     const count=[...this.nodes.values()].filter(({node})=>!node.hidden).length;
     if(!this.abort.signal.aborted&&this.rows.size>0&&count<target&&!this.retryCount)this.loadOlder(filtered?100:target-count);
   }
-  historyStatus(){this.older.hidden=!this.hasMore;this.older.disabled=this.busy;this.older.textContent=this.busy?timelineText('正在读取更早内容…'):this.retryCount?timelineText('历史加载失败，点击重试'):timelineText('查看更早内容');}
+  historyStatus(){this.older.hidden=!this.hasMore;this.older.disabled=this.busy||this.navigationBusy;this.older.textContent=this.busy||this.navigationBusy?timelineText('正在读取更早内容…'):this.retryCount?timelineText('历史加载失败，点击重试'):timelineText('查看更早内容');this.later.hidden=!this.navigationMode||!this.after;this.later.disabled=this.navigationBusy;}
   async loadOlder(count){
+    if(this.navigationMode){return this.pageNavigation('before');}
+    if(this.navigationBusy)return;
     if(this.busy||!this.hasMore||this.abort.signal.aborted)return;
     const generation=this.generation,before=this.before;
     this.busy=true;this.retryCount=0;this.historyStatus();
@@ -178,10 +266,10 @@ class ChatTimeline {
     const ordered=[...this.rows.values()].map(x=>x.row).sort((a,b)=>a.order-b.order);
     let position=this.container.firstChild;
     for(const row of ordered){const node=this.nodes.get(row.key).node;if(node===position)position=position.nextSibling;else this.container.insertBefore(node,position);}
-    if(reset||history){this.before=page.before;this.hasMore=page.hasMore;this.windowRevision++;}
+    if(reset||history){this.before=page.before;this.hasMore=page.hasMore;this.after=page.after||null;this.windowRevision++;}
     this.refreshActions();this.historyStatus();this.restore(anchor,bottom);
     this.messageMap.update();
-    if(!history&&!bottom&&(changed||page.meta.requests?.length)){this.newer.textContent=page.meta.requests?.length?timelineText('有待确认请求 ↓'):timelineText('有新内容 ↓');this.newer.hidden=false;}
+    if(!this.navigationMode&&!history&&!bottom&&(changed||page.meta.requests?.length)){this.newer.textContent=page.meta.requests?.length?timelineText('有待确认请求 ↓'):timelineText('有新内容 ↓');this.newer.hidden=false;}
     if(reset)requestAnimationFrame(()=>this.fillRecent());
   }
   renderRow(row,open){
@@ -279,19 +367,26 @@ class ChatTimeline {
       const attachment=node.querySelector('.timeline-attachments small.muted');
       if(attachment)attachment.textContent=timelineText('附件：')+row.attachments.map(a=>a.name||a.type).join('、');
     }
-    this.newer.textContent=timelineText(this.pendingRequests?'有待确认请求 ↓':'有新内容 ↓');
+    this.newer.textContent=timelineText(this.pendingRequests?'有待确认请求 ↓':this.navigationMode&&!this.hasLiveChanges?'返回最新内容 ↓':'有新内容 ↓');
+    this.later.textContent=timelineText('查看后续内容');this.messageMap.update();
   }
   async updates(){
     while(!this.abort.signal.aborted){
       if(!this.active()){await this.pause(1000);continue;}
       try{
         const generation=this.generation,windowRevision=this.windowRevision;
-        const page=await this.read('changes',{after:this.sequence,epoch:this.epoch,start:this.before||''});
+        const cursor=this.navigationMode?this.liveCursor:{sequence:this.sequence,epoch:this.epoch,start:this.before||''};
+        const page=await this.read('changes',{after:cursor.sequence,epoch:cursor.epoch,start:cursor.start});
         if(this.abort.signal.aborted)return;
         if(generation!==this.generation||windowRevision!==this.windowRevision)continue;
         // History may have expanded the window while this poll was in flight.
         // Polls never replace the oldest loaded cursor.
-        this.apply(page,!!page.reset);this.fillRecent();
+        if(this.navigationMode){
+          this.liveCursor={sequence:page.sequence,epoch:page.epoch,start:page.reset?page.before||'':cursor.start};
+          this.meta=page.meta;this.renderMeta({...page.meta,files:[...this.files.values()]});
+          if(page.rows.length||page.reset||page.meta.requests?.length){this.hasLiveChanges=true;this.newer.textContent=timelineText(page.meta.requests?.length?'有待确认请求 ↓':'有新内容 ↓');this.newer.hidden=false;}
+        }else{this.apply(page,!!page.reset);this.fillRecent();}
+        if(!this.indexUnsupported&&Date.now()>=this.indexRetryAt&&Date.now()-this.indexUpdated>15000)this.loadMessageIndex();
         await this.pause(200);
       }catch(e){if(this.abort.signal.aborted)return;this.status(timelineText('重新连接中'));await this.pause(3000);}
     }

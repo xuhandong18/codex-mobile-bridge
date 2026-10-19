@@ -46,6 +46,8 @@ npm run test:updater
 
 导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
+长聊天消息目录运行 `python -B scripts/test-backend.py --source-only -p test_message_index.py`，覆盖 5000 条目录缓存、增量追加、替换/截断、未写完尾行、附件摘要、过期/跨聊天/跨主机标识、只读 HTTP、文件边界及独立 SSH 源码执行。真实浏览器驱动为 `node scripts/test-message-navigation-browser.cjs`，复用已有 Playwright/Chromium，在 390、820、1280 像素下实际执行 `message-navigation.browser.js` 和原有时间线、显隐、公开思考摘要夹具，检查完整目录、虚拟条目、早期/中间定位、双向正文窗口、实时阅读隔离、竞态与网络重试；仅使用合成数据，不操作真实客户端。
+
 未加载的 Desktop 聊天状态补读由 `test_desktop_metadata_activity.py`、`test_tool_pipe.py` 和 `test_uploads_activity.py` 覆盖，验证只读方法白名单、原生身份、缓存过期、失败回退、可见范围及不提升为可写连接。上述浏览器驱动同时验证“未知灰点 → 原生确认未加载/已完成 → 灰点消失”的自动轮询过程。
 
 宿主与宽窄布局变更可先运行 `node --test tests/host-environment.test.cjs tests/layouts.test.cjs tests/frontend-assets.test.cjs mobile/tests/resources.test.cjs`。这些检查覆盖宿主识别与晚注入、容器分屏边界、样式顺序和原生资源清单，不启动或编译手机 App。布局的真实渲染和窗口变化后状态保留仍需浏览器夹具验证。

@@ -1,5 +1,6 @@
 import copy
 from contextlib import nullcontext
+from collections import OrderedDict
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -34,6 +35,7 @@ from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, manage_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
 from bridge.features.sessions.timeline import Timeline
+from bridge.features.sessions.message_index import MessageNavigation
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
 from bridge.features.accounts.cli_access import CliAccess
@@ -60,6 +62,7 @@ class LiveSession:
         self.state = None
         self.saved_view = None
         self.history_limit = 20
+        self.navigation_windows = OrderedDict()
         self.revision = None
         self.sequence = 0
         self.connected = False
@@ -154,6 +157,7 @@ class Bridge:
         self.notification_boundary = set()
         self.notification_event = threading.Event()
         self.store = RemoteStore(alias) if alias else SessionStore(codex_home)
+        self.message_navigation = MessageNavigation(self.store.navigation_scan, self.store.navigation_window)
         self.catalog_reader = RemoteCatalog(alias) if alias else Catalog(codex_home, codex_bin)
         self.terminals = TerminalManager()
         self.uploads = Uploads(data_dir, (lambda *args: upload_file(alias, *args)) if alias else None)
@@ -1807,6 +1811,9 @@ class Bridge:
         session = self.session(thread_id, attach=False)
         with session.condition:
             files = artifact_paths(session.state or {}, self.store.home) if self.host == "local" else {}
+            if self.host == 'local':
+                for projection in session.navigation_windows.values():
+                    files.update(artifact_paths(projection.record_state, self.store.home))
         if artifact_id not in files:
             raise KeyError("文件不属于此聊天的工作目录")
         return files[artifact_id]
@@ -1845,7 +1852,9 @@ class Bridge:
         session = self.session(thread_id, attach=False)
         paths = []
         with session.condition:
-            for turn in ordered_turns(session.state or {}):
+            states = [session.state or {}] + [p.record_state for p in session.navigation_windows.values()]
+            turns = [turn for state in states for turn in ordered_turns(state)]
+            for turn in turns:
                 for item in items_array(turn.get('items', [])):
                     if item.get('type') not in ('userMessage', 'steeringUserMessage'):
                         continue
@@ -1858,7 +1867,8 @@ class Bridge:
                         path = attachment.get('path')
                         if isinstance(path, str) and path:
                             paths.append(Path(path))
-            paths.extend(referenced_model_images(session.state or {}, image_views_only=True))
+            for state in states:
+                paths.extend(referenced_model_images(state, image_views_only=True))
         for path in paths:
             try:
                 resolved = path.resolve()
@@ -1911,8 +1921,71 @@ class Bridge:
             view["goal"] = None
         return view
 
+    def message_index(self, thread_id, cursor=None, limit=200, since=None):
+        self.store.get(thread_id)
+        return self.message_navigation.page(thread_id, cursor, limit, self._goal_activation_ids(thread_id), since)
+
+    def _navigation_page(self, session, thread_id, **options):
+        from bridge.features.sessions.timeline import PAGE_BYTES, encoded
+        result = self.message_navigation.window(thread_id, **options)
+        view = normalize_state(result['state'], False)
+        projection = Timeline()
+        with session.condition:
+            projection.update({**session.view(), 'turns': view['turns'], 'sequence': session.sequence,
+                               'goalActivationIds': sorted(self._goal_activation_ids(thread_id))})
+            projection.record_state = {'cwd': (session.state or {}).get('cwd') or session.saved_cwd,
+                'turns': [{'items': [item for turn in result['state']['turns'] for item in turn['items']
+                    if item.get('type') in ('userMessage', 'steeringUserMessage', 'agentMessage', 'ImageView', 'imageView')]}]}
+        self._annotate_upload_attachments(session, projection.rows)
+        self._merge_submission_attachments(session, projection.rows)
+        rows = projection.rows
+        target = next((i for i, row in enumerate(rows) if row.get('navigationId') == result['targetId']), None) if result['targetId'] else None
+        start = max(0, target-3) if target is not None else 0
+        if target is not None:
+            while start < target and 2+sum(len(encoded(row))+1 for row in rows[start:target+1]) > PAGE_BYTES:
+                start += 1
+        selected, size = [], 2
+        backwards = bool(options.get('before'))
+        positions = range(len(rows)-1, -1, -1) if backwards else range(start, len(rows))
+        for position in positions:
+            row = rows[position]
+            cost = len(encoded(row))
+            if selected and size+cost+1 > PAGE_BYTES:
+                break
+            selected.append(row);size += cost+1
+        if backwards:
+            selected.reverse()
+            start = len(rows)-len(selected)
+        if not selected or target is not None and not any(row.get('navigationId') == result['targetId'] for row in selected):
+            raise ValueError('这条消息已变化，请刷新消息目录')
+        next_position = rows[start+len(selected)]['navigationPosition'] if start+len(selected) < len(rows) else result['end']
+        cursors = self.message_navigation.range_cursors(thread_id, result['revision'],
+            selected[0]['navigationPosition'], next_position)
+        with session.condition:
+            session.navigation_windows[projection.epoch] = projection
+            while len(session.navigation_windows) > 2:
+                session.navigation_windows.popitem(last=False)
+        projection.meta.update(host=self.host,
+            hostLabel='此电脑' if self.host == 'local' else self.hosts.hosts().get(self.host, {}).get('displayName', self.host))
+        self._submission_meta(session, projection.meta)
+        return {'epoch': projection.epoch, 'sequence': projection.sequence, 'rows': selected, 'meta': projection.meta,
+                **cursors, 'hasMore': bool(cursors['before']), 'hasNewer': bool(cursors['after']), 'files': self._navigation_files(projection),
+                'navigationWindow': True, 'targetKey': next((row['key'] for row in selected if row.get('navigationId') == result['targetId']), None)}
+
+    def _navigation_files(self, projection):
+        artifacts = artifact_paths(projection.record_state, self.store.home) if self.host == 'local' else {}
+        return [{'id': key, **{k: value[k] for k in ('name', 'reference', 'references', 'image')}} for key, value in artifacts.items()]
+
     def timeline_read(self, thread_id, mode='page', **options):
         session = self.session(thread_id, background=True)
+        if mode == 'page' and (options.get('around') or options.get('after') or str(options.get('before') or '').startswith('nav.')):
+            return self._navigation_page(session, thread_id, **options)
+        if mode == 'detail':
+            epoch = str(options.get('cursor', '')).partition('.')[0]
+            with session.condition:
+                historical = session.navigation_windows.get(epoch)
+                if historical is not None:
+                    return {**historical.detail(**options), 'files': self._navigation_files(historical)}
         goal_available = self._refresh_session_goal(session)
         # Expand saved history only when the reader reaches its loaded edge.
         if mode == 'page' and options.get('before'):

@@ -82,12 +82,26 @@ class RemoteStore:
 
     def call(self, method, args):
         source = source_text('features/sessions/store.py')
+        navigation = method in ('navigation_scan', 'navigation_window')
+        if navigation:
+            source = source_text('features/sessions/model.py') + '\n' + source_text('features/sessions/message_index.py') + '\n' + source
         suffix = ('\nimport os\nhome_source = "environment" if os.environ.get("CODEX_HOME") else "default"\n'
-                  's = SessionStore(Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex"))))\n'
-                  'result = s.' + method + '(**' + payload(args) + ')\n')
+                  's = SessionStore(Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))' +
+                  (', navigation_source=__import__("types").SimpleNamespace(scan=scan_rollout, window=read_window, summarize=normalize_item)' if navigation else '') + ')\n')
+        call = 'result = s.' + method + '(**' + payload(args) + ')\n'
+        if navigation:
+            suffix += ('try:\n    ' + call +
+                       'except (ValueError, KeyError, PermissionError) as exc:\n'
+                       '    result = {"navigationError": str(exc), "navigationErrorKind": type(exc).__name__}\n')
+        else:
+            suffix += call
         if method == 'discovery_diagnostics':
             suffix += 'result["homeSource"] = home_source\n'
-        return ssh_read(self.alias, source + suffix + 'print(json.dumps(result, ensure_ascii=False))\n', timeout=30)
+        result = ssh_read(self.alias, source + suffix + 'print(json.dumps(result, ensure_ascii=False))\n', timeout=30)
+        if navigation and 'navigationError' in result:
+            error = {'KeyError': KeyError, 'PermissionError': PermissionError}.get(result.get('navigationErrorKind'), ValueError)
+            raise error(result['navigationError'])
+        return result
 
     def list(self, **kwargs):
         key = json.dumps(kwargs, sort_keys=True)
@@ -121,6 +135,12 @@ class RemoteStore:
 
     def history(self, thread_id, turn_limit=None):
         return self.call('history', {'thread_id': thread_id, 'turn_limit': turn_limit})
+
+    def navigation_scan(self, thread_id, checkpoint=None):
+        return self.call('navigation_scan', {'thread_id': thread_id, 'checkpoint': checkpoint})
+
+    def navigation_window(self, thread_id, point, start, limit):
+        return self.call('navigation_window', {'thread_id': thread_id, 'point': point, 'start': start, 'limit': limit})
 
     def subagents(self, thread_id):
         return self.call('subagents', {'thread_id': thread_id})

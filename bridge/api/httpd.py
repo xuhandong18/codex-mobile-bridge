@@ -44,7 +44,7 @@ from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 LOG = logging.getLogger(__name__)
 from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
-THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename|auto-title|record-path|archive|unarchive|delete))?$")
+THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|message-index|notifications|uploads|message-action|rename|auto-title|record-path|archive|unarchive|delete))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
 UPLOAD_THUMB_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/thumb$")
 DESKTOP_IMAGE_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/desktop-images/([0-9a-f]{64})$")
@@ -938,7 +938,10 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'permissions':
                     return self.output(200, bridge.linux_permission_options(thread_id))
                 if action == 'timeline':
-                    return self.output(200, bridge.timeline_read(thread_id, limit=int(query.get('limit', ['20'])[0]), before=query.get('before', [None])[0]))
+                    options = {key: query[key][0] for key in ('around', 'after') if query.get(key)}
+                    return self.output(200, bridge.timeline_read(thread_id, limit=int(query.get('limit', ['20'])[0]), before=query.get('before', [None])[0], **options))
+                if action == 'message-index':
+                    return self.output(200, bridge.message_index(thread_id, cursor=query.get('cursor', [None])[0], limit=int(query.get('limit', ['200'])[0]), since=query.get('since', [None])[0]))
                 if action == 'detail':
                     return self.output(200, bridge.timeline_read(thread_id, 'detail', cursor=query.get('key', [''])[0],
                                                                offset=int(query.get('offset', ['0'])[0]), version=query.get('version', [None])[0]))

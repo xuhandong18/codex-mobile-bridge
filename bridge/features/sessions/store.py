@@ -19,10 +19,42 @@ class StoreUnavailable(RuntimeError):
 class SessionStore:
     DESKTOP_ORIGINATORS = ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge')
 
-    def __init__(self, codex_home):
+    def __init__(self, codex_home, navigation_source=None):
         self.home = Path(codex_home).resolve()
         self.history_cache = OrderedDict()
         self.history_lock = threading.Lock()
+        self.navigation_source = navigation_source
+
+    def _navigation_source(self):
+        if self.navigation_source is None:
+            from types import SimpleNamespace
+            from bridge.features.sessions.message_index import scan_rollout, read_window
+            from bridge.features.sessions.model import normalize_item
+            self.navigation_source = SimpleNamespace(scan=scan_rollout, window=read_window, summarize=normalize_item)
+        return self.navigation_source
+
+    def _navigation_path(self, thread_id):
+        resolved = Path(self.get(thread_id)['rollout_path']).resolve()
+        if not self._rollout_in_home(resolved):
+            raise ValueError('会话记录路径不在 Codex 数据目录中')
+        return resolved
+
+    def navigation_scan(self, thread_id, checkpoint=None):
+        source = self._navigation_source()
+        try:
+            return source.scan(self._navigation_path(thread_id), thread_id, checkpoint, source.summarize)
+        except PermissionError as exc:
+            raise PermissionError('无权读取此聊天的消息目录') from exc
+        except OSError as exc:
+            raise ValueError('会话记录暂不可用，请刷新目录后重试') from exc
+
+    def navigation_window(self, thread_id, point, start, limit):
+        try:
+            return self._navigation_source().window(self._navigation_path(thread_id), thread_id, point, start, limit)
+        except PermissionError as exc:
+            raise PermissionError('无权读取此聊天的历史内容') from exc
+        except OSError as exc:
+            raise ValueError('会话记录暂不可用，请刷新目录后重试') from exc
 
     @contextmanager
     def _connect(self):
