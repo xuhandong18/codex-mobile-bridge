@@ -101,13 +101,28 @@ function renderActivity(){for(const button of $('sessions').querySelectorAll('.s
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
 }if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));}
 async function refreshActivity(){
-  if(activityBusy||$('app').hidden||document.hidden||!listRows.length)return;activityBusy=true;
-  const hosts={};for(const row of listRows)(hosts[row.host]??=[]).push(row.id);
-  try{const result=await api('/api/activity',{hosts});if(!$('app').hidden){sessionActivity.update(result.sessions,visibleChat());for(const row of result.sessions)if(row.recency)bumpRecency(row.id,row.host,row.recency);renderActivity();}}catch{}finally{activityBusy=false;}
+  if($('app').hidden||document.hidden||clientNavigation.provider!=='codex')return;
+  if(activityBusy){activityRefreshPending=true;return;}
+  const root=$('sessions');if(!root.clientWidth||!root.clientHeight)return;
+  const bounds=root.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(window.innerHeight,bounds.bottom),left=Math.max(0,bounds.left),right=Math.min(window.innerWidth,bounds.right);
+  if(bottom<=top||right<=left)return;
+  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),hosts={};
+  for(const button of root.querySelectorAll('.session')){
+    if(button.closest('details:not([open]),[hidden]')||!button.getClientRects().length)continue;
+    const rect=button.getBoundingClientRect(),{id,host}=button.dataset;
+    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(chatKey(id,host)))continue;
+    const ids=hosts[host]??=[];if(!ids.includes(id))ids.push(id);
+  }
+  if(!Object.keys(hosts).length)return;activityBusy=true;
+  try{const result=await api('/api/activity',{hosts});if(!$('app').hidden){sessionActivity.update(result.sessions,visibleChat());for(const row of result.sessions)if(row.recency)bumpRecency(row.id,row.host,row.recency);renderActivity();}}catch{}finally{activityBusy=false;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh();}}
 }
+let activityRefreshTimer=null,activityRefreshPending=false;
+function scheduleActivityRefresh(){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(refreshActivity,100);}
 setInterval(refreshActivity,5000);
 window.addEventListener('focus',refreshActivity);
+window.addEventListener('resize',scheduleActivityRefresh);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshActivity();});
+if(typeof MutationObserver==='function')new MutationObserver(scheduleActivityRefresh).observe($('app'),{attributes:true,attributeFilter:['class','hidden']});
 let loginStatus={attemptsRemaining:5,attemptLimit:5,blocked:false};
 function renderLoginStatus(status=loginStatus){
   loginStatus=status||loginStatus;
@@ -324,7 +339,7 @@ function renderList(){
   const rememberGroup=(details,key,fallback)=>{
     let saved;try{saved=localStorage.getItem(key);}catch{}
     details.open=saved==='closed'?false:saved==='open'?true:fallback;
-    details.ontoggle=()=>{if(details.isConnected===false)return;try{localStorage.setItem(key,details.open?'open':'closed');}catch{}};
+    details.ontoggle=()=>{if(details.isConnected===false)return;try{localStorage.setItem(key,details.open?'open':'closed');}catch{}scheduleActivityRefresh();};
   };
   if(native){
     const sections=[{id:'pinned',name:t('置顶')},...sidebarData.sections,{id:'projects',name:t('项目')},{id:'threads',name:t('聊天')}],order=sidebarData.sectionOrder||[];
@@ -412,7 +427,7 @@ function renderList(){
     }
   }
   if(native)for(const root of sectionRoots.values())if(root.children.length===1&&!sidebarData.sections.some(section=>section.id===root.dataset.section))root.hidden=true;
-  if(!listRows.length&&!groups.size)$('sessions').append(el('p','muted',t(listComplete?'没有找到聊天。':listReadFinished?'暂不可用':'正在读取…')));renderActivity();$('sessions').scrollTop=scrollTop;
+  if(!listRows.length&&!groups.size)$('sessions').append(el('p','muted',t(listComplete?'没有找到聊天。':listReadFinished?'暂不可用':'正在读取…')));renderActivity();$('sessions').scrollTop=scrollTop;scheduleActivityRefresh();
 }
 async function loadList(reset=false){
   if(!reset&&(listLoading||!listHasMore))return false;
@@ -486,6 +501,7 @@ function loadMoreSessions(){
   if(root.scrollHeight-root.clientHeight-root.scrollTop<240)loadList().catch(e=>toast(e.message));
 }
 $('sessions').addEventListener('scroll',loadMoreSessions,{passive:true});
+$('sessions').addEventListener('scroll',scheduleActivityRefresh,{passive:true});
 // Collapsed project groups may leave too little content for a scroll event.
 $('sessions').addEventListener('wheel',event=>{if(event.deltaY>0)loadMoreSessions();},{passive:true});
 let listTouch=null;
