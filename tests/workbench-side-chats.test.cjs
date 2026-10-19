@@ -12,7 +12,7 @@ function device(gateway){
     SideChatPanel=class {
       constructor(workbench,session,tab){
         const panel=Object.create(Panel.prototype);
-        Object.assign(panel,{workbench,session,tab,status:{},caption:{},apply(state){this.state=state;},controls(){},
+        Object.assign(panel,{workbench,session,tab,creationId:uuid(),status:{},caption:{},apply(state){this.state=state;},controls(){},
           references:{close(){}},dispose(){this.disposed=true;}});
         panel.load();return panel;
       }
@@ -116,15 +116,55 @@ test('expired discovery authentication follows the shared logout handler',async(
   tablet.wb.open('parent','local');await tablet.flush();assert.equal(tablet.wb.unauthorized,true);
 });
 
-test('the new-tab side-chat entry opens a distinct draft when the previous side chat has disconnected',async()=>{
-  const tablet=device(async()=>({id:'old-child',connected:false,slots:[{slot:'',id:'old-child'}]}));
+test('the new-tab side-chat entry creates a ready chat and preserves the disconnected chat draft',async()=>{
+  const tablet=device(async(url,body)=>body?.action==='create'?{id:'new-child',connected:true}:
+    {id:'old-child',connected:false,slots:[{slot:'',id:'old-child'}]});
   tablet.wb.open('parent','local');await tablet.flush();
   const session=tablet.wb.current,old=session.files[0];old.sideChat.input={value:'Preserved draft'};
   tablet.wb.select=id=>session.active=id;
   tablet.wb.sideChat('',true);await tablet.flush();
   assert.equal(session.files.length,2);assert.notEqual(session.active,old.id);
-  assert.equal(session.files[1].slot,slot);assert.equal(old.sideChat.input.value,'Preserved draft');
-  assert.ok(tablet.calls.every(call=>call.body===undefined),'opening a new draft does not send or replay messages');
+  const created=session.files[1];assert.ok(created.slot);assert.equal(old.sideChat.input.value,'Preserved draft');
+  assert.equal(created.sideChat.state.id,'new-child');assert.equal(created.sideChat.state.connected,true);
+  assert.equal(tablet.calls.filter(call=>call.body?.action==='create').length,1);
+  assert.ok(tablet.calls.every(call=>call.body===undefined||call.body.action==='create'),'creating a chat does not send a message');
+});
+
+test('a late initial read cannot replace the chat created from the new-tab entry',async()=>{
+  let finishRead;
+  const tablet=device(async(url,body)=>body?.action==='create'?{id:'created-child',connected:true}:
+    new URL(url,'https://fixture').searchParams.has('slot')?new Promise(resolve=>finishRead=resolve):{id:null,slots:[]});
+  tablet.wb.open('parent','local');await tablet.flush();tablet.wb.select=id=>tablet.wb.current.active=id;
+  tablet.wb.sideChat('',true);await tablet.flush();const panel=tablet.wb.current.files[0].sideChat;
+  assert.equal(panel.state?.id,'created-child');
+  finishRead({id:null,connected:false,slots:[]});await tablet.flush();
+  assert.equal(panel.state.id,'created-child');assert.equal(tablet.calls.filter(call=>call.body).length,1);
+});
+
+test('creation failure is not replayed by reads and an explicit retry keeps the creation id',async()=>{
+  let fail=true;
+  const tablet=device(async(url,body)=>{
+    if(body?.action==='create'){if(fail)throw Error('Creation unavailable');return {id:'retried-child',connected:true};}
+    return {id:null,slots:[]};
+  });
+  tablet.wb.open('parent','local');await tablet.flush();tablet.wb.select=id=>tablet.wb.current.active=id;
+  tablet.wb.sideChat('',true);await tablet.flush();const panel=tablet.wb.current.files[0].sideChat;
+  assert.equal(panel.status.textContent,'Creation unavailable');assert.equal(panel.busy,false);
+  await panel.load();await tablet.tick();assert.equal(tablet.calls.filter(call=>call.body).length,1);
+  fail=false;await panel.create();const writes=tablet.calls.filter(call=>call.body);
+  assert.equal(writes.length,2);assert.equal(writes[0].body.creationId,writes[1].body.creationId);
+  assert.equal(panel.state.id,'retried-child');
+});
+
+test('an in-flight or completed creation cannot be submitted twice for the same tab',async()=>{
+  let finishCreate;
+  const tablet=device(async(url,body)=>body?.action==='create'?new Promise(resolve=>finishCreate=resolve):{id:null,slots:[]});
+  tablet.wb.open('parent','local');await tablet.flush();tablet.wb.select=id=>tablet.wb.current.active=id;
+  tablet.wb.sideChat('',true);await tablet.flush();const panel=tablet.wb.current.files[0].sideChat;
+  assert.equal(tablet.calls.filter(call=>call.body).length,1);await panel.create();
+  assert.equal(tablet.calls.filter(call=>call.body).length,1);
+  finishCreate({id:'created-once',connected:true});await tablet.flush();await panel.create();
+  assert.equal(tablet.calls.filter(call=>call.body).length,1);
 });
 
 test('repeated side-chat creation opens independent tabs instead of selecting the first chat',async()=>{

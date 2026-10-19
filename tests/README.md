@@ -56,6 +56,8 @@ npm run test:updater
 
 工作台标签滑动运行 `node scripts/test-workbench-swipe-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度检查 Codex/Harness 的输入区及 Git/子智能体整页滑动、文件/终端阻断、草稿保留、原生输入优先和防误发送。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不连接真实客户端或启动终端。
 
+侧边聊天直接创建运行 `node scripts/test-side-chat-create-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度实际点击“＋ → 侧边聊天”，检查 Codex/Harness 自动创建后可直接发送、多标签独立、刷新恢复只读，以及创建失败、显式重试与回执丢失时不自动重发。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不启动真实客户端或模型。`node --test tests/workbench-side-chats.test.cjs` 另覆盖初始读取与创建回包的竞态及同一标签防止重复创建。
+
 [浏览器夹具](browser/README.md) 位于 `tests/browser/*.browser.js`，依赖真实 DOM 或隔离服务，应由相应驱动调用。其中有些文件只定义测试函数，单独加载不会执行断言。本轮将它们与 Node 分开，避免虚增通过计数。
 
 `scripts/smoke-*` 中部分入口启动真实应用或依赖打包产物；运行前先看其头部与 fixture，不把它们作为无副作用的常规单元测试。

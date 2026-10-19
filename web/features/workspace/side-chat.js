@@ -137,7 +137,7 @@ class SideChatPanel {
   }
   controls(){
     const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
-    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created;this.head.hidden=false;this.messages.hidden=!created;this.queued.hidden=!created;
+    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created||!!this.busy;this.head.hidden=false;this.messages.hidden=!created;this.queued.hidden=!created;
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.permissionsButton])button.disabled=locked;
     this.referenceButton.disabled=!!this.busy||!!this.pending||created&&!this.state.connected;
@@ -205,7 +205,7 @@ class SideChatPanel {
   }
   async load(){const revision=this.readRevision=(this.readRevision||0)+1;try{const state=await this.request();if(this.disposed||revision!==this.readRevision)return;this.apply(state);this.workbench.syncSideChats(this.session,state.slots);}catch(e){if(!this.disposed&&revision===this.readRevision){this.status.textContent=BridgeI18n.t(e.message);if(this.state)this.state.connected=false;this.controls();}}}
   async create(){
-    if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();this.status.textContent=BridgeI18n.t('正在创建临时侧边聊天…');
+    if(this.disposed||this.busy||this.state?.id)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.status.textContent=BridgeI18n.t('正在创建临时侧边聊天…');this.controls();
     try{this.apply(await this.request({action:'create',creationId:this.creationId,...(this.tab?.customTitle?{title:this.tab.customTitle}:{})}));}
     catch(e){if(!this.disposed)this.status.textContent=BridgeI18n.t(e.message);}
     finally{this.busy=false;this.controls();}

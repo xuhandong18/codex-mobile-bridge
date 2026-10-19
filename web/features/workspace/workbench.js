@@ -403,6 +403,7 @@ class Workbench {
     const tab=this.createSideChat(session,fresh||session.files.some(tab=>tab.sideChat)?uuid():'');if(!tab)return;
     this.select(tab.id);
     if(selectedText)tab.sideChat.quoteSelection(selectedText);
+    if(fresh)tab.sideChat.create();
   }
   terminal() {
     const session=this.current;if(!session)return;
