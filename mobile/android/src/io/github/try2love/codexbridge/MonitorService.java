@@ -13,7 +13,7 @@ public final class MonitorService extends Service {
  private static EventClient.Read activeRead;
  private static MonitorService service;
  private long epoch=-1;
- private final java.util.Set<String> baselined=new java.util.HashSet<>();
+ private final java.util.Map<String,String> baselined=new java.util.HashMap<>();
  private ScheduledExecutorService worker;
  private ScheduledFuture<?> scheduled;
  static void setVisible(boolean value){
@@ -37,12 +37,12 @@ public final class MonitorService extends Service {
     synchronized(EventClient.class){if(!binding.equals(EventClient.sessionCookie(android.webkit.CookieManager.getInstance().getCookie(origin+"/"),origin)))continue;
     ComputerNotifications.update(origin,binding,data);if(!data.optBoolean("enabled"))continue;
     String key="cursor:"+origin,stream=data.getString("streamId");long previous=p.getLong(key,-1);
-    boolean ready=baselined.contains(origin)&&stream.equals(p.getString("stream:"+origin,""));
+    boolean ready=binding.equals(baselined.get(origin))&&stream.equals(p.getString("stream:"+origin,""));
     JSONArray events=data.getJSONArray("events");
     if(ready&&p.getBoolean("alerts",false)&&!p.getBoolean("pushRegistered:"+origin,false))for(int i=0;i<events.length();i++){
      JSONObject event=events.getJSONObject(i);if(!event.has("unread")||event.optBoolean("unread"))if(event.getLong("sequence")>Math.max(previous,p.getLong("cleared:"+origin+":"+stream,0)))notifyEvent(this,origin,event);
     }
-    p.edit().putLong(key,data.getLong("cursor")).putString("stream:"+origin,stream).apply();baselined.add(origin);
+    p.edit().putLong(key,data.getLong("cursor")).putString("stream:"+origin,stream).apply();baselined.put(origin,binding);
     }}
    }catch(Exception ignored){synchronized(foregroundLock){if(current(pending,ticket))ComputerNotifications.forget(origin);}/* Keep the cursor; retry on the next foreground check. */}
   }}finally{synchronized(foregroundLock){if(activeRead==pending)activeRead=null;}}

@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / '.tmp/mobile-events-tests'
 WORK.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser()
-parser.add_argument('--baseline', action='store_true')
+mode = parser.add_mutually_exclusive_group()
+mode.add_argument('--baseline', action='store_true')
+mode.add_argument('--session-refresh', action='store_true')
 args = parser.parse_args()
 # Only OS delivery/storage and the JSON container are substituted. JSON objects
 # register their serialized body in this single-process fixture; production
@@ -57,21 +59,36 @@ public class JSONArray {private final List<JSONObject> data=new ArrayList<>();pu
 for name, source in stubs.items():
     path = WORK / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source)
-source = (ROOT / 'mobile/android/src/io/github/try2love/codexbridge/MonitorService.java').read_text()
+    path.write_text(source, encoding='utf-8')
+source = (ROOT / 'mobile/android/src/io/github/try2love/codexbridge/MonitorService.java').read_text(encoding='utf-8')
 # Keep the production scheduler/check/lifecycle unchanged. OS notification
 # rendering is replaced at its existing method boundary to record delivery.
 start = source.index(' static void notifyEvent(')
 end = source.index(' public IBinder onBind', start)
 source = source[:start] + ' static void notifyEvent(Context c,String origin,JSONObject event)throws Exception { MobileEventTests.delivered.add(origin+":"+event.getLong("sequence")); }\n' + source[end:]
-(WORK / 'MonitorService.java').write_text(source)
+(WORK / 'MonitorService.java').write_text(source, encoding='utf-8')
+activity = (ROOT / 'mobile/android/src/io/github/try2love/codexbridge/MainActivity.java').read_text(encoding='utf-8')
+prompt = activity[activity.index('if(prompt.equals("codexbridge-session:"'):activity.index('if(prompt.equals("codexbridge-auth-lost:"')]
+persist = prompt.split('if(view==web&&GatewayURL.sameOrigin(url,origin)&&GatewayURL.sameOrigin(view.getUrl(),origin)){', 1)[1].split('}else result.cancel();', 1)[0]
+(WORK / 'SessionPersistence.java').write_text('''package io.github.try2love.codexbridge;
+import android.webkit.CookieManager;
+final class SessionPersistence {
+ static boolean authLossAttempted;static Result result=new Result();
+ static class Result {void confirm(String value){}}
+ static void rememberConnection(){}
+ static void persist(){''' + persist + '''}
+}
+''', encoding='utf-8')
 java_home = os.environ.get('JAVA_HOME')
 def java_tool(name):
     return str(Path(java_home) / 'bin' / name) if java_home else shutil.which(name)
 subprocess.run([java_tool('javac'), '-encoding', 'UTF-8', '-d', str(WORK),
                *[str(WORK / name) for name in stubs], str(WORK / 'MonitorService.java'),
+               str(WORK / 'SessionPersistence.java'),
                str(ROOT / 'mobile/android/src/io/github/try2love/codexbridge/GatewayURL.java'),
                str(ROOT / 'mobile/android/src/io/github/try2love/codexbridge/EventClient.java'),
                str(ROOT / 'mobile/android/src/io/github/try2love/codexbridge/ComputerNotifications.java'),
                str(ROOT / 'mobile/tests/MobileEventTests.java')], check=True)
-subprocess.run([java_tool('java'), '-Dsun.net.http.allowRestrictedHeaders=true', '-cp', str(WORK), 'io.github.try2love.codexbridge.MobileEventTests', 'baseline' if args.baseline else 'regression'], check=True)
+modes = ['baseline'] if args.baseline else ['session-refresh'] if args.session_refresh else ['regression', 'session-refresh']
+for mode in modes:
+    subprocess.run([java_tool('java'), '-Dsun.net.http.allowRestrictedHeaders=true', '-cp', str(WORK), 'io.github.try2love.codexbridge.MobileEventTests', mode], check=True)

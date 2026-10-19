@@ -47,7 +47,8 @@ public final class MainActivity extends Activity {
   worker.execute(()->{try{JSONObject auth=EventClient.request(address,"/api/auth",null,null);String name=auth.optString("cookieName","codex_mobile_session");String binding=BindingSelection.cookie(CookieManager.getInstance().getCookie(address+"/"),name);JSONObject data=ConnectionDiscovery.descriptor(auth,binding);
    runOnUiThread(()->{String current=BindingSelection.match(snapshot,CookieManager.getInstance().getCookie(address+"/"),name);
     if(ticket!=generation||!saved().contains(address)||current.isEmpty()||!binding.equals(current))return;
-    if(auth.optBoolean("authenticated"))prefs.edit().putString("cookieName:"+address,name).apply();
+    // Page reinjection also persists unchanged cookies. Refresh without discarding the notification baseline.
+    if(auth.optBoolean("authenticated")){prefs.edit().putString("cookieName:"+address,name).apply();MonitorService.refresh();}
     if(auth.optBoolean("authenticated")&&auth.optBoolean("trustedDevice")&&DeviceBinding.name(name))try{DeviceBinding.save(this,address,name,EventClient.tokenValue(current));}catch(Exception ignored){}
     else if(!auth.optBoolean("authenticated"))DeviceBinding.clear(this,address);
     if(data!=null)prefs.edit().putString("connection:"+address,data.toString()).apply();else prefs.edit().remove("connection:"+address).apply();});
@@ -187,7 +188,7 @@ public final class MainActivity extends Activity {
      if(view==web&&GatewayURL.sameOrigin(url,origin)&&GatewayURL.sameOrigin(view.getUrl(),origin))result.confirm(computerName(origin));else result.cancel();return true;
     }
     if(prompt.equals("codexbridge-session:"+clipboardToken)){
-     if(view==web&&GatewayURL.sameOrigin(url,origin)&&GatewayURL.sameOrigin(view.getUrl(),origin)){authLossAttempted=false;CookieManager.getInstance().flush();MonitorService.bindingsChanged();rememberConnection();result.confirm("saved");}else result.cancel();return true;
+     if(view==web&&GatewayURL.sameOrigin(url,origin)&&GatewayURL.sameOrigin(view.getUrl(),origin)){authLossAttempted=false;CookieManager.getInstance().flush();rememberConnection();result.confirm("saved");}else result.cancel();return true;
     }
     if(prompt.equals("codexbridge-auth-lost:"+clipboardToken)){
      if(view==web&&view.hasWindowFocus()&&GatewayURL.sameOrigin(url,origin)&&GatewayURL.sameOrigin(view.getUrl(),origin)&&!authLossAttempted){authLossAttempted=true;loadWithRecovery(origin,origin+"/",view,generation);result.confirm("recovering");}else result.cancel();return true;

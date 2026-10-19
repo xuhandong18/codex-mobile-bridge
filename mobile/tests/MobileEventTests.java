@@ -50,7 +50,23 @@ public final class MobileEventTests {
   catch(NoSuchMethodException baseline){MonitorService.visible=value;if(value)MonitorService.foregroundEpoch++;}
  }
  static void metric(String label,Gateway gateway,int index){System.out.println(label+" request_bytes="+gateway.requestBytes.get(index)+" response_body_bytes="+gateway.responseBytes.get(index)+" target="+gateway.targets.get(index));}
+ static void sessionRefresh()throws Exception {
+  Prefs prefs=new Prefs();MonitorService service=new MonitorService();service.preferences=prefs;prefs.putBoolean("alerts",true);
+  try(Gateway gateway=new Gateway()){
+   String origin=gateway.origin();prefs.values.put("origins",Set.of(origin));visible(true);poll(service);
+   gateway.cursor=201;SessionPersistence.persist();poll(service);
+   check(ComputerNotifications.clients(service,origin).getJSONObject(0).optLong("unread")==201,"Inbox advances after persisting an unchanged authenticated page");
+   check(delivered.equals(List.of(origin+":201")),"An unchanged session persistence callback must not swallow the new completion notification");
+   SessionPersistence.persist();poll(service);check(delivered.size()==1,"Repeated persistence cannot duplicate notifications");
+   CookieManager.getInstance().value="codex_mobile_session=replacement";SessionPersistence.persist();gateway.cursor=202;poll(service);check(delivered.size()==1,"A replaced login must establish a fresh baseline");
+   gateway.cursor=203;poll(service);check(delivered.size()==2,"New login resumes new-event delivery after baseline");
+   visible(false);gateway.cursor=204;visible(true);poll(service);check(delivered.size()==2,"Real foreground re-entry still suppresses historical events");
+   gateway.cursor=205;SessionPersistence.persist();poll(service);check(delivered.size()==3,"Foreground delivery survives repeated authentication persistence");
+   System.out.println("PASS unchanged session persistence preserves new notifications; replacement login and foreground re-entry remain isolated");
+  }
+ }
  public static void main(String[] args)throws Exception {
+  if(args.length>0&&args[0].equals("session-refresh")){sessionRefresh();return;}
   boolean baseline=args.length>0&&args[0].equals("baseline");Prefs prefs=new Prefs();MonitorService service=new MonitorService();service.preferences=prefs;prefs.putBoolean("alerts",true);
   try(Gateway first=new Gateway();Gateway second=new Gateway()){
    String address=first.origin(),key="cursor:"+address;prefs.values.put("origins",Set.of(address));visible(true);
