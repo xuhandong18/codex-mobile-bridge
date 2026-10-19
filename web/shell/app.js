@@ -20,6 +20,7 @@ let listHostIds=[],sidebarData={sections:[],projects:[]};
 const createdChats=new Map();
 const projectChatPages=new Map();
 const projectThreadOrder=new SidebarItemOrder(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|project-thread-order:');
+const projectPins=new SidebarProjectPins(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|project-pins');
 const sectionProjectOrder=new SidebarItemOrder(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|section-project-order:');
 const sidebarPlacements=new SidebarPlacements(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|sidebar-placement:');
 let draggedProjectChat=null;
@@ -254,8 +255,8 @@ function mergeCreatedChats(rows,host,query,archived,source){
 function projectChatRows(row){
   const button=[...$('sessions').querySelectorAll('.session')].find(button=>button.dataset.id===row.id&&button.dataset.host===row.host);
   const group=button?.closest('.project-group');
-  if(!group)return [];
-  return projectThreadOrder.sort(row.projectKey,projectRows(row.projectKey).map(chat=>chat.id));
+  if(!group||isProjectPinned(row))return [];
+  return projectThreadOrder.sort(row.projectKey,projectRows(row.projectKey).filter(chat=>!isProjectPinned(chat)).map(chat=>chat.id));
 }
 function moveProjectChat(row,before){
   const ids=projectChatRows(row);
@@ -295,6 +296,14 @@ function shiftSectionProject(item,direction){
 function projectRows(key){
   return listRows.filter(row=>row.projectKey===key&&($('list-mode').value!=='codex'||sidebarTarget(sidebarEntry('thread',row))==='home'));
 }
+function isProjectPinned(row){return projectPins.read(row.projectKey).has(row.id);}
+function toggleProjectPin(row){
+  const current=listRows.find(chat=>chat.id===row.id&&chat.host===row.host);
+  if(!current||current.projectKey!==row.projectKey||!projectRows(row.projectKey).includes(current))throw Error(t('侧栏条目已变化，请刷新后重试。'));
+  try{projectPins.toggle(row.projectKey,row.id);}
+  catch{throw Error(t('无法保存项目内置顶，请检查设备存储权限。'));}
+  listRenderStamp='';renderList();
+}
 function projectPage(key){
   if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,loading:false});
   return projectChatPages.get(key);
@@ -307,7 +316,7 @@ async function loadProjectChats(key){
   try{
     // The existing API reads cumulative global pages. Keep reading metadata until
     // this project has its next ten rows, even if other projects fill a page.
-    while(projectRows(key).length<target&&listHasMore){
+    while(projectRows(key).filter(row=>!isProjectPinned(row)).length<target&&listHasMore){
       if(await loadList()===false)return;
       if(projectChatPages.get(key)!==page||filter!==listFilterKey)return;
     }
@@ -387,10 +396,14 @@ function renderList(){
     const meta=el('small');meta.append(el('span','',chat.projectName+' · '+(chat.host==='local'?t('此电脑'):chat.hostLabel)),el('time','',dateText(chat.recency/1000)));
     button.append(meta);button.onclick=()=>openChat(chat.id,chat.host).catch(e=>toast(e.message));parent.append(button);
     if(groups.get(chat.projectKey)===parent){
+      if(isProjectPinned(chat)){
+        const badge=el('span','project-pin-label',t('项目内置顶'));button.children[0].prepend(badge);button.dataset.projectPinned='true';
+        continue;
+      }
       button.draggable=true;
       button.ondragstart=event=>{draggedProjectChat={id:chat.id,host:chat.host,projectKey:chat.projectKey};event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',chat.id);};
       button.ondragend=()=>{draggedProjectChat=null;};
-      const sameProject=()=>draggedProjectChat&&draggedProjectChat.host===chat.host&&draggedProjectChat.projectKey===chat.projectKey&&draggedProjectChat.id!==chat.id;
+      const sameProject=()=>draggedProjectChat&&draggedProjectChat.host===chat.host&&draggedProjectChat.projectKey===chat.projectKey&&draggedProjectChat.id!==chat.id&&!projectPins.read(chat.projectKey).has(draggedProjectChat.id);
       button.ondragover=event=>{if(sameProject()){event.preventDefault();event.dataTransfer.dropEffect='move';}};
       button.ondrop=event=>{
         if(!sameProject())return;event.preventDefault();event.stopPropagation();
@@ -415,8 +428,9 @@ function renderList(){
   else if(grouped)sortSectionProjects($('sessions'),'projects');
   if(grouped)for(const [key,root] of groups){
     const [summary,...items]=Array.from(root.children),byId=new Map(items.map(node=>[node.dataset.id,node]));
-    const page=projectPage(key),ordered=projectThreadOrder.sort(key,items.map(node=>node.dataset.id));
-    root.replaceChildren(summary,...ordered.slice(0,page.limit).map(id=>byId.get(id)));
+    const pins=projectPins.read(key),pinned=items.filter(node=>pins.has(node.dataset.id));
+    const page=projectPage(key),ordered=projectThreadOrder.sort(key,items.filter(node=>!pins.has(node.dataset.id)).map(node=>node.dataset.id));
+    root.replaceChildren(summary,...pinned,...ordered.slice(0,page.limit).map(id=>byId.get(id)));
     if(ordered.length>page.limit||listHasMore){
       const more=el('button','plain project-load-more',t(page.loading?'正在读取…':'加载更多'));more.type='button';more.disabled=page.loading||!!listLoading;
       more.onclick=()=>loadProjectChats(key);root.append(more);
@@ -435,20 +449,33 @@ async function loadList(reset=false){
     if(!restoreListSnapshot(filter)){listRows=[];availableSources=[];listOffset=0;listHasMore=false;listHostIds=[];listFilterKey=filter;}
     $('sessions').scrollTop=0;
   }
-  const targetCount=reset?Math.max(100,listRows.length):offset+100;
+  const targetCount=reset?Math.max(100,listOffset):offset+100;
   listComplete=false;listReadFinished=false;listLoading++;renderList();
   const groups=new Map();for(const row of listRows)(groups.get(row.host)||groups.set(row.host,[]).get(row.host)).push(row);
-  const sources=new Set(availableSources),freshSources=new Map(),errors=[];
+  const sources=new Set(availableSources),freshSources=new Map(),errors=[],pinnedGroups=new Map();
   const publish=()=>{
     if(generation!==listGeneration)return [];
     const merged=[...groups.values()].flat().sort((a,b)=>(b.recency-a.recency)||b.id.localeCompare(a.id)||b.host.localeCompare(a.host));
-    listRows=merged.slice(0,targetCount);availableSources=[...sources].sort();renderList();
+    const prefix=merged.slice(0,targetCount),known=new Set(prefix.map(row=>chatKey(row.id,row.host)));
+    listRows=[...prefix,...[...pinnedGroups.values()].flat().filter(row=>isProjectPinned(row)&&!known.has(chatKey(row.id,row.host)))].sort((a,b)=>b.recency-a.recency||b.id.localeCompare(a.id)||b.host.localeCompare(a.host));
+    availableSources=[...sources].sort();renderList();
     return merged;
   };
   const read=async host=>{
     const url='/api/sessions?scope=host&host='+encodeURIComponent(host)+'&q='+encodeURIComponent(query)+'&offset='+(targetCount-100)+'&archived='+archived+'&source='+source;
     try{
       const result=await api(url);if(generation!==listGeneration)return null;
+      const visible=new Set((result.sessions||[]).map(row=>row.id));
+      const missing=[...new Set(projectPins.entries().filter(([project,id])=>project.startsWith(host+'|')&&/^[0-9a-f-]{36}$/.test(id)&&!visible.has(id)).map(([,id])=>id))];
+      const pinned=(result.sessions||[]).filter(row=>row.host===host&&isProjectPinned(row));
+      // Read only metadata for older pins; they do not consume the recent page.
+      for(let start=0;start<missing.length;start+=50){
+        const extra=await api(url+'&ids='+encodeURIComponent(missing.slice(start,start+50).join(',')));
+        if(generation!==listGeneration)return null;
+        if(extra.complete===false)throw Error(extra.unavailableHosts?.[0]?.error||t('暂不可用'));
+        pinned.push(...(extra.sessions||[]).filter(row=>row.host===host&&isProjectPinned(row)));
+      }
+      pinnedGroups.set(host,pinned);
       if(host==='local'){
         listHostIds=result.remoteHosts||[];
         if(result.sidebar)sidebarData=result.sidebar;
@@ -457,13 +484,13 @@ async function loadList(reset=false){
       if(result.complete===false||result.unavailableHosts?.length)errors.push(...(result.unavailableHosts||[{host,label:host,error:t('暂不可用')}]));
       else{
         const previousTitles=new Map(listRows.filter(row=>row.host===host).map(row=>[row.id,row.title]));
-        for(const row of result.sessions){
+        for(const row of [...result.sessions,...pinned.filter(row=>!visible.has(row.id))]){
           const key=chatKey(row.id,row.host);row.recency=Math.max(row.recency,recentInteractions.get(key)||0);
           const previous=previousTitles.get(row.id);
           if(isPlaceholderChatTitle(row.title)&&previous&&!isPlaceholderChatTitle(previous))row.title=previous;
         }
         groups.set(host,mergeCreatedChats(result.sessions,host,query,archived,source));freshSources.set(host,result.availableSources||[]);
-        const active=result.sessions.find(row=>row.id===currentId&&row.host===currentHost);
+        const active=[...result.sessions,...pinned].find(row=>row.id===currentId&&row.host===currentHost);
         if(state&&isPlaceholderChatTitle(state.title)&&active?.title&&!isPlaceholderChatTitle(active.title))renderState({...state,title:active.title});
         for(const item of result.availableSources||[])sources.add(item);
       }
@@ -478,10 +505,9 @@ async function loadList(reset=false){
     const merged=publish();listReadFinished=true;listComplete=errors.length===0;
     if(listComplete){
       availableSources=[...new Set([...freshSources.values()].flat())].sort();
-      listRows=merged.slice(0,targetCount);
       // Host prefixes include one look-ahead row. Older aggregate responses did
       // not, so keep their conservative continuation behaviour.
-      listOffset=listRows.length;listHasMore=merged.length>targetCount||merged.length===targetCount&&local?.complete===undefined;
+      listOffset=Math.min(merged.length,targetCount);listHasMore=merged.length>targetCount||merged.length===targetCount&&local?.complete===undefined;
       listQuery=query;listArchived=archived;listFilterKey=filter;
       if(!renderSourceFilter()){loadList(true).catch(e=>toast(e.message));return false;}
       saveListSnapshot(filter);clientNavigation.acknowledgeList('codex',{...local,unavailableHosts:[],complete:true});listSync.acknowledgeSuccess();
@@ -735,6 +761,7 @@ new ChatContextMenu($('sessions'),target=>{
   const items=[{label:'复制会话路径',copy:true,run:copy=>window.BridgeClipboard.copy(()=>'codex://threads/'+encodeURIComponent(row.id),copy)}];
   items.push({label:'标记为未读',run:()=>{sessionActivity.markUnread(chatKey(row.id,row.host));renderActivity();}});
   items.push(...sidebarPlacementActions(sidebarEntry('thread',row)));
+  if(button.closest('.project-group')&&row.projectKey!==row.host+'|independent')items.push({label:isProjectPinned(row)?'取消项目内置顶':'在项目内置顶',run:()=>toggleProjectPin(row)});
   const projectIds=projectChatRows(row),position=projectIds.indexOf(row.id);
   if(projectIds.length>1){
     items.push({label:'在项目中上移',disabled:position===0,run:()=>shiftProjectChat(row,-1)});

@@ -10,7 +10,7 @@ const initialRows=Array.from({length:14},(_,i)=>({id:id(i+1),host:'local',title:
 const sidebar={sections:[{id:'daily',name:'Daily',hostSectionIds:{local:'native-daily'},itemKeys:['codex:thread:'+id(10),'codex:project:fixture-project','codex:thread:'+id(9)]}],
   projects:[{key:project,host:'local',name:'TVPlayer 测试项目',cwd:'/fixture'}],
   threadOrders:{'fixture-project':{threadIds:initialRows.slice(0,8).map(row=>row.id).reverse()}},pinnedThreadIds:[id(12),id(11)]};
-let rows=[];const errors=[],writes=[];
+let rows=[];const errors=[],writes=[],selectedReads=[];
 const server=http.createServer(async(req,res)=>{
   const p=new URL(req.url,'http://127.0.0.1').pathname;res.setHeader('Cache-Control','no-store');
   if(p.startsWith('/api/')){
@@ -19,7 +19,12 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/auth')value={authenticated:true,csrf:'synthetic-csrf',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'},uiLanguage:'zh'};
     else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
-    else if(p==='/api/sessions')value={sessions:[...rows].sort((a,b)=>b.recency-a.recency),remoteHosts:[],sources:['desktop'],complete:true,sidebar};
+    else if(p==='/api/sessions'){
+      const query=new URL(req.url,'http://127.0.0.1').searchParams,ids=query.get('ids')?.split(',');
+      if(ids)selectedReads.push(ids);
+      const matching=rows.filter(row=>(!ids||ids.includes(row.id))&&(!query.get('q')||row.title.includes(query.get('q'))));
+      value={sessions:[...matching].sort((a,b)=>b.recency-a.recency).slice(0,ids?50:Number(query.get('offset')||0)+101),remoteHosts:[],sources:['desktop'],complete:true,sidebar};
+    }
     else if(p==='/api/activity')value={sessions:[]};
     res.end(JSON.stringify(value));return;
   }
@@ -75,6 +80,56 @@ const server=http.createServer(async(req,res)=>{
       }
       await context.close();
     }
+    for(const width of [390,820,1280])for(const mode of ['codex','project']){
+      rows=initialRows.map(row=>({...row}));
+      const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1000}),page=await context.newPage();page.setDefaultTimeout(10000);
+      page.on('pageerror',error=>errors.push(error.message));
+      await context.addInitScript(mode=>{localStorage.setItem('list-mode',mode);localStorage.setItem('navigation:sidebar','open');},mode);
+      const group='#sessions .project-group[data-project-key="'+project+'"]',buttons=group+' > .session',label=mode+' '+width;
+      const ids=()=>page.locator(buttons).evaluateAll(nodes=>nodes.map(node=>node.dataset.id));
+      const ready=()=>page.waitForFunction(()=>listReadFinished&&listRows.length>=14);
+      const menu=async n=>{
+        const target=page.locator(buttons+'[data-id="'+id(n)+'"]');
+        await target.scrollIntoViewIfNeeded();
+        await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        if(width<1000){
+          await target.dispatchEvent('pointerdown',{pointerType:'touch',isPrimary:true,clientX:100,clientY:180});
+          try{await page.locator('.chat-context-menu').waitFor();}catch(error){console.error({label,n,errors,state:await page.evaluate(()=>({dialogs:[...document.querySelectorAll('dialog[open]')].map(node=>node.outerHTML),rows:listRows.length,loading:listLoading,finished:listReadFinished}))});throw error;}
+          await target.dispatchEvent('pointerup',{pointerType:'touch',isPrimary:true});
+        }else await target.click({button:'right'});
+      };
+      const pin=async n=>{await menu(n);await page.getByRole('button',{name:'在项目内置顶',exact:true}).click();};
+      await page.goto('http://127.0.0.1:'+server.address().port+'/');await ready();
+      await page.locator(group+' > .project-load-more').click();await pin(8);await pin(7);
+      check((await ids()).slice(0,2),[id(7),id(8)],'项目内多个置顶按交互时间排列 '+label);
+      check(await page.locator('#sessions [data-section="pinned"] > .session[data-id="'+id(8)+'"]').count(),0,'项目内置顶不移入全局置顶区 '+label);
+      await menu(8);
+      check(await page.getByRole('button',{name:'在项目中上移',exact:true}).count(),0,'置顶聊天不提供普通手动排序 '+label);
+      await page.getByRole('button',{name:'取消',exact:true}).click();
+      rows[7].recency=200;rows[2].recency=300;
+      await page.evaluate(ids=>{bumpRecency(ids[0],'local',200);bumpRecency(ids[1],'local',300);},[id(8),id(3)]);
+      check((await ids()).slice(0,3),[id(8),id(7),id(3)],'置顶内部更新且普通新交互不越过置顶 '+label);
+      await page.reload();await ready();
+      check(await ids(),[id(8),id(7),id(3),id(1),id(2),id(4),id(5)],'刷新保留置顶并另显示五条普通聊天 '+label);
+      check(await page.locator(buttons+'[data-project-pinned="true"] .project-pin-label').count(),2,'项目内置顶显示明确标记 '+label);
+      if(mode==='codex')await page.screenshot({path:path.resolve(__dirname,'../.tmp/project-pins-'+width+'.png')});
+      await menu(8);await page.getByRole('button',{name:'取消项目内置顶',exact:true}).click();
+      check((await ids()).slice(0,4),[id(7),id(3),id(8),id(1)],'取消后按最近时间回到普通列表 '+label);
+      // A pin in the look-ahead row must survive the normal prefix truncation.
+      const other=Array.from({length:120},(_,i)=>({id:id(100+i),host:'local',title:'其他项目 '+i,cwd:'/other',projectKey:'local|other',projectName:'其他项目',recency:1000+i,access:{source:'desktop'}}));
+      rows.push(...other.slice(0,93));await page.evaluate(()=>sessionStorage.clear());await page.reload();await ready();
+      check((await ids())[0],id(7),'全局分页预读行中的项目置顶不会被截掉 '+label);
+      // Move it beyond that look-ahead row as well, then drop tab cache again.
+      rows.push(...other.slice(93));
+      await page.evaluate(()=>sessionStorage.clear());await page.reload();await ready();
+      check((await ids())[0],id(7),'冷启动仍读取最近一百条以外的项目置顶 '+label);
+      check(await page.locator('#sessions .session').count(),6,'补读旧置顶不展开其他项目的普通分页 '+label);
+      await page.locator('#search').fill('排序测试 1');
+      await page.waitForFunction(()=>listReadFinished&&listQuery==='排序测试 1');
+      check(await page.locator(buttons+'[data-project-pinned="true"]').count(),0,'搜索不会被不匹配的旧置顶穿透 '+label);
+      await context.close();
+    }
+    check(selectedReads.some(ids=>ids.includes(id(7))),true,'旧置顶使用定向只读元数据查询');
     check(writes,[],'排序验证没有打开聊天或发送写入');
     check(errors,[],'浏览器无脚本异常');
     console.log(JSON.stringify({passed:checks.length,checks},null,2));

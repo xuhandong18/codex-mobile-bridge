@@ -1001,7 +1001,7 @@ class Bridge:
         return {'schemaVersion': 1, 'generatedAt': int(time.time()),
                 'remoteHostCount': len(sources) - 1, 'hosts': reports}
 
-    def list(self, query="", limit=100, offset=0, archived=False, source='all', include_sources=False, local_only=False, host_label=None):
+    def list(self, query="", limit=100, offset=0, archived=False, source='all', include_sources=False, local_only=False, host_label=None, ids=None):
         sources = [(self, host_label or "此电脑")]
         if self.host == 'local' and not local_only:
             sources.extend((self.for_host(host), info.get('displayName') or info['alias']) for host, info in self.hosts.hosts().items())
@@ -1009,7 +1009,8 @@ class Bridge:
             bridge, label = host_source
             try:
                 available = bridge.store.available_sources() if include_sources else []
-                rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source)
+                rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source,
+                                         **({'ids': ids} if ids is not None else {}))
                 # Gateway data may live inside a saved project. Preserve the
                 # explicit projectless choice before inferring membership by cwd;
                 # native project IDs and assignments still take precedence.

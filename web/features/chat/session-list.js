@@ -23,6 +23,22 @@ class SidebarItemOrder {
   }
 }
 
+// Project pins only affect this gateway's project lists on this device.
+class SidebarProjectPins {
+  constructor(storage=localStorage,key='sidebar-project-pins'){this.storage=storage;this.key=key;}
+  entries(){
+    try{
+      const value=JSON.parse(this.storage.getItem(this.key)||'[]');
+      return Array.isArray(value)?value.filter(row=>Array.isArray(row)&&row.length===2&&row.every(value=>typeof value==='string'&&value.length>0)):[];
+    }catch{return [];}
+  }
+  read(project){return new Set(this.entries().filter(row=>row[0]===project).map(row=>row[1]));}
+  toggle(project,id){
+    const rows=this.entries(),pinned=rows.some(row=>row[0]===project&&row[1]===id);
+    this.storage.setItem(this.key,JSON.stringify(pinned?rows.filter(row=>row[0]!==project||row[1]!==id):[...rows,[project,id]]));
+  }
+}
+
 class SidebarPlacements {
   constructor(storage=localStorage,prefix='sidebar-placement:'){this.storage=storage;this.prefix=prefix;}
   key(item){

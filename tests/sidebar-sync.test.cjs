@@ -15,6 +15,7 @@ class Element{
   closest(selector){for(let node=this;node;node=node.parent)if(node.matches(selector))return node;return null;}
   querySelectorAll(selector){return this.children.flatMap(child=>[...(selector.split(',').some(part=>child.matches(part.trim()))?[child]:[]),...child.querySelectorAll(selector)]);}
   append(...nodes){for(const node of nodes){node.parent=this;this.children.push(node);}}
+  prepend(...nodes){for(const node of nodes)node.parent=this;this.children.unshift(...nodes);}
   replaceChildren(...nodes){this.children=[];this.append(...nodes);}
   setAttribute(name,value){this[name]=value;}
   remove(){this.parent.children=this.parent.children.filter(n=>n!==this);}
@@ -28,7 +29,7 @@ function fixture(mode='codex'){
     renderActivity(){},scheduleActivityRefresh(){},projectThreadOrder:{sort:(key,ids)=>ids},sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),
     sidebarData:{sections:[{id:'custom',name:'Daily',itemKeys:['codex:project:p'],hostSectionIds:{local:'native'}}],projects:[{key:'local|p',name:'Project',host:'local',cwd:'/work'},{key:'local|empty',name:'Empty',host:'local',cwd:'/empty'}]},
     listRows:[{id:'thread',host:'local',projectKey:'local|p',projectName:'Project',title:'Chat',recency:1},{id:'direct',host:'local',projectKey:'local|p',projectName:'Project',thread_section_id:'native',title:'Direct',recency:2}]};
-  vm.createContext(context);vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
+  vm.createContext(context);vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.projectPins=vm.runInContext('new SidebarProjectPins(localStorage,"project-pins:")',context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
 }
 test('native sections contain projects, empty projects and directly assigned threads',()=>{
   const {nodes,selected}=fixture();
@@ -71,6 +72,27 @@ test('native direct section and pinned chats keep recent order while projects re
   const section=id=>nodes.sessions.children.find(node=>node.dataset.section===id);
   assert.deepEqual(section('custom').children.slice(1).map(node=>node.dataset.id||node.dataset.projectKey),['new','local|p','old']);
   assert.deepEqual(section('pinned').children.slice(1).map(node=>node.dataset.id),['pinned-new','pinned-old']);
+});
+
+for(const mode of ['codex','project'])test('project pins have independent recent order and do not consume ordinary pagination in '+mode+' mode',()=>{
+  const {context,nodes}=fixture(mode);
+  context.listRows=Array.from({length:20},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
+  const original=JSON.stringify(context.listRows);
+  context.projectPins.toggle('local|p','chat-19');context.projectPins.toggle('local|p','chat-18');context.listRenderStamp='';context.renderList();
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['chat-18','chat-19','chat-0','chat-1','chat-2','chat-3','chat-4']);
+  assert.equal(JSON.stringify(context.listRows),original,'Pinning only changes display preferences');
+  vm.runInContext(source.slice(source.indexOf('function projectChatRows('),source.indexOf('function sidebarEntry(')),context);
+  assert.equal(context.projectChatRows(context.listRows[19]).length,0,'Pins cannot be moved into the ordinary order');
+  context.listRows[19].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
+  assert.deepEqual(ids().slice(0,2),['chat-19','chat-18']);
+  context.shiftProjectChat(context.listRows.find(row=>row.id==='chat-19'),1);
+  assert.deepEqual(ids().slice(0,2),['chat-19','chat-18']);
+  context.toggleProjectPin(context.listRows.find(row=>row.id==='chat-18'));
+  assert.deepEqual(ids(),['chat-19','chat-0','chat-1','chat-2','chat-3','chat-4']);
+  const stale={...context.listRows[0],projectKey:'local|moved'};
+  assert.throws(()=>context.toggleProjectPin(stale),/侧栏条目已变化/);
 });
 
 for(const mode of ['codex','project'])test('explicit local chat moves still persist over recent defaults in '+mode+' mode',()=>{

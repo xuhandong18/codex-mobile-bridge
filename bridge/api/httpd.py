@@ -652,6 +652,11 @@ class Handler(BaseHTTPRequestHandler):
                 source = query.get('source', ['all'])[0]
                 if source not in ('all', 'desktop', 'cli'):
                     raise ValueError('不支持的会话来源')
+                ids = None
+                if 'ids' in query:
+                    ids = query['ids'][0].split(',')
+                    if query.get('scope', [None])[0] != 'host' or len(query['ids']) != 1 or not 1 <= len(ids) <= 50 or any(not re.fullmatch(r'[0-9a-f-]{36}', value) for value in ids):
+                        raise ValueError('会话标识列表无效')
                 feed = self.server.notifications.mobile.checkpoint() if self.server.notifications else None
                 if query.get('scope', [None])[0] == 'host':
                     host = query.get('host', ['local'])[0]
@@ -661,10 +666,11 @@ class Handler(BaseHTTPRequestHandler):
                     offset = max(0, int(query.get('offset', [0])[0]))
                     target = self.server.bridge.for_host(host)
                     host_info = host_infos.get(host, {})
-                    rows, available = target.list(query=query.get('q', [''])[0][:200], limit=offset + 101,
+                    rows, available = target.list(query=query.get('q', [''])[0][:200], limit=50 if ids is not None else offset + 101,
                                                   archived=query.get('archived', ['false'])[0] == 'true',
                                                   source=source, include_sources=True, local_only=True,
-                                                  host_label=host_info.get('displayName') or host_info.get('alias'))
+                                                  host_label=host_info.get('displayName') or host_info.get('alias'),
+                                                  **({'ids': ids} if ids is not None else {}))
                     return self.output(200, {'sessions': rows, 'availableSources': available,
                                              'sidebar': self.server.bridge.hosts.sidebar() if host == 'local' else None,
                                              'unavailableHosts': target.host_errors,

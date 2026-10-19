@@ -195,6 +195,24 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual([row['id'] for row in rows], [THREAD])
         self.assertEqual(sources, ['desktop'])
 
+    def test_selected_metadata_reads_old_pins_with_original_visibility_filters_without_loading_chat(self):
+        archived, child, cli = (str(uuid.uuid4()) for _ in range(3))
+        with closing(sqlite3.connect(str(self.root / 'state_5.sqlite'))) as db, db:
+            db.executemany('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+                           [(str(uuid.uuid4()), 'Recent', '/workspace', 200+i, 0, 'Codex Desktop', 'vscode', 'unused') for i in range(120)] +
+                           [(archived, 'Archive', '/workspace', 2, 1, 'Codex Desktop', 'vscode', 'unused'),
+                            (child, 'Child', '/workspace', 2, 0, 'Codex Desktop', '{"subagent":{}}', 'unused'),
+                            (cli, 'CLI', '/workspace', 2, 0, 'codex_cli_rs', 'cli', 'unused')])
+        self.assertNotIn(THREAD, {row['id'] for row in self.bridge.list(local_only=True)})
+        selected = [THREAD, archived, child, cli]
+        rows = self.bridge.list(ids=selected, source='desktop', local_only=True)
+        self.assertEqual([row['id'] for row in rows], [THREAD])
+        self.assertEqual(rows[0]['access']['source'], 'desktop')
+        self.assertEqual(self.bridge.list(ids=[THREAD], query='not a match', local_only=True), [])
+        self.assertEqual([row['id'] for row in self.bridge.list(ids=selected, archived=True, local_only=True)], [archived])
+        self.assertEqual(self.bridge.live, {})
+        self.assertEqual(self.fixture.requests, [])
+
     def test_progressive_read_preserves_metadata_and_pending_requests(self):
         self.fixture.state['turns'] = [{'turnId': 'turn', 'items': [
             {'id': str(i), 'type': 'agentMessage', 'text': 'row '+str(i)} for i in range(150)]}]
@@ -832,6 +850,19 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(body['complete'])
         self.assertEqual(self.request('GET', '/api/sessions?scope=host&host=unknown', headers=headers)[0], 400)
+
+    def test_selected_list_ids_require_login_host_scope_and_bounded_valid_ids(self):
+        route = '/api/sessions?scope=host&host=local&ids='+THREAD
+        self.assertEqual(self.request('GET', route)[0], 401)
+        headers = self.login()
+        self.assertEqual(self.request('GET', route+'&offset=100&q=needle&source=cli&archived=true', headers=headers)[0], 200)
+        saved = self.server.bridge.last_list
+        self.assertEqual(saved['ids'], [THREAD]); self.assertEqual(saved['limit'], 50)
+        self.assertTrue(saved['local_only']); self.assertTrue(saved['archived'])
+        self.assertEqual(saved['source'], 'cli'); self.assertEqual(saved['query'], 'needle')
+        for path in ['/api/sessions?ids='+THREAD, route+'&ids='+THREAD,
+                     '/api/sessions?scope=host&ids=invalid', '/api/sessions?scope=host&ids='+','.join([THREAD]*51)]:
+            self.assertEqual(self.request('GET', path, headers=headers)[0], 400, path)
 
     def test_gateway_language_updates_without_restart_and_before_login(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:

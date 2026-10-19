@@ -44,7 +44,7 @@ npm run test:updater
 
 `test:desktop` 通过 `scripts/test-frontend.cjs` 自动递归发现 `tests/` 和 `mobile/tests/` 中 `*.test.js`、`*.test.cjs`、`*.test.mjs`。新增 Node 用例不需编辑长命令清单；资源路径检查包含在该入口。
 
-侧栏聊天排序可运行 `node --test tests/sidebar-sync.test.cjs tests/project-thread-order.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-order-browser.cjs`。后者在手机、平板和电脑宽度检查三种列表方式、最新五条与加载更多、分区/置顶/独立聊天、交互更新、折叠展开和刷新，并保留显式手动顺序。仅使用合成数据，需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
+侧栏聊天排序可运行 `node --test tests/sidebar-sync.test.cjs tests/project-thread-order.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-order-browser.cjs`。后者在手机、平板和电脑宽度检查三种列表方式、最新五条与加载更多、分区/置顶/独立聊天、交互更新、折叠展开和刷新，并保留显式手动顺序；还实际操作右键/长按菜单，检查项目内多个置顶的独立时间顺序、取消、普通分页额度、搜索过滤，以及冷启动时全局预读行和最近一百条以外的旧置顶。定向元数据读取的登录、主机、数量及原有可见性边界由 `test_bridge.py` 覆盖。仅使用合成数据，需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
 导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 

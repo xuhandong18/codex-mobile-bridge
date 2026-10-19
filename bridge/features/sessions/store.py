@@ -1,6 +1,7 @@
 """Read-only discovery and history for existing Codex chats."""
 import copy
 import os
+import re
 import threading
 from collections import OrderedDict
 import json
@@ -95,15 +96,21 @@ class SessionStore:
                 bool(database and Path(str(database) + '-shm').exists()), exc)
             raise StoreUnavailable("暂时无法读取 Codex 会话数据库，请稍后重试或重新打开电脑 Codex。") from exc
 
-    def list(self, query="", limit=100, offset=0, archived=False, source='all'):
+    def list(self, query="", limit=100, offset=0, archived=False, source='all', ids=None):
         if source not in ('all', 'desktop', 'cli'):
             raise ValueError('不支持的会话来源')
+        if ids is not None:
+            if not isinstance(ids, list) or not 1 <= len(ids) <= 50 or any(not isinstance(value, str) or not re.fullmatch(r'[0-9a-f-]{36}', value) for value in ids):
+                raise ValueError('会话标识列表无效')
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
             fields = [name for name in ("id", "name", "title", "first_user_message", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned", "thread_section_id", "section_position", "project_id") if name in columns]
             where = ["archived = ?"]
             params = [int(archived)]
             where.append(self._user_origin_filter(columns))
+            if ids is not None:
+                where.append('id IN (' + ','.join('?' for _ in ids) + ')')
+                params.extend(ids)
             if "thread_source" in columns:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if "source" in columns:
