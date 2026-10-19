@@ -1066,6 +1066,22 @@ class ClientLifecycleTests(unittest.TestCase):
             self.manager.connect_deepseek(restart=True)
         self.stop.assert_not_called(); self.dsh.update_existing.assert_not_called(); self.launch_dsh.assert_not_called()
 
+    def test_explicit_harness_restart_can_use_shell_confirmation_after_connection_loss(self):
+        self.dsh.call.side_effect = BridgeUnavailable('connector already disposed')
+        with patch('bridge.clients.manager.sys.platform', 'win32'), \
+                patch('bridge.platforms.windows.dsh_quit.desktop_quit_required', return_value=True):
+            self.manager.connect_deepseek(restart=True)
+        self.assertTrue(self.stop_dsh.call_args.kwargs['native_confirmation'])
+        self.launch_dsh.assert_called_once()
+
+    def test_implicit_harness_restart_cannot_bypass_missing_task_evidence(self):
+        self.dsh.call.side_effect = BridgeUnavailable('connector already disposed')
+        with patch('bridge.clients.manager.sys.platform', 'win32'), \
+                patch('bridge.platforms.windows.dsh_quit.desktop_quit_required', return_value=True):
+            with self.assertRaisesRegex(ValueError, '无法确认'):
+                self.manager._stop_client('deepseek', self.manager._descriptor('deepseek'), self.inspect(None))
+        self.stop_dsh.assert_not_called()
+
     def test_upgrade_changes_source_only_after_verified_native_exit(self):
         self.dsh.reused = True
         self.manager.config['setup'] = {'deepseek': {'setupStatus': 'restart-required', 'requiredBridgeRevision': 3}}

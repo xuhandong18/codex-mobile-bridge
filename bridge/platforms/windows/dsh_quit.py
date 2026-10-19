@@ -1,4 +1,5 @@
-"""Verify DSH's own Windows installer handoff before requesting native quit."""
+"""Request the selected Harness shell's normal Quit without terminating its Host."""
+import base64
 import json
 import os
 import re
@@ -11,6 +12,187 @@ UNSUPPORTED = '当前 Harness 未提供可验证的后台退出通道，请更�
 PROFILE_CHANGED = 'Harness 运行实例的数据目录无法核对，请重新扫描后重试'
 FLAG = '--dsh-installer-quit'
 PRODUCTS = {'dsh-plugin-desktop': 'DSH Desktop', 'dsh-plugin-desktop-beta': 'DSH Desktop Beta'}
+
+# New Desktop releases put appExit inside a separate Node/utility Host. It
+# disposes that profile, not Electron's shell. Invoke the shell's own menu; its
+# before-quit handler owns task inspection, confirmation and Host teardown.
+DESKTOP_QUIT_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class DshQuitWindows {
+ public delegate bool Callback(IntPtr h, IntPtr data);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(Callback callback, IntPtr data);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+ [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+ [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder text, int size);
+ [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder text, int size);
+ [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
+ [DllImport("user32.dll", EntryPoint="GetWindowLongW")] public static extern int GetWindowLong(IntPtr h, int index);
+}
+'@
+$targetPid = [int]$env:CMB_DSH_GUI_PID
+$expected = [long]$env:CMB_DSH_GUI_CREATED
+$executable = $env:CMB_DSH_GUI_EXE
+function Check-Process {
+ $process = Get-Process -Id $targetPid -ErrorAction Stop
+ if ($process.SessionId -ne (Get-Process -Id $PID).SessionId -or
+     $process.StartTime.ToFileTimeUtc() -ne $expected -or
+     -not [string]::Equals($process.MainModule.FileName, $executable, [StringComparison]::OrdinalIgnoreCase)) {
+   throw 'Harness 进程已变化，请重新扫描后重试'
+ }
+}
+function Get-Windows {
+ $items = [Collections.Generic.List[IntPtr]]::new()
+ [DshQuitWindows]::EnumWindows({param($handle,$unused)
+   [uint32]$ownerPid = 0
+   [void][DshQuitWindows]::GetWindowThreadProcessId($handle,[ref]$ownerPid)
+   if ($ownerPid -eq $targetPid) { $items.Add($handle) }
+   return $true
+ },[IntPtr]::Zero) | Out-Null
+ return $items.ToArray()
+}
+function Test-ToolWindow($handle) {
+ if ([IntPtr]::Size -eq 8) { $style = [DshQuitWindows]::GetWindowLongPtr($handle,-20).ToInt64() }
+ else { $style = [DshQuitWindows]::GetWindowLong($handle,-20) }
+ return ($style -band 0x80) -ne 0
+}
+function Check-Window {
+ Check-Process
+ [uint32]$ownerPid = 0
+ [void][DshQuitWindows]::GetWindowThreadProcessId($script:main,[ref]$ownerPid)
+ if ($ownerPid -ne $targetPid -or -not [DshQuitWindows]::IsWindowEnabled($script:main)) {
+   throw 'Harness 有待处理的原生窗口，请在电脑端处理后重试'
+ }
+ foreach ($handle in (Get-Windows)) {
+   $class = [Text.StringBuilder]::new(128)
+   [void][DshQuitWindows]::GetClassName($handle,$class,$class.Capacity)
+   if ([DshQuitWindows]::IsWindowVisible($handle) -and
+       ($class.ToString() -eq '#32770' -or
+        ($class.ToString() -ne '#32768' -and -not (Test-ToolWindow $handle) -and
+         [DshQuitWindows]::GetWindow($handle,4) -eq $script:main))) {
+     throw 'Harness 有待处理的原生窗口，请在电脑端处理后重试'
+   }
+ }
+}
+function Find-Items($root,$names) {
+ $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::MenuItem)
+ @($root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition) | Where-Object {
+   $_.Current.ProcessId -eq $targetPid -and $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and $_.Current.Name -cin $names
+ })
+}
+Check-Process
+$candidates = @(foreach ($handle in (Get-Windows)) {
+ $title = [Text.StringBuilder]::new(512)
+ [void][DshQuitWindows]::GetWindowText($handle,$title,$title.Capacity)
+ $class = [Text.StringBuilder]::new(128)
+ [void][DshQuitWindows]::GetClassName($handle,$class,$class.Capacity)
+ if ([DshQuitWindows]::GetWindow($handle,4) -eq [IntPtr]::Zero -and -not (Test-ToolWindow $handle) -and
+     $class.ToString() -eq 'Chrome_WidgetWin_1' -and
+     $title.Length -gt 0 -and $title.ToString() -notmatch '^(DevTools|Developer Tools|开发者工具)') { $handle }
+})
+if ($candidates.Count -ne 1) { throw '无法核对唯一的 Harness 主窗口，请在电脑端打开应用后重试' }
+$script:main = $candidates[0]
+Check-Window
+if (-not [DshQuitWindows]::IsWindowVisible($main)) { [void][DshQuitWindows]::ShowWindow($main,4) }
+$root = [Windows.Automation.AutomationElement]::FromHandle($main)
+$timer = [Diagnostics.Stopwatch]::StartNew()
+do {
+ Check-Window
+ $menus = @(Find-Items $root @('应用','Application') | Where-Object {
+  ([Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_)).Current.ControlType -eq [Windows.Automation.ControlType]::MenuBar
+ })
+ if ($menus.Count -gt 0) { break }
+ Start-Sleep -Milliseconds 100
+} while ($timer.Elapsed.TotalSeconds -lt 4)
+if ($menus.Count -ne 1) { throw 'Harness 应用菜单尚未就绪，请在电脑端打开应用后重试' }
+Check-Window
+$pattern = $null
+if ($menus[0].TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { $pattern.Invoke() }
+elseif ($menus[0].TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)) { $pattern.Expand() }
+else { throw 'Harness 应用菜单不支持正常展开' }
+$timer = [Diagnostics.Stopwatch]::StartNew()
+do {
+ Check-Window
+ $exits = @(Find-Items $root @('退出','Exit'))
+ # Electron's native popup may be a separate top-level UIA window.
+ foreach ($handle in (Get-Windows)) {
+   if ($handle -eq $main) { continue }
+   $class = [Text.StringBuilder]::new(128)
+   [void][DshQuitWindows]::GetClassName($handle,$class,$class.Capacity)
+   if ($class.ToString() -eq '#32768' -or
+       ($class.ToString() -eq 'Chrome_WidgetWin_1' -and (Test-ToolWindow $handle))) {
+     $exits += @(Find-Items ([Windows.Automation.AutomationElement]::FromHandle($handle)) @('退出','Exit'))
+   }
+ }
+ # The same popup can appear both below the main UIA root and as an HWND.
+ # Collapse only identical runtime identities; two distinct Exit items refuse.
+ $unique = @{}
+ foreach ($item in $exits) { $unique[($item.GetRuntimeId() -join ':')] = $item }
+ $exits = @($unique.Values)
+ if ($exits.Count -gt 0) { break }
+ Start-Sleep -Milliseconds 100
+} while ($timer.Elapsed.TotalSeconds -lt 4)
+if ($exits.Count -ne 1) { throw 'Harness 退出菜单不可用或不唯一，请在电脑端检查后重试' }
+$invoke = $exits[0].GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+Check-Window
+if (-not $exits[0].Current.IsEnabled -or $exits[0].Current.IsOffscreen) { throw 'Harness 退出菜单已变化，请重试' }
+@{quitPhase='dispatching';pid=$targetPid} | ConvertTo-Json -Compress
+[Console]::Out.Flush()
+$invoke.Invoke()
+@{quitState='submitted';pid=$targetPid} | ConvertTo-Json -Compress
+'''
+
+
+def desktop_quit_required(executable):
+    """Current Desktop owns quit in Electron, even when its Host uses fork()."""
+    try:
+        package = json.loads(_member(Path(executable).parent/'resources', 'package.json'))
+        return package.get('name') in ('@deepseek-ai/dsh-desktop', '@deepseek-ai/dsh-desktop-beta')
+    except (OSError, ValueError, TypeError, AttributeError, struct.error):
+        return False
+
+
+def request_desktop_quit(app, state):
+    """Invoke Quit once; uncertain delivery never falls back to appExit/kill."""
+    if sys.platform != 'win32':
+        raise ValueError(UNSUPPORTED)
+    from .codex_quit import _creation_time
+    main = state.get('mainPids', [])
+    if state.get('unknown') or len(main) != 1:
+        raise ValueError(PROFILE_CHANGED)
+    executable = str(Path(app.executable).resolve())
+    created = _creation_time(main[0])
+    script = base64.b64encode(DESKTOP_QUIT_SCRIPT.encode('utf-16le')).decode('ascii')
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', script],
+            env={**os.environ, 'CMB_DSH_GUI_PID': str(main[0]), 'CMB_DSH_GUI_CREATED': str(created),
+                 'CMB_DSH_GUI_EXE': executable},
+            capture_output=True, encoding='utf-8', timeout=18,
+            creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+    except subprocess.TimeoutExpired:
+        raise ValueError('Harness 原生退出请求结果未知，请在电脑端检查后重试；尚未强制结束进程') from None
+    receipts = []
+    for line in result.stdout.splitlines():
+        try:
+            receipt = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(receipt, dict) and receipt.get('pid') == main[0]:
+            receipts.append(receipt)
+    if any(row.get('quitPhase') == 'dispatching' for row in receipts):
+        # InvokePattern may throw after delivery as the application disappears.
+        # Observe exit in the caller, without ever invoking a second command.
+        return
+    raise ValueError('无法调用 Harness 的正常退出菜单，请在电脑端检查原生窗口或提示后重试')
 
 
 def _member(resources, name):

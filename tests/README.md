@@ -13,7 +13,7 @@ python -B scripts/test-backend.py --source-only -p 'test_platform_architecture.p
 python -B scripts/test-backend.py --source-only -p 'test_resource_layout.py'
 ```
 
-`--source-only` 明确跳过六个原生夹具类：Claude 的 Swift Console 选择器、macOS 桌面会话检查、Windows 窗口选择器，以及 Windows Codex 退出、强制退出和 Explorer 启动器验证。这些夹具可能编译或执行原生程序；纯 Python 的平台模拟与安全检查仍运行。省略该选项与完整 unittest discovery 等价，会按当前系统和环境运行原生测试。平台、可选依赖和原生 SDK 的跳过项会在结果中列出。现有 CI 保留各平台完整 discovery。
+`--source-only` 明确跳过七个原生夹具类：Claude 的 Swift Console 选择器、macOS 桌面会话检查、Windows 窗口选择器，以及 Windows Codex 退出、Harness 菜单退出、强制退出和 Explorer 启动器验证。这些夹具可能编译或执行原生程序；纯 Python 的平台模拟与安全检查仍运行。省略该选项与完整 unittest discovery 等价，会按当前系统和环境运行原生测试。平台、可选依赖和原生 SDK 的跳过项会在结果中列出。现有 CI 保留各平台完整 discovery。
 
 HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据，需要允许测试进程绑定 loopback/Unix socket。受限执行环境的 EPERM 不是功能通过，也不能隐藏为产品跳过。共享中继测试需要现有 `requirements-relay.txt` 环境；测试脚本自身不安装依赖。
 
@@ -32,6 +32,8 @@ HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据�
 需要真实符号链接的夹具通过 `symlink_support.require_symlink_support()` 检查能力。Windows 账户缺少该权限（WinError 1314）时，仅跳过对应检查并显示原因；不修改系统安全策略，也不把这些检查算作通过。
 
 Harness 个人分支功能另有 `node scripts/test-deepseek-browser.cjs`：需要已有的 Playwright 与 Chromium（可通过 `NODE_PATH` 使用现有测试运行时），在四种屏幕尺寸执行实际 DOM 断言，仅使用隔离合成会话。详情见 [功能对应与验证](../docs/deepseek-personal-features.md)。
+
+Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_dsh_menu_native.py`：复用本机已有 Electron 运行库（可通过 `CMB_TEST_ELECTRON_EXECUTABLE` 指定），仅将运行库复制到 `.tmp/`，在非活动桌面启动独立合成应用，实际调用中英文标题栏菜单和原生退出项。覆盖正常清理、待处理窗口、重复退出项和进程创建身份变化；不加载真实 Harness 资源、数据目录或模型。缺少运行库时明确跳过，不计作通过。
 
 ## Node 与浏览器
 

@@ -3,9 +3,10 @@ import os
 import struct
 import tempfile
 import unittest
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SOURCE = '''
@@ -93,6 +94,38 @@ class DshWindowsQuitTests(unittest.TestCase):
         (self.folder/'package.json').unlink(); (self.folder/'lib/main.js').unlink()
         (self.root/'resources/app.asar').write_bytes(struct.pack('<4I', 4, size, size-4, len(raw))+raw+data)
         self.assertEqual(self.command(), [str(self.executable), '--dsh-installer-quit'])
+
+    def test_current_packaged_desktop_requires_shell_quit(self):
+        from bridge.platforms.windows.dsh_quit import desktop_quit_required
+        for name, expected in (('@deepseek-ai/dsh-desktop', True),
+                               ('@deepseek-ai/dsh-desktop-beta', True), ('unrelated', False)):
+            (self.folder/'package.json').write_text(json.dumps({**self.package, 'name': name}))
+            self.assertEqual(desktop_quit_required(self.executable), expected)
+
+    def test_menu_delivery_receipt_is_bound_to_selected_pid(self):
+        from bridge.platforms.windows.dsh_quit import request_desktop_quit
+        for pid, accepted in ((11, True), (99, False)):
+            result = Mock(stdout=json.dumps({'quitPhase': 'dispatching', 'pid': pid}), returncode=1)
+            with self.subTest(pid=pid), patch('bridge.platforms.windows.dsh_quit.sys.platform', 'win32'), \
+                    patch('bridge.platforms.windows.codex_quit._creation_time', return_value=123), \
+                    patch('bridge.platforms.windows.dsh_quit.subprocess.run', return_value=result) as run:
+                if accepted:
+                    request_desktop_quit(self.app, self.state)
+                else:
+                    with self.assertRaisesRegex(ValueError, '正常退出菜单'):
+                        request_desktop_quit(self.app, self.state)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.kwargs['env']['CMB_DSH_GUI_CREATED'], '123')
+
+    def test_menu_timeout_is_unknown_and_never_retried(self):
+        from bridge.platforms.windows.dsh_quit import request_desktop_quit
+        with patch('bridge.platforms.windows.dsh_quit.sys.platform', 'win32'), \
+                patch('bridge.platforms.windows.codex_quit._creation_time', return_value=123), \
+                patch('bridge.platforms.windows.dsh_quit.subprocess.run',
+                      side_effect=subprocess.TimeoutExpired('fixture-helper', 18)) as run:
+            with self.assertRaisesRegex(ValueError, '结果未知'):
+                request_desktop_quit(self.app, self.state)
+            self.assertEqual(run.call_count, 1)
 
 
 if __name__ == '__main__': unittest.main()

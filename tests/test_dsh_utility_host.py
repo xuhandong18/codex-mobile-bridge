@@ -27,6 +27,11 @@ class DshUtilityHostTests(unittest.TestCase):
         self.assertEqual(result['runtimePids'], [12])
         self.assertFalse(result['unknown'])
 
+    def test_utility_host_requires_shell_quit(self):
+        result = self.state({11: 'DSH.exe', 12: 'DSH.exe --type=utility '
+                             '--utility-sub-type=node.mojom.NodeService'})
+        self.assertTrue(result.get('shellQuitRequired'))
+
     def test_multiple_node_hosts_remain_ambiguous(self):
         command = 'DSH.exe --type=utility --utility-sub-type=node.mojom.NodeService'
         result = self.state({11: 'DSH.exe', 12: command, 13: command})
@@ -82,6 +87,84 @@ class DshNativeQuitTests(unittest.TestCase):
                                                       'expectedGeneration': 'fixture-generation'})
         self.assertEqual(self.app.processes.call_count, 2)
         self.app.stop.assert_not_called()
+
+    def test_utility_host_app_exit_must_not_leave_desktop_shell_running(self):
+        self.assert_shell_quit(utility=True)
+
+    def test_packaged_fork_host_also_requires_shell_quit(self):
+        self.assert_shell_quit(utility=False)
+
+    def assert_shell_quit(self, *, utility):
+        # In current Harness, appExit tears down only the utility Host's profile.
+        # The shell stays open, so accepting that request leads to the reported timeout.
+        if utility:
+            self.state['shellQuitRequired'] = True
+        self.app.processes.side_effect = None
+        self.app.processes.return_value = [11, 12]
+        self.adapter.call.side_effect = lambda action, **kwargs: (
+            self.status if action == 'status' else
+            {'bridgeRevision': 5, 'complete': True, 'sessions': []} if action == 'lifecycle' else
+            {'status': 'accepted', 'pid': 12, 'generation': 'fixture-generation'})
+        def exit_shell(*args, **kwargs):
+            self.app.processes.return_value = []
+        with patch('bridge.platforms.windows.dsh_quit.request_desktop_quit',
+                   side_effect=exit_shell) as quit_shell, \
+                patch('bridge.platforms.windows.dsh_quit.desktop_quit_required', return_value=not utility), \
+                patch('bridge.clients.lifecycle.time.monotonic', side_effect=[0, 30]):
+            self.stop()
+        quit_shell.assert_called_once()
+        self.assertNotIn('quit', [call.args[0] for call in self.adapter.call.call_args_list])
+        self.app.stop.assert_not_called()
+
+    def test_shell_quit_requires_fresh_complete_idle_tasks(self):
+        self.state['shellQuitRequired'] = True
+        for runtime in (
+            {'bridgeRevision': 5, 'complete': False, 'sessions': []},
+            {'bridgeRevision': 999, 'complete': True, 'sessions': []},
+            {'bridgeRevision': 5, 'complete': True, 'sessions': [
+                {'status': 'active', 'runtimeKnown': True, 'requests': []}]},
+            {'bridgeRevision': 5, 'complete': True, 'sessions': [
+                {'status': 'idle', 'runtimeKnown': True, 'requests': [{'id': 'confirmation'}]}]},
+        ):
+            self.adapter.call.side_effect = [self.status, runtime]
+            with self.subTest(runtime=runtime), \
+                    patch('bridge.platforms.windows.dsh_quit.request_desktop_quit') as quit_shell:
+                with self.assertRaisesRegex(ValueError, '任务运行'):
+                    self.stop()
+                quit_shell.assert_not_called()
+
+    def test_shell_quit_refuses_replaced_endpoint(self):
+        self.state['shellQuitRequired'] = True
+        def response(action, **kwargs):
+            if action == 'status':
+                return self.status
+            (self.directory/'endpoint.json').write_text(json.dumps({**self.endpoint, 'generation': 'replacement'}))
+            return {'bridgeRevision': 5, 'complete': True, 'sessions': []}
+        self.adapter.call.side_effect = response
+        with patch('bridge.platforms.windows.dsh_quit.request_desktop_quit') as quit_shell:
+            with self.assertRaisesRegex(ValueError, '进程已变化'):
+                self.stop()
+            quit_shell.assert_not_called()
+
+    def test_disconnected_fork_host_explicit_quit_defers_to_shell_confirmation(self):
+        from bridge.clients.lifecycle import stop_deepseek
+        (self.directory/'endpoint.json').unlink()
+        self.adapter.call.side_effect = AssertionError('native confirmation must not need the disposed connector')
+        with patch('bridge.platforms.windows.dsh_quit.desktop_quit_required', return_value=True), \
+                patch('bridge.platforms.windows.dsh_quit.request_desktop_quit') as quit_shell:
+            stop_deepseek({'id': 'deepseek'}, self.adapter, state=self.state, native_confirmation=True)
+        quit_shell.assert_called_once()
+        self.adapter.call.assert_not_called()
+        self.app.stop.assert_not_called()
+
+    def test_disconnected_utility_candidate_cannot_bypass_profile_verification(self):
+        from bridge.clients.lifecycle import stop_deepseek
+        self.state['shellQuitRequired'] = True
+        with patch('bridge.platforms.windows.dsh_quit.desktop_quit_required', return_value=True), \
+                patch('bridge.platforms.windows.dsh_quit.request_desktop_quit') as quit_shell:
+            with self.assertRaisesRegex(ValueError, '进程已变化'):
+                stop_deepseek({'id': 'deepseek'}, self.adapter, state=self.state, native_confirmation=True)
+        quit_shell.assert_not_called()
 
     def test_old_plugin_does_not_fall_back_to_process_termination(self):
         self.status.pop('nativeQuit')

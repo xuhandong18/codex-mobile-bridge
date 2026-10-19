@@ -93,7 +93,7 @@ def inspect_clients(descriptors):
 
 def _process_state(descriptor, app, pids, commands):
     import re
-    main, hosts = [], []
+    main, hosts, shell_quit = [], [], False
     unknown = any(not commands.get(pid) for pid in pids)
     for pid, command in commands.items():
         if (descriptor['id'] == 'deepseek' and sys.platform == 'win32' and
@@ -104,6 +104,7 @@ def _process_state(descriptor, app, pids, commands):
             # only a candidate: quit still requires one Host, matching endpoint
             # PID and a complete idle snapshot from the selected profile.
             hosts.append(pid)
+            shell_quit = True
             continue
         if re.search(r'(?:^|\s)--type(?:=|\s)', command):
             continue  # Electron renderer/GPU/utility child, closed by its owner.
@@ -122,8 +123,11 @@ def _process_state(descriptor, app, pids, commands):
             main.append(pid)
     if len(main) > 1 or len(hosts) > 1:
         unknown = True
-    return {'running': bool(pids), 'pids': pids, 'mainPids': main,
-            'runtimePids': hosts, 'unknown': unknown}
+    result = {'running': bool(pids), 'pids': pids, 'mainPids': main,
+              'runtimePids': hosts, 'unknown': unknown}
+    if shell_quit:
+        result['shellQuitRequired'] = True
+    return result
 
 
 def stop_client(descriptor, *, state):
@@ -199,7 +203,7 @@ def stop_claude(descriptor, *, state):
         time.sleep(.25)
 
 
-def stop_deepseek(descriptor, adapter, *, state):
+def stop_deepseek(descriptor, adapter, *, state, native_confirmation=False):
     """Request DSH's native teardown; closing its window only hides the app."""
     import json
     from bridge.clients.deepseek.adapter import LIFECYCLE_REVISIONS
@@ -216,6 +220,21 @@ def stop_deepseek(descriptor, adapter, *, state):
         return current
 
     current = verify()
+    app = _app(descriptor)
+    from bridge.platforms.windows.dsh_quit import desktop_quit_required, request_desktop_quit
+    utility_host = current.get('shellQuitRequired') is True
+    shell_quit = utility_host or desktop_quit_required(app.executable)
+    if native_confirmation:
+        # Only an explicit desktop restart/quit may defer an unavailable task
+        # probe to the shell's own inspection and confirmation. A utility Host
+        # still needs its endpoint to prove which profile it belongs to.
+        if utility_host or not shell_quit or len(current.get('mainPids', [])) != 1:
+            raise ValueError(changed)
+        current = verify()
+        if current.get('shellQuitRequired') or len(current.get('mainPids', [])) != 1:
+            raise ValueError(changed)
+        request_desktop_quit(app, current)
+        return _wait_deepseek_exit(app, current)
     status = adapter.call('status')
     if status.get('connected') is not True:
         raise ValueError('Harness 桌面未连接，无法确认退出状态')
@@ -226,11 +245,11 @@ def stop_deepseek(descriptor, adapter, *, state):
             raise ValueError(changed)
     except (OSError, ValueError, KeyError, TypeError):
         raise ValueError(changed) from None
-    app = _app(descriptor)
     command = None
-    if status.get('nativeQuit') is not True:
+    if shell_quit or status.get('nativeQuit') is not True:
         from bridge.platforms.windows.dsh_quit import installer_quit_command, send_installer_quit
-        command = installer_quit_command(app, current, _commands(app, current['pids']))
+        if not shell_quit:
+            command = installer_quit_command(app, current, _commands(app, current['pids']))
         runtime = adapter.call('lifecycle')
         rows = runtime.get('sessions')
         if (runtime.get('bridgeRevision') not in LIFECYCLE_REVISIONS or runtime.get('complete') is not True or
@@ -244,7 +263,11 @@ def stop_deepseek(descriptor, adapter, *, state):
         except (OSError, ValueError):
             raise ValueError(changed) from None
     current = verify()
-    if command is not None:
+    if utility_host != (current.get('shellQuitRequired') is True):
+        raise ValueError(changed)
+    if shell_quit:
+        request_desktop_quit(app, current)
+    elif command is not None:
         send_installer_quit(command)
     else:
         result = adapter.call('quit', body={'expectedPid': endpoint['pid'],
@@ -252,10 +275,14 @@ def stop_deepseek(descriptor, adapter, *, state):
         if (result.get('status') != 'accepted' or result.get('pid') != endpoint['pid'] or
                 result.get('generation') != endpoint['generation']):
             raise ValueError('Harness 未确认退出请求，请在电脑端检查后重试')
+    _wait_deepseek_exit(app, current)
+
+
+def _wait_deepseek_exit(app, current):
     deadline = time.monotonic() + 25
     while remaining := app.processes():
         if set(remaining) - set(current['pids']):
-            raise ValueError(changed)
+            raise ValueError('Harness 进程已变化，请重新检查后再退出')
         if time.monotonic() >= deadline:
             raise ValueError('Harness 尚未退出，请在电脑端处理退出提示后重试；尚未强制结束进程')
         time.sleep(.25)

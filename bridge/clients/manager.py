@@ -509,6 +509,8 @@ class DesktopSessions:
 
     def _stop_client(self, provider, descriptor, state, *, native_confirmation=False, force=False):
         from bridge.clients.lifecycle import stop_client, stop_deepseek
+        harness_confirmation = native_confirmation and provider == 'deepseek' and sys.platform == 'win32'
+        harness_fallback = False
         native_confirmation = native_confirmation and provider == 'claude' and sys.platform == 'win32'
         if not state['running'] and not force:
             if provider == 'claude':
@@ -518,9 +520,16 @@ class DesktopSessions:
             if not force:
                 self._assert_idle(provider, state, native_confirmation=native_confirmation)
         except TaskStateUnavailable:
-            # Only explicit user-requested quit can defer unavailable task evidence
-            # to Claude's own normal exit confirmation. Account changes cannot.
-            if not (native_confirmation and provider == 'claude' and sys.platform == 'win32'):
+            # Only explicit user-requested quit/restart may defer unavailable
+            # task evidence to native confirmation. Account changes cannot.
+            if harness_confirmation:
+                from bridge.platforms.windows.dsh_quit import desktop_quit_required
+                # A fork Host is bound to the selected profile by its full path.
+                # An unconnected utility Host is only a candidate, not proof.
+                harness_fallback = (not state.get('shellQuitRequired') and
+                    len(state.get('mainPids', [])) == len(state.get('runtimePids', [])) == 1 and
+                    desktop_quit_required(descriptor.get('executable')))
+            if not (native_confirmation or harness_fallback):
                 raise
         if provider == 'claude':
             # Cancel the monitor before native quit, so it cannot relaunch Claude.
@@ -530,7 +539,8 @@ class DesktopSessions:
                 from bridge.clients.lifecycle import force_stop_client
                 force_stop_client(descriptor, state=state)
             elif provider == 'deepseek' and sys.platform == 'win32':
-                stop_deepseek(descriptor, self.adapters[provider], state=state)
+                options = {'native_confirmation': True} if harness_fallback else {}
+                stop_deepseek(descriptor, self.adapters[provider], state=state, **options)
             else:
                 stop_client(descriptor, state=state)
         except Exception:
@@ -612,7 +622,7 @@ class DesktopSessions:
                             status.get('bridgeRevision') != BRIDGE_REVISION or status.get('updateRequired'))
         needs_reload = needs_update or previous.get('setupStatus') == 'restart-required' and not status.get('connected')
         if state['running'] and (restart or needs_reload):
-            self._stop_client('deepseek', row, state)
+            self._stop_client('deepseek', row, state, native_confirmation=restart)
         if needs_update or getattr(adapter, 'reused', False) and (restart or not state['running']):
             adapter.update_existing()
             setup['deepseek'] = {'setupStatus': 'restart-required', 'reason': UPDATE_REASON,
