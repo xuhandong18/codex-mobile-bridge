@@ -22,6 +22,7 @@ class Workbench {
     this.dropZone = this.node('div','wb-split-drop','拖到这里，在右侧打开');
     this.layout.append(this.mainPane,this.divider,this.panel,this.dropZone);
     chat.querySelector('.chat-head').after(this.strip,this.layout);
+    this.bindTabSwipe();
     this.splitButton=this.button('',()=>this.splitMode?this.unsplit():this.split(this.current?.active),'在右侧分屏');
     this.splitButton.className='wb-split-button';this.toolStrip.append(this.splitButton);
     const splitIcon=document.createElementNS('http://www.w3.org/2000/svg','svg');splitIcon.setAttribute('viewBox','0 0 24 24');splitIcon.setAttribute('aria-hidden','true');splitIcon.innerHTML='<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>';this.splitButton.append(splitIcon);
@@ -45,6 +46,64 @@ class Workbench {
     this.selectionTargets=new ChatSelectionTargets(this);
     this.fileSelection=new FileSelectionAction(this);
     document.addEventListener('visibilitychange',()=>this.refreshSideChats());
+  }
+  bindTabSwipe() {
+    let gesture=null,suppressUntil=0;
+    const eligible=tab=>tab&&(tab.id==='chat'||tab.id==='git'||tab.id==='agents'||!!tab.sideChat);
+    const source=target=>{
+      const session=this.current;if(!session||document.querySelector('dialog[open]'))return null;
+      const composer=target.closest('.composer');
+      if(composer&&this.mainPane.contains(composer)&&!this.isFileVisible)return {session,id:'chat',root:composer};
+      const tab=session.files.find(tab=>tab.id===(this.splitMode?session.splitTab:session.active));
+      if(!eligible(tab)||!tab.body.contains(target))return null;
+      if(tab.sideChat)return composer===tab.sideChat.form?{session,id:tab.id,root:composer}:null;
+      // Git and agents own the whole page; native editing, resizing and horizontal scrolling keep priority.
+      if(target.closest('input,textarea,select,[contenteditable="true"],.wb-float-grip,.wb-float-resize'))return null;
+      for(let node=target;node&&node!==tab.body;node=node.parentElement){
+        if(node.scrollWidth>node.clientWidth+1&&['auto','scroll'].includes(getComputedStyle(node).overflowX))return null;
+      }
+      return {session,id:tab.id,root:tab.body};
+    };
+    const selecting=root=>{
+      const input=root.querySelector('textarea');
+      return !!window.getSelection()?.toString()||!!(input&&document.activeElement===input&&input.selectionStart!==input.selectionEnd);
+    };
+    const valid=start=>{
+      const current=source(start.target);
+      return current&&current.session===start.session&&current.id===start.id&&current.root===start.root&&
+        start.root.isConnected&&start.session.active===start.active&&start.session.splitTab===start.splitTab&&
+        Date.now()-start.time<600&&!selecting(start.root);
+    };
+    this.layout.addEventListener('touchstart',event=>{
+      const origin=source(event.target),touch=event.touches[0];
+      gesture=origin&&event.touches.length===1&&!selecting(origin.root)
+        ?{...origin,target:event.target,touch:touch.identifier,x:touch.clientX,y:touch.clientY,time:Date.now(),
+          active:origin.session.active,splitTab:origin.session.splitTab}:null;
+    },{passive:true});
+    this.layout.addEventListener('touchmove',event=>{
+      if(!gesture)return;
+      const touch=[...event.touches].find(touch=>touch.identifier===gesture.touch);
+      if(event.touches.length!==1||!touch||!valid(gesture)){gesture=null;return;}
+      const dx=touch.clientX-gesture.x,dy=touch.clientY-gesture.y;
+      if(Math.abs(dy)>10&&Math.abs(dy)>=Math.abs(dx)){gesture=null;return;}
+      if(Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)*1.5&&event.cancelable)event.preventDefault();
+    },{passive:false});
+    this.layout.addEventListener('touchend',event=>{
+      const start=gesture;gesture=null;
+      if(!start||event.touches.length||!valid(start))return;
+      const touch=[...event.changedTouches].find(touch=>touch.identifier===start.touch);if(!touch)return;
+      const dx=touch.clientX-start.x,dy=touch.clientY-start.y;
+      if(Math.abs(dx)<50||Math.abs(dx)<=Math.abs(dy)*1.5)return;
+      // Never filter the tab order: a file or terminal between eligible tabs blocks the gesture.
+      const tabs=[{id:'chat'},...start.session.files],index=tabs.findIndex(tab=>tab.id===start.id);
+      const next=tabs[index+(dx<0?1:-1)];
+      suppressUntil=Date.now()+400;if(event.cancelable)event.preventDefault();
+      if(eligible(next))this.select(next.id);
+    },{passive:false});
+    this.layout.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
+    this.layout.addEventListener('click',event=>{
+      if(Date.now()<suppressUntil){event.preventDefault();event.stopImmediatePropagation();}
+    },true);
   }
   canSplit(){return BridgeLayout.canSplit(this.chat.clientWidth);}
   get splitMode(){return this.canSplit()&&!!this.current?.splitTab;}
