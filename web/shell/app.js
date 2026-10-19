@@ -397,7 +397,7 @@ function renderList(){
     button.append(meta);button.onclick=()=>openChat(chat.id,chat.host).catch(e=>toast(e.message));parent.append(button);
     if(groups.get(chat.projectKey)===parent){
       if(isProjectPinned(chat)){
-        const badge=el('span','project-pin-label',t('项目内置顶'));button.children[0].prepend(badge);button.dataset.projectPinned='true';
+        button.dataset.projectPinned='true';button.setAttribute('aria-label',chat.title+' · '+t('项目内置顶'));
         continue;
       }
       button.draggable=true;

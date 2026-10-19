@@ -6,4 +6,3 @@
 .running-send-options{display:grid;gap:10px;margin:16px 0 8px}.running-send-options>button{display:flex;flex-direction:column;gap:5px;min-height:68px;text-align:left}.running-send-options strong{font-size:14px}.running-send-options small{font-size:12px;font-weight:400;line-height:1.5}
 .project-folder-browser{display:grid;gap:4px;max-height:240px;overflow:auto}.project-folder-browser>button{text-align:left;overflow-wrap:anywhere;min-height:40px}
 .project-new{align-self:flex-start;flex:none;min-height:36px;padding:6px 8px}
-.project-pin-label{display:inline-block;margin-inline-end:6px;padding:1px 4px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:10px;font-weight:400;vertical-align:middle}

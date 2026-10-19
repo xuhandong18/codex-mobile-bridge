@@ -111,7 +111,19 @@ const server=http.createServer(async(req,res)=>{
       check((await ids()).slice(0,3),[id(8),id(7),id(3)],'置顶内部更新且普通新交互不越过置顶 '+label);
       await page.reload();await ready();
       check(await ids(),[id(8),id(7),id(3),id(1),id(2),id(4),id(5)],'刷新保留置顶并另显示五条普通聊天 '+label);
-      check(await page.locator(buttons+'[data-project-pinned="true"] .project-pin-label').count(),2,'项目内置顶显示明确标记 '+label);
+      check(await page.locator(buttons+'[data-project-pinned="true"] strong').allTextContents(),['排序测试 8','排序测试 7'],'项目内置顶不在聊天名前添加提示文字 '+label);
+      const pinBackgrounds=await page.locator(group).evaluate(root=>{
+        const pinned=root.querySelector('[data-project-pinned="true"]'),ordinary=root.querySelector('.session:not([data-project-pinned])');
+        const colors=[];
+        for(const theme of ['light','dark']){
+          document.documentElement.dataset.theme=theme;
+          const background=getComputedStyle(pinned).backgroundColor;
+          pinned.classList.add('selected');const selected=getComputedStyle(pinned).backgroundColor;pinned.classList.remove('selected');
+          colors.push(background!==getComputedStyle(ordinary).backgroundColor&&selected!==background);
+        }
+        document.documentElement.dataset.theme='light';return colors;
+      });
+      check(pinBackgrounds,[true,true],'明暗主题通过背景区分置顶且选中状态仍可辨认 '+label);
       if(mode==='codex')await page.screenshot({path:path.resolve(__dirname,'../.tmp/project-pins-'+width+'.png')});
       await menu(8);await page.getByRole('button',{name:'取消项目内置顶',exact:true}).click();
       check((await ids()).slice(0,4),[id(7),id(3),id(8),id(1)],'取消后按最近时间回到普通列表 '+label);

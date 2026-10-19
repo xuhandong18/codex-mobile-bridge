@@ -16,6 +16,9 @@ aside{background:var(--surface)}
 .search{background:var(--raised)!important;border-color:var(--line)!important}
 .session:hover,.skill-option{background:var(--user)}
 .session.selected{background:var(--soft)}
+.session[data-project-pinned=true]{background:color-mix(in srgb,var(--accent) 9%,var(--surface))}
+.session[data-project-pinned=true]:hover{background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
+.session[data-project-pinned=true].selected{background:color-mix(in srgb,var(--accent) 20%,var(--surface))}
 .phone-header{background:var(--page)}
 .phone-header-actions{display:flex;align-items:center;gap:8px}
 .appearance-button{display:grid;place-items:center;min-width:36px;height:36px;padding:0;border:0;border-radius:10px;background:transparent;color:var(--muted);font-size:22px}
