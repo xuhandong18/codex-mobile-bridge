@@ -49,15 +49,16 @@ class Workbench {
   }
   bindTabSwipe() {
     let gesture=null,suppressUntil=0;
-    const eligible=tab=>tab&&(tab.id==='chat'||tab.id==='git'||tab.id==='agents'||!!tab.sideChat);
+    const eligible=tab=>tab&&(['chat','git','agents','files','terminal'].includes(tab.id)||tab.id.startsWith('file:')||!!tab.sideChat);
     const source=target=>{
       const session=this.current;if(!session||document.querySelector('dialog[open]'))return null;
       const composer=target.closest('.composer');
       if(composer&&this.mainPane.contains(composer)&&!this.isFileVisible)return {session,id:'chat',root:composer};
       const tab=session.files.find(tab=>tab.id===(this.splitMode?session.splitTab:session.active));
       if(!eligible(tab)||!tab.body.contains(target))return null;
+      if(tab.terminal?.term?.hasSelection())return null;
       if(tab.sideChat)return composer===tab.sideChat.form?{session,id:tab.id,root:composer}:null;
-      // Git and agents own the whole page; native editing, resizing and horizontal scrolling keep priority.
+      // Tool pages own their content; native editing, resizing and horizontal scrolling keep priority.
       if(target.closest('input,textarea,select,[contenteditable="true"],.wb-float-grip,.wb-float-resize'))return null;
       for(let node=target;node&&node!==tab.body;node=node.parentElement){
         if(node.scrollWidth>node.clientWidth+1&&['auto','scroll'].includes(getComputedStyle(node).overflowX))return null;
@@ -94,7 +95,7 @@ class Workbench {
       const touch=[...event.changedTouches].find(touch=>touch.identifier===start.touch);if(!touch)return;
       const dx=touch.clientX-start.x,dy=touch.clientY-start.y;
       if(Math.abs(dx)<50||Math.abs(dx)<=Math.abs(dy)*1.5)return;
-      // Never filter the tab order: a file or terminal between eligible tabs blocks the gesture.
+      // Follow the actual tab order without skipping entries or wrapping at either end.
       const tabs=[{id:'chat'},...start.session.files],index=tabs.findIndex(tab=>tab.id===start.id);
       const next=tabs[index+(dx<0?1:-1)];
       suppressUntil=Date.now()+400;if(event.cancelable)event.preventDefault();

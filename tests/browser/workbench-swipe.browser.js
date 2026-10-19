@@ -8,9 +8,8 @@ window.prepareWorkbenchSwipeChecks=async provider=>{
   const second=wb.createSideChat(session,'00000000-0000-4000-8000-000000000002');
   await wb.preview(session,{name:'fixture.txt',path:'fixture.txt'});
   const third=wb.createSideChat(session,'00000000-0000-4000-8000-000000000003');
-  // A terminal stand-in avoids starting a process; its exclusion uses the real tab order and DOM.
-  const terminal={id:'terminal:fixture',name:'终端',body:wb.node('div','wb-terminal')};
-  terminal.body.append(wb.node('textarea'));session.files.push(terminal);
+  // The real terminal UI uses only the driver's synthetic PTY API and never starts a process.
+  wb.terminal();const terminal=session.files.find(tab=>tab.id==='terminal');
   const fourth=wb.createSideChat(session,'00000000-0000-4000-8000-000000000004');
   for(const tab of [first,second,third,fourth]){
     await tab.sideChat.load();tab.sideChat.input.value='保留草稿 '+tab.id;tab.sideChat.input.oninput();
@@ -63,11 +62,34 @@ window.runWorkbenchSwipeEdgeChecks=()=>{
   check('Git 文本编辑不切换',session.active==='git');
   const range=document.createRange();range.selectNodeContents(wb.panel.querySelector('.wb-git-heading'));window.getSelection().addRange(range);swipe(wb.panel.firstElementChild);
   check('Git 选中文字时不切换',session.active==='git');window.getSelection().removeAllRanges();
-  // A recognised swipe must not turn into a click on Send, a Git action, or an agent card.
+  const file=session.files.find(tab=>tab.id==='file:fixture.txt');wb.select(file.id);
+  const content=file.body.querySelector('.wb-preview-content');
+  const fileRange=document.createRange();fileRange.selectNodeContents(content);window.getSelection().addRange(fileRange);swipe(content);
+  check('文件文字选择不切换',session.active===file.id);window.getSelection().removeAllRanges();
+  const source=wb.node('pre','swipe-file-scroll','x'.repeat(400));source.style.cssText='overflow-x:auto;max-width:100%;white-space:pre';content.append(source);swipe(source);
+  check('文件横向滚动不切换',session.active===file.id&&source.scrollWidth>source.clientWidth);source.remove();
+  const terminal=session.files.find(tab=>tab.id==='terminal');wb.select(terminal.id);
+  const terminalPanel=terminal.terminal.fallback||terminal.terminal;
+  const command=terminalPanel.input||terminalPanel.command;command.value='尚未发送的终端命令';swipe(command);
+  check('终端输入框编辑不切换且保留命令',session.active===terminal.id&&command.value==='尚未发送的终端命令');
+  const output=terminal.body.querySelector('.xterm-screen,.wb-terminal-output');
+  start(output);touch(output,'touchmove',[{x:217,y:110}]);end(output);
+  check('终端纵向滚动不切换',session.active===terminal.id);
+  if(terminalPanel.term){
+    terminalPanel.term.select(0,0,10);swipe(output);
+    check('终端输出选区不切换',session.active===terminal.id&&terminalPanel.term.hasSelection());terminalPanel.term.clearSelection();
+  }
+  // A recognised swipe must not turn into a click on Send, a Git action, or a terminal key.
   reset();let clicks=0;const button=form.querySelector('button[type=submit]');
   const onClick=()=>clicks++;button.addEventListener('click',onClick);swipe(button);
   const click=new MouseEvent('click',{bubbles:true,cancelable:true});button.dispatchEvent(click);button.removeEventListener('click',onClick);
   check('横滑后的点击被拦截，不触发发送',click.defaultPrevented&&clicks===0);
+  // Keep the terminal mounted at the right boundary so the following click follows a real DOM path.
+  const terminalIndex=session.files.indexOf(terminal);session.files.splice(terminalIndex,1);session.files.push(terminal);
+  wb.select(terminal.id);const send=terminalPanel.send||terminalPanel.run;swipe(send);
+  const sendClick=new MouseEvent('click',{bubbles:true,cancelable:true});send.dispatchEvent(sendClick);
+  check('横滑终端发送按钮后不执行命令',sendClick.defaultPrevented&&!terminalPanel.operations?.length&&!terminalPanel.flushing);
+  session.files.pop();session.files.splice(terminalIndex,0,terminal);
   check('切换保留主会话草稿',input.value==='主会话草稿');
   check('切换保留所有侧边草稿',session.files.filter(tab=>tab.sideChat).every(tab=>tab.sideChat.input.value==='保留草稿 '+tab.id));
   scroll.remove();editor.remove();reset();return checks;

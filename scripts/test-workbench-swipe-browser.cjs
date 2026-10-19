@@ -22,6 +22,8 @@ const server=http.createServer(async(req,res)=>{
         const slot=url.searchParams.get('slot')||'';
         value={id:'child-'+(slot||'default'),connected:true,status:'idle',model:'fixture',effort:'medium',turns:[],requests:[],submissions:[],slots:[{slot:'',id:'child-default'}]};
       }else if(p.endsWith('/subagents'))value={agents:[]};
+      else if(p.endsWith('/terminal'))value={mode:p.startsWith('/api/desktop-sessions/')?'command':'pty',shell:'/fixture/shell',host:'local',cwd:'/fixture',running:true,cursor:1,output:url.searchParams.has('id')?'':'Synthetic terminal output\r\n'.repeat(80)};
+      else if(p.endsWith('/workspace'))value={root:'/fixture',project:'Fixture',entries:[{name:'fixture.txt',path:'fixture.txt',kind:'file',size:12}],nextOffset:null};
       else if(p.endsWith('/workspace/git-status'))value={available:true,branch:'fixture',commit:'a'.repeat(40),project:'/fixture',scope:'.',entries:[]};
       else if(p.endsWith('/workspace/preview'))value={kind:'text',name:'fixture.txt',path:'fixture.txt',text:'文件预览',size:12};
       else if(p.endsWith('/timeline')||p.endsWith('/updates')){
@@ -55,6 +57,7 @@ const server=http.createServer(async(req,res)=>{
       }
       await page.addScriptTag({path:path.join(root,'tests/browser/workbench-swipe.browser.js')});
       const tabs=await page.evaluate(provider=>prepareWorkbenchSwipeChecks(provider),provider),cdp=await context.newCDPSession(page),checks=[];
+      await page.waitForFunction(()=>{const panel=swipeWorkbench.current.files.find(tab=>tab.id==='terminal')?.terminal;return panel?.running||panel?.fallback?.run?.disabled===false;});
       const check=(ok,label)=>{assert.ok(ok,provider+' '+width+': '+label);checks.push(label);};
       const active=()=>page.evaluate(()=>swipeWorkbench.current.active);
       const select=tab=>page.evaluate(tab=>swipeWorkbench.select(tab),tab);
@@ -80,13 +83,16 @@ const server=http.createServer(async(req,res)=>{
       }
       check(await active()==='agents','Git 整页到子智能体');
       await swipe('.wb-agents .wb-empty',-100);check(await active()===tabs.second,'子智能体整页到侧边聊天');
-      await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.second,'文件标签阻断且不跳过');
-      await select(tabs.third);await swipe('.wb-side-composer textarea',100);check(await active()===tabs.third,'文件另一侧也阻断');
-      await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.third,'终端阻断且不跳过');
-      await select(tabs.fourth);await swipe('.wb-side-composer textarea',100);check(await active()===tabs.fourth,'终端另一侧也阻断');
+      await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.file,'侧边聊天进入文件预览');
+      await swipe('.wb-preview-content',-100);check(await active()===tabs.third,'文件整页左滑到侧边聊天');
+      await swipe('.wb-side-composer textarea',100);check(await active()===tabs.file,'侧边聊天右滑进入文件预览');
+      await swipe('.wb-preview-content',100);check(await active()===tabs.second,'文件整页右滑返回');
+      await select(tabs.third);await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.terminal,'侧边聊天进入终端');
+      await swipe('.wb-terminal-screen .xterm-screen,.wb-terminal-output',-100);check(await active()===tabs.fourth,'真实终端输出区左滑到侧边聊天');
+      await swipe('.wb-side-composer textarea',100);check(await active()===tabs.terminal,'侧边聊天右滑进入终端');
+      await swipe('.wb-terminal-screen .xterm-screen,.wb-terminal-output',100);check(await active()===tabs.third,'真实终端输出区右滑返回');
+      await select(tabs.fourth);
       await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.fourth,'右边界不循环');
-      await select(tabs.file);await swipe('.wb-preview-content',100);check(await active()===tabs.file,'文件页面不响应');
-      await select(tabs.terminal);await swipe('.wb-terminal textarea',100);check(await active()===tabs.terminal,'终端页面不响应');
       checks.push(...await page.evaluate(()=>runWorkbenchSwipeEdgeChecks()));
       if(await page.evaluate(()=>swipeWorkbench.canSplit())){
         await page.evaluate(tab=>{swipeWorkbench.split(tab);swipeWorkbench.setRatio(.55);},tabs.first);
@@ -97,6 +103,11 @@ const server=http.createServer(async(req,res)=>{
         check(await page.evaluate(tab=>swipeWorkbench.current.active==='chat'&&swipeWorkbench.current.splitTab===tab&&swipeWorkbench.current.splitRatio===.55,tabs.first),'返回主聊天保留分屏和比例');
         await page.evaluate(()=>{swipeWorkbench.unsplit();swipeWorkbench.select('chat');});
       }
+      await page.evaluate(()=>swipeWorkbench.files());await page.waitForSelector('.wb-browser .wb-file-list');
+      await swipe('.wb-browser .wb-file-list',-100);check(await active()===tabs.first,'文件目录整页左滑');
+      await swipe('.wb-side-composer textarea',100);check(await active()==='files','侧边聊天右滑进入文件目录');
+      await swipe('.wb-browser .wb-file-list',100);check(await active()==='chat','文件目录整页右滑返回主聊天');
+      await swipe(main+' textarea',-100);check(await active()==='files','主聊天输入区左滑进入文件目录');
       // A held touch must leave native long-press handling and the current tab intact.
       await select('chat');const point=await page.locator(main+' textarea').boundingBox(),x=point.x+point.width*.8,y=point.y+point.height/2;
       await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
@@ -107,7 +118,7 @@ const server=http.createServer(async(req,res)=>{
       check(await page.locator(main).evaluate(form=>form.classList.contains('is-collapsed')),'普通轻点仍可收起输入区');
       await page.locator(main+' .composer-toggle').tap();
       check(await page.locator(main).evaluate(form=>!form.classList.contains('is-collapsed')),'普通轻点仍可展开输入区');
-      check(!writes.some(write=>write.p.endsWith('/send')||['send','create','stop','close','stage','stage-all','commit'].includes(write.body.action)),'滑动没有发送或 Git 写入');
+      check(!writes.some(write=>write.p.endsWith('/send')||write.p.includes('/workspace/git-')||['send','create','stop','close','stage','stage-all','commit','input','start'].includes(write.body.action)),'滑动没有发送消息、终端命令或 Git 写入');
       results.push({width,height,provider,passed:checks.length});await context.close();
     }
     assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:results.reduce((sum,result)=>sum+result.passed,0),results},null,2));
