@@ -209,7 +209,7 @@ class Workbench {
     if(this.current?.key!==key)this.current?.sideChatRead?.abort();
     clearTimeout(this.sideChatTimer);
     if (this.previewFullscreen && this.previewFullscreen.session.key !== key) this.closePreviewFullscreen();
-    if (!this.sessions.has(key)) this.sessions.set(key, {id, host, key, provider:this.provider, active: 'chat', files: [], directory: '', search: '', hidden: false, scroll: 0});
+    if (!this.sessions.has(key)) this.sessions.set(key, {id, host, key, provider:this.provider, active: 'chat', files: [], directory: '', search: '', hidden: true, scroll: 0});
     this.current = this.sessions.get(key); this.fileQuotes.open(key); this.paint();
     // The caller sets the current access capabilities immediately after open().
     const session=this.current;Promise.resolve().then(()=>{if(this.current===session)this.refreshSideChats();});
