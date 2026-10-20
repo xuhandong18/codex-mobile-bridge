@@ -25,6 +25,8 @@ const server=http.createServer(async(req,res)=>{
       else if(p.endsWith('/terminal'))value={mode:p.startsWith('/api/desktop-sessions/')?'command':'pty',shell:'/fixture/shell',host:'local',cwd:'/fixture',running:true,cursor:1,output:url.searchParams.has('id')?'':'Synthetic terminal output\r\n'.repeat(80)};
       else if(p.endsWith('/workspace'))value={root:'/fixture',project:'Fixture',entries:[{name:'fixture.txt',path:'fixture.txt',kind:'file',size:12}],nextOffset:null};
       else if(p.endsWith('/workspace/git-status'))value={available:true,branch:'fixture',commit:'a'.repeat(40),project:'/fixture',scope:'.',entries:[]};
+      else if(p.endsWith('/workspace/git-history'))value={commits:[{id:'a'.repeat(40),parents:[],subject:'合成提交',author:'Fixture',date:'2026-10-20',refs:'fixture'}],hasMore:false};
+      else if(p.endsWith('/workspace/git-branches'))value={branches:[{name:'fixture',id:'a'.repeat(40),current:true}]};
       else if(p.endsWith('/workspace/preview'))value={kind:'text',name:'fixture.txt',path:'fixture.txt',text:'文件预览',size:12};
       else if(p.endsWith('/timeline')||p.endsWith('/updates')){
         if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,100));
@@ -60,6 +62,11 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(()=>{const panel=swipeWorkbench.current.files.find(tab=>tab.id==='terminal')?.terminal;return panel?.running||panel?.fallback?.run?.disabled===false;});
       const check=(ok,label)=>{assert.ok(ok,provider+' '+width+': '+label);checks.push(label);};
       const active=()=>page.evaluate(()=>swipeWorkbench.current.active);
+      const gitMode=()=>page.evaluate(()=>swipeWorkbench.current.files.find(tab=>tab.id==='git').git.mode);
+      const waitGit=mode=>page.waitForFunction(mode=>{
+        const git=swipeWorkbench.current.files.find(tab=>tab.id==='git').git;
+        return git.mode===mode&&git.tab.body.querySelector(mode==='changes'?'.wb-git-clean':mode==='history'?'.wb-history-row':'.wb-branch-card');
+      },mode);
       const select=tab=>page.evaluate(tab=>swipeWorkbench.select(tab),tab);
       const swipe=async(selector,dx)=>{
         await page.locator(selector).scrollIntoViewIfNeeded();
@@ -76,12 +83,21 @@ const server=http.createServer(async(req,res)=>{
       }
       await swipe(main+' textarea',100);check(await active()==='chat','左边界不循环');
       await select(tabs.first);await swipe('.wb-side-composer .compose-bottom',-100);check(await active()==='git','侧边聊天到 Git');
-      await swipe('.wb-git-clean',-100);
-      if(await active()!=='agents'){
-        fs.mkdirSync(path.join(root,'.tmp'),{recursive:true});await page.screenshot({path:path.join(root,'.tmp','workbench-swipe-failure.png')});
-        console.error(await page.evaluate(()=>({active:swipeWorkbench.current.active,files:swipeWorkbench.current.files.map(tab=>tab.id),selection:window.getSelection().toString(),clean:document.querySelector('.wb-git-clean')?.getBoundingClientRect().toJSON()})));
-      }
-      check(await active()==='agents','Git 整页到子智能体');
+      await waitGit('changes');await swipe('.wb-git-clean',100);
+      check(await active()==='git'&&await gitMode()==='changes','变更内容区右滑在内部左边界停留');
+      await swipe('.wb-git-clean',-100);await waitGit('history');
+      check(await active()==='git'&&await gitMode()==='history','变更内容区左滑切换历史');
+      await swipe('.wb-history-row',-100);await waitGit('branches');
+      check(await active()==='git'&&await gitMode()==='branches','历史内容区左滑切换分支');
+      check(!await page.locator('.wb-float').count(),'滑过历史提交不会点击打开详情');
+      await swipe('.wb-branch-card',-100);
+      check(await active()==='git'&&await gitMode()==='branches','分支内容区左滑在内部右边界停留');
+      await swipe('.wb-branch-list',100);await waitGit('history');
+      check(await active()==='git'&&await gitMode()==='history','分支内容区右滑切换历史');
+      await swipe('.wb-history-list',100);await waitGit('changes');
+      check(await active()==='git'&&await gitMode()==='changes','历史内容区右滑切换变更');
+      await swipe('.wb-git-heading',-100);
+      check(await active()==='agents','Git 标题栏左滑切换外层子智能体标签');
       await swipe('.wb-agents .wb-empty',-100);check(await active()===tabs.second,'子智能体整页到侧边聊天');
       await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.file,'侧边聊天进入文件预览');
       await swipe('.wb-preview-content',-100);check(await active()===tabs.third,'文件整页左滑到侧边聊天');
@@ -98,7 +114,10 @@ const server=http.createServer(async(req,res)=>{
         await page.evaluate(tab=>{swipeWorkbench.split(tab);swipeWorkbench.setRatio(.55);},tabs.first);
         await swipe(main+' textarea',-100);check(await active()===tabs.first,'分屏主输入区按自身标签切换');
         await swipe('.wb-side-composer textarea',-100);check(await active()==='git','分屏侧边输入区切换右侧标签');
-        await swipe('.wb-git-clean',100);check(await active()===tabs.first,'分屏 Git 整页返回侧边聊天');
+        await waitGit('changes');await swipe('.wb-git-clean',-100);await waitGit('history');
+        check(await active()==='git'&&await page.evaluate(()=>swipeWorkbench.current.splitTab==='git'),'分屏 Git 内容区只切换内部历史标签');
+        await swipe('.wb-history-list',100);await waitGit('changes');
+        await swipe('.wb-git-heading',100);check(await active()===tabs.first,'分屏 Git 标题栏返回侧边聊天');
         await swipe('.wb-side-composer textarea',100);
         check(await page.evaluate(tab=>swipeWorkbench.current.active==='chat'&&swipeWorkbench.current.splitTab===tab&&swipeWorkbench.current.splitRatio===.55,tabs.first),'返回主聊天保留分屏和比例');
         await page.evaluate(()=>{swipeWorkbench.unsplit();swipeWorkbench.select('chat');});

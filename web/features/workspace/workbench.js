@@ -63,7 +63,8 @@ class Workbench {
       for(let node=target;node&&node!==tab.body;node=node.parentElement){
         if(node.scrollWidth>node.clientWidth+1&&['auto','scroll'].includes(getComputedStyle(node).overflowX))return null;
       }
-      return {session,id:tab.id,root:tab.body};
+      const git=tab.git&&(tab.git.content?.contains(target)||target.closest('.wb-float'))?tab.git:null;
+      return {session,id:tab.id,root:tab.body,git,mode:git?.mode};
     };
     const selecting=root=>{
       const input=root.querySelector('textarea');
@@ -72,6 +73,7 @@ class Workbench {
     const valid=start=>{
       const current=source(start.target);
       return current&&current.session===start.session&&current.id===start.id&&current.root===start.root&&
+        current.git===start.git&&current.mode===start.mode&&
         start.root.isConnected&&start.session.active===start.active&&start.session.splitTab===start.splitTab&&
         Date.now()-start.time<600&&!selecting(start.root);
     };
@@ -95,10 +97,11 @@ class Workbench {
       const touch=[...event.changedTouches].find(touch=>touch.identifier===start.touch);if(!touch)return;
       const dx=touch.clientX-start.x,dy=touch.clientY-start.y;
       if(Math.abs(dx)<50||Math.abs(dx)<=Math.abs(dy)*1.5)return;
+      suppressUntil=Date.now()+400;if(event.cancelable)event.preventDefault();
+      if(start.git){start.git.swipeMode(dx<0?1:-1);return;}
       // Follow the actual tab order without skipping entries or wrapping at either end.
       const tabs=[{id:'chat'},...start.session.files],index=tabs.findIndex(tab=>tab.id===start.id);
       const next=tabs[index+(dx<0?1:-1)];
-      suppressUntil=Date.now()+400;if(event.cancelable)event.preventDefault();
       if(eligible(next))this.select(next.id);
     },{passive:false});
     this.layout.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});

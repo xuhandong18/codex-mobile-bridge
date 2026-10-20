@@ -1,12 +1,21 @@
 'use strict';
 
 class GitPanel {
+  static modes = [['changes', '变更'], ['history', '历史'], ['branches', '分支']];
   constructor(workbench, session, tab) {
     this.workbench = workbench; this.session = session; this.tab = tab; this.mode = 'changes'; this.historyLimit = 40; this.windowStates = {};
     this.node = (...args) => workbench.node(...args);
     this.button = (...args) => workbench.button(...args);
   }
   dispose() { this.floating?.destroy(); this.floating = null; this.tab.controller?.abort(); this.diffController?.abort(); this.historyDiffController?.abort(); }
+  selectMode(mode) {
+    if (this.busy || this.mode === mode) return;
+    this.mode = mode; this.load();
+  }
+  swipeMode(direction) {
+    const index = GitPanel.modes.findIndex(([key]) => key === this.mode), next = GitPanel.modes[index + direction];
+    if (next) this.selectMode(next[0]);
+  }
   async load() {
     this.dispose(); const controller = this.tab.controller = new AbortController();
     const head = this.node('div', 'wb-git-head'), title = this.node('div', 'wb-git-heading');
@@ -30,11 +39,11 @@ class GitPanel {
       if (result.upstream) notes.push(result.upstream + (result.ahead === null ? '' : BridgeI18n.t(' · 领先 ') + result.ahead + BridgeI18n.t(' / 落后 ') + result.behind) + BridgeI18n.t('（本地记录）'));
       status.textContent = notes.join(' · '); status.hidden = !notes.length;
       const modes = this.node('div', 'wb-git-modes');
-      for (const [key, label] of [['changes', BridgeI18n.t('变更')], ['history', BridgeI18n.t('历史')], ['branches', BridgeI18n.t('分支')]]) {
-        const button = this.button(label, () => { this.mode = key; this.load(); }); button.setAttribute('aria-pressed', String(this.mode === key)); modes.append(button);
+      for (const [key, label] of GitPanel.modes) {
+        const button = this.button(BridgeI18n.t(label), () => this.selectMode(key)); button.setAttribute('aria-pressed', String(this.mode === key)); modes.append(button);
       }
-      this.tab.body.append(modes);
-      if (this.actionError) this.tab.body.append(this.node('p', 'wb-status error', this.actionError));
+      this.content = this.node('div', 'wb-git-content'); this.tab.body.append(modes, this.content);
+      if (this.actionError) this.content.append(this.node('p', 'wb-status error', this.actionError));
       if (this.mode === 'history') { await this.history(controller); return; }
       if (this.mode === 'branches') { await this.branches(controller); return; }
       const actions = this.node('div', 'wb-git-actions');
@@ -46,10 +55,10 @@ class GitPanel {
       commit.disabled = (!staged.length && result.operation !== 'merge') || result.scope !== '.' || result.entries.some(e => e.conflict) || result.branch === '(detached)';
       actions.append(stage, unstage, commit);
       if (result.operation === 'merge') actions.append(this.button(BridgeI18n.t('中止合并'), () => this.confirm(BridgeI18n.t('中止本次合并'), BridgeI18n.t('将恢复合并前的状态，本次合并中的冲突处理也会被撤销。'), {action:'abort-merge'}, BridgeI18n.t('中止合并'))));
-      this.tab.body.append(actions);
+      this.content.append(actions);
       const layout = this.node('div', 'wb-git-layout'); this.list = this.node('div', 'wb-git-list'); this.list.setAttribute("data-i18n-aria-label",'Git 变更文件');this.list.setAttribute('aria-label', BridgeI18n.t('Git 变更文件'));
       this.layoutHost = layout; layout.classList.add('wb-float-host');
-      layout.append(this.list); this.tab.body.append(layout);
+      layout.append(this.list); this.content.append(layout);
       const groups = [['conflict', BridgeI18n.t('冲突'), e => e.conflict], ['unstaged', BridgeI18n.t('未暂存'), e => !e.conflict && !e.untracked && e.worktree !== '.'], ['staged', BridgeI18n.t('已暂存'), e => !e.conflict && !e.untracked && e.index !== '.'], ['untracked', BridgeI18n.t('未跟踪'), e => e.untracked]];
       let restored;
       for (const [section, name, filter] of groups) {
@@ -189,7 +198,7 @@ class GitPanel {
     toolbar.append(scope, this.node('span', 'muted', BridgeI18n.t('本地提交记录')));
     const layout = this.historyLayout = this.node('div', 'wb-git-layout wb-history-layout'), list = this.node('div', 'wb-git-list wb-history-list');
     this.layoutHost = layout; layout.classList.add('wb-float-host'); layout.append(list);
-    list.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取历史…'))); this.tab.body.append(toolbar, layout);
+    list.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取历史…'))); this.content.append(toolbar, layout);
     const result = await this.workbench.request(this.workbench.url(this.session, 'git-history') + '&limit=' + this.historyLimit + '&ref=' + scope.value, undefined, controller.signal);
     if (controller.signal.aborted) return;
     list.replaceChildren(); const lanes = [];
@@ -242,8 +251,8 @@ class GitPanel {
       const version = this.state.version;
       this.dialog(BridgeI18n.t('创建并切换分支'), BridgeI18n.t('新分支从当前提交开始。'), BridgeI18n.t('创建并切换'), () => this.execute({action:'create-branch', branch:name.value.trim()}, version), [name]);
     });
-    create.disabled = this.state.scope !== '.' || !!this.state.operation; toolbar.append(create); this.tab.body.append(toolbar);
-    const list = this.node('div', 'wb-branch-list'); list.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取分支…'))); this.tab.body.append(list);
+    create.disabled = this.state.scope !== '.' || !!this.state.operation; toolbar.append(create); this.content.append(toolbar);
+    const list = this.node('div', 'wb-branch-list'); list.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取分支…'))); this.content.append(list);
     const result = await this.workbench.request(this.workbench.url(this.session, 'git-branches'), undefined, controller.signal);
     if (controller.signal.aborted) return;
     list.replaceChildren();
