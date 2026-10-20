@@ -22,7 +22,9 @@ test('HTML preview sends bounded text only to its opaque shell after a matching 
   const context = vm.createContext({document, window, TextEncoder, module: {exports: {}},
     setTimeout: callback => callback, clearTimeout() {}});
   vm.runInContext(fs.readFileSync(path.join(root, 'web/features/workspace/html-preview.js'), 'utf8'), context);
-  const preview = context.module.exports.create({text: 'x'.repeat(512 * 1024)});
+  const maxBytes = 20 * 1024 * 1024;
+  assert.equal(context.module.exports.maxBytes, maxBytes);
+  const preview = context.module.exports.create({text: 'x'.repeat(maxBytes)});
   const frame = preview.element.children[0];
   assert.equal(frame.attrs.sandbox, 'allow-scripts');
   assert.equal(frame.src, window.BridgeRelayBase + '/html-preview-shell');
@@ -32,7 +34,7 @@ test('HTML preview sends bounded text only to its opaque shell after a matching 
   assert.equal(sent.length, 0);
   receive({source: frame.contentWindow, origin: 'null', data: {type: 'bridge-html-preview-ready',instance:'a'.repeat(32)}});
   assert.equal(sent.length, 1);
-  assert.equal(sent[0][0].text.length, 512 * 1024);
+  assert.equal(sent[0][0].text.length, maxBytes);
   assert.equal(sent[0][1], '*');
   assert.equal(listeners.has('message'), true);
   receive({source:frame.contentWindow,origin:'null',data:{type:'bridge-html-preview-ready',instance:'a'.repeat(32)}});
@@ -44,7 +46,8 @@ test('HTML preview sends bounded text only to its opaque shell after a matching 
   preview.dispose();
   assert.equal(listeners.has('message'),false);
   assert.equal(frame.removed, true);
-  assert.throws(() => context.module.exports.create({text: 'x'.repeat(512 * 1024 + 1)}));
+  assert.throws(() => context.module.exports.create({text: 'x'.repeat(maxBytes + 1)}));
+  assert.throws(() => context.module.exports.create({text: '中'.repeat(Math.floor(maxBytes / 3) + 1)}));
 });
 
 test('fixed shell accepts one same-origin parent message and rejects oversized content', () => {
@@ -67,10 +70,14 @@ test('fixed shell accepts one same-origin parent message and rejects oversized c
   const receive = listeners.get('message');
   receive({source: {}, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'bad'}});
   receive({source: parent, origin: 'https://other.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'bad'}});
-  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'x'.repeat(512 * 1024 + 1)}});
+  const maxBytes = 20 * 1024 * 1024;
+  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'x'.repeat(maxBytes + 1)}});
+  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: '中'.repeat(Math.floor(maxBytes / 3) + 1)}});
   assert.equal(writes.length, 1);
-  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: '<button>OK</button>'}});
-  assert.deepEqual(writes.slice(1), [['open'], ['write', '<button>OK</button>'], ['close']]);
+  const html = '<button>OK</button>' + 'x'.repeat(maxBytes - 19);
+  assert.equal(Buffer.byteLength(html), maxBytes);
+  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: html}});
+  assert.deepEqual(writes.slice(1), [['open'], ['write', html], ['close']]);
   assert.equal(listeners.has('message'), false);
   listeners.get('keydown')({key:'Enter'}); assert.equal(writes.length,4);
   listeners.get('keydown')({key:'Escape'});

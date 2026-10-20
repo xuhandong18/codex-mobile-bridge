@@ -1,8 +1,8 @@
 'use strict';
 const BridgeHtmlPreview=(()=>{
-  const maxBytes=512*1024;
+  const maxBytes=20*1024*1024;
   function create({text,onEscape}){
-    if(typeof text!=='string'||new TextEncoder().encode(text).length>maxBytes)throw Error('HTML 预览内容超出文本大小限制');
+    if(typeof text!=='string'||new TextEncoder().encode(text).length>maxBytes)throw Error('HTML 文件超过 20 MB，无法在线预览。可下载后打开。');
     const element=document.createElement('div');element.className='html-preview-frame';
     const frame=document.createElement('iframe');frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('referrerpolicy','no-referrer');
     frame.setAttribute('title',typeof BridgeI18n==='undefined'?'HTML 预览':BridgeI18n.t('HTML 预览'));frame.setAttribute('data-i18n-title','HTML 预览');
@@ -23,6 +23,6 @@ const BridgeHtmlPreview=(()=>{
     const timer=setTimeout(fail,10000);
     return {element,dispose(){if(disposed)return;disposed=true;cleanup();frame.remove();}};
   }
-  return {create};
+  return {create,maxBytes};
 })();
 if(typeof module!=='undefined')module.exports=BridgeHtmlPreview;

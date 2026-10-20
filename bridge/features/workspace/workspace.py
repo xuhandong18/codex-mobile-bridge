@@ -17,6 +17,7 @@ import atexit
 
 MAX_TRANSFER = 20 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
+MAX_HTML_PREVIEW = 20 * 1024 * 1024
 SEARCH_MAX_DEPTH = 32
 SEARCH_MAX_SCANNED = 20000
 SEARCH_MAX_SECONDS = 2.0
@@ -457,7 +458,8 @@ class Workspace:
                 info = os.fstat(stream.fileno())
                 if not stat.S_ISREG(info.st_mode): raise ValueError('仅支持普通文件')
                 if download and info.st_size > MAX_TRANSFER: raise ValueError('文件超过 20 MB 下载限制')
-                limit = MAX_TRANSFER if download or Path(path).suffix.lower() in IMAGES else MAX_PREVIEW
+                suffix = Path(path).suffix.lower()
+                limit = MAX_TRANSFER if download or suffix in IMAGES else MAX_HTML_PREVIEW if suffix in ('.html', '.htm') else MAX_PREVIEW
                 data = stream.read(limit + 1)
         result = {'name': parts[-1], 'path': path, 'size': info.st_size, 'modified': info.st_mtime, 'kind': 'binary'}
         if len(data) > limit:

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from bridge.features.workspace.workspace import Workspace, operate, MAX_TRANSFER, MAX_PREVIEW
+from bridge.features.workspace.workspace import Workspace, operate, MAX_TRANSFER, MAX_PREVIEW, MAX_HTML_PREVIEW
 from bridge.app.service import Bridge
 from bridge.clients.codex.remote import RemoteStore
 from relay.protocol import validate as validate_relay_request
@@ -167,6 +167,33 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn('text', self.work.read('big.txt'))
         self.assertEqual(base64.b64decode(self.work.read('big.txt', download=True)['data']), b'x' * (MAX_PREVIEW + 1))
 
+    def test_large_html_preview_preserves_embedded_images_and_limits_other_text(self):
+        html = '<!doctype html><h1>通知截图</h1><img src="data:image/png;base64,' + 'A' * (MAX_PREVIEW + 1) + '">'
+        for name in ('gallery.html', 'gallery.htm', 'gallery.HTML', 'gallery.HTM'):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(html.encode('utf-8'))
+                result = operate(str(self.root), 'preview', {'path': name})
+                self.assertEqual(result['kind'], 'text')
+                self.assertEqual(result['size'], len(html.encode('utf-8')))
+                self.assertEqual(result['text'], html)
+        (self.root / 'gallery.txt').write_bytes(html.encode('utf-8'))
+        self.assertNotIn('text', self.work.read('gallery.txt'))
+        for data in (b'\xff', b'<html>\x00</html>'):
+            (self.root / 'invalid.html').write_bytes(data)
+            self.assertEqual(self.work.read('invalid.html')['kind'], 'binary')
+
+    def test_html_preview_accepts_exact_byte_limit_and_rejects_one_byte_more(self):
+        data = '中'.encode('utf-8') * (MAX_HTML_PREVIEW // 3) + b'x' * (MAX_HTML_PREVIEW % 3)
+        path = self.root / 'boundary.html'; path.write_bytes(data)
+        result = self.work.read(path.name)
+        self.assertEqual(result['kind'], 'text')
+        self.assertEqual(result['text'].encode('utf-8'), data)
+        with path.open('ab') as stream: stream.write(b'x')
+        result = self.work.read(path.name)
+        self.assertEqual(result['kind'], 'binary')
+        self.assertNotIn('text', result)
+        self.assertNotIn('data', result)
+
     def test_traversal_and_symlinks_never_escape(self):
         outside = Path(self.temp.name) / 'private'; outside.mkdir(); (outside / 'secret').write_text('private')
         for path in ('../private/secret', '/etc/passwd', 'folder/../../private', 'C:\\private', 'file:stream', 'folder//file'):
@@ -212,6 +239,9 @@ class WorkspaceTests(unittest.TestCase):
             return json.loads(output.getvalue())
         with patch('bridge.app.service.ssh_read', side_effect=execute):
             self.assertEqual(Bridge.workspace(bridge, support.THREAD, 'preview', {'path': 'remote.txt'})['text'], 'remote')
+            html = '<h1>Remote gallery</h1><!--' + 'x' * (MAX_PREVIEW + 1) + '-->'
+            (remote / 'gallery.html').write_text(html, encoding='utf-8')
+            self.assertEqual(Bridge.workspace(bridge, support.THREAD, 'preview', {'path': 'gallery.html'})['text'], html)
             nested = remote / 'nested'; nested.mkdir(); (nested / 'needle.txt').touch()
             page = Bridge.workspace(bridge, support.THREAD, 'list', {'recursive': True, 'search': 'nested/needle'})
             self.assertEqual(page['root'], str(remote.resolve()))
@@ -247,6 +277,17 @@ class WorkspaceHttpTests(unittest.TestCase):
         self.assertFalse((self.root / 'test.txt').exists())
         self.assertEqual(self.raw(target, b'text', auth)[0], 200)
         self.assertEqual(self.request('GET', self.path + '/preview?path=test.txt', headers=auth)[2]['text'], 'text')
+
+    def test_large_html_preview_requires_login_and_keeps_workspace_boundary(self):
+        html = '<h1>通知截图</h1><!--' + 'x' * (MAX_PREVIEW + 1) + '-->'
+        (self.root / 'gallery.html').write_bytes(html.encode('utf-8'))
+        target = self.path + '/preview?path=gallery.html'
+        self.assertEqual(self.request('GET', target)[0], 401)
+        auth = self.login()
+        status, _, result = self.request('GET', target, headers=auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(result['text'], html)
+        self.assertEqual(self.request('GET', self.path + '/preview?path=../outside.html', headers=auth)[0], 403)
 
     def test_authenticated_binary_download_and_no_overwrite(self):
         auth = self.login(); data = b'\0binary\xff'; target = self.path + '/upload?path=test.apk'

@@ -46,7 +46,7 @@
 - Markdown 文件预览支持章节链接，以及相对于当前文件或项目根目录的文件链接。其他文件在工作台标签页中打开，已打开的文件复用其标签；带章节的链接在内容加载后定位，同名标题按 `-1`、`-2` 区分。网址继续在浏览器新标签页打开；文件链接沿用当前聊天的主机、客户端及文件访问校验，不能跳出项目。聊天正文仍只允许服务端授权的文件链接。
 - `source-view.js` 用本地 Prism 词元生成只读源码节点，行号独立，复制取原文；软换行与原始行宽可切换。超过 65,536 字符或 4,000 行不高亮，超过 10,000 行省略行号，仍遵守 512 KiB 文本预览上限。见[源码约定](../.agents/notes/implemented/feature/2026-10-13-source-code-view.md)。
 - `pdf-preview.js` 使用随网关分发的 PDF.js legacy 模块、worker、CMap 和字体。沿用鉴权下载与 Range，并加 `preview=1`：服务端逐次检查实际大小不超过 `min(20 MiB, clickDownloadMiB)`，不能与显式下载或目录归档混用。可见页按需绘制，预算内保留至多两张邻近完成画布；缩放保留旧画布，单个离屏绘制完成后替换，文本层独立更新。已显示画布最多约 12 MP，替换缓冲另限约 4 MP；这是单个阅读器的画布预算，不是所有标签的总内存预算。
-- `html-preview.js` 只把文本交给已鉴权的 `/html-preview-shell`。父页核验消息来源与壳实例；壳的 CSP 与 iframe sandbox 隔离内联脚本，不授同源、网络、表单、弹窗或导航权限。Android/iOS 原生壳仅放行预期的预览子页面，拒绝其余高权限操作。关闭或切换到源码时销毁 iframe，标签返回重新握手。见[PDF/HTML 约定](../.agents/notes/implemented/feature/2026-10-13-pdf-html-preview-and-source-mode.md)。
+- HTML（`.html`／`.htm`，不区分大小写）支持最多 20 MiB 的 UTF-8 自包含页面，包含内嵌图片、样式和脚本；普通文本预览仍限 512 KiB。聊天文件标签和文件目录共用此预览，可切换源码、刷新和全屏，超限保留下载入口。`html-preview.js` 只把文本交给已鉴权的 `/html-preview-shell`，父页和隔离壳均按 UTF-8 字节核验上限。父页核验消息来源与壳实例；壳的 CSP 与 iframe sandbox 隔离内联脚本，不授同源、网络、表单、弹窗或导航权限。Android/iOS 原生壳仅放行预期的预览子页面，拒绝其余高权限操作。关闭或切换到源码时销毁 iframe，标签返回重新握手。见[PDF/HTML 约定](../.agents/notes/implemented/feature/2026-10-13-pdf-html-preview-and-source-mode.md)。
 - `workbench.js` 持有目录返回、阅读位置和全屏状态。Back 先退出预览全屏、关闭浮层，再处理当前文件目录；文件子目录先回父级，根目录后回聊天。Markdown 全屏包含实际工作台标签栏，点击文档链接、切换文件标签、关闭当前文件后继续查看剩余文件时保持全屏；异步加载期间也保留标签栏与退出按钮。回到聊天、切换会话或主动退出时恢复原布局。全屏沿用同一预览实例，不重新创建 PDF 或 HTML。
 
 Claude 账号面板的定时刷新只读已保存额度；只有显式 `details(refresh=True)` 查询。成功快照的日期时间与面板刷新时间分开，失败不能覆盖原成功值。见[手动额度约定](../.agents/notes/implemented/bug-fix/2026-10-12-keychain-access-and-manual-quota.md)。

@@ -9,8 +9,11 @@ window.runFileRefreshBrowserChecks = async () => {
   chat.innerHTML = '<header class="chat-head"></header><div class="timeline" tabindex="0"></div><div class="composer"><textarea></textarea></div>';
   document.body.append(chat);
   const paragraphs = Array.from({length:80}, (_, i) => 'Paragraph ' + i).join('\n\n');
-  const revisions = new Map(), reads = [], htmlMessages = [];
-  const receive = event => { if (event.data?.type === 'fixture-html-revision') htmlMessages.push({revision:event.data.revision, source:event.source}); };
+  const revisions = new Map(), reads = [], htmlMessages = [], htmlImages = [];
+  const receive = event => {
+    if (event.data?.type === 'fixture-html-revision') htmlMessages.push({revision:event.data.revision, source:event.source});
+    if (event.data?.type === 'fixture-html-image') htmlImages.push({revision:event.data.revision, source:event.source});
+  };
   window.addEventListener('message', receive);
   let failure = '', pause;
   const hold = path => {
@@ -32,6 +35,8 @@ window.runFileRefreshBrowserChecks = async () => {
     if (/\.bin$/.test(name)) return {kind:'binary', name, size:revision};
     const text = /\.html$/.test(name)
       ? '<h1>HTML revision ' + revision + '</h1><script>parent.postMessage({type:"fixture-html-revision",revision:' + revision + '},"*")<\/script>'
+        + `<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6CysAAAAASUVORK5CYII=" onload="parent.postMessage({type:'fixture-html-image',revision:${revision}},'*')">`
+        + '<!--' + 'x'.repeat(1024 * 1024) + '-->'
       : /\.js$/.test(name) ? '// revision ' + revision + '\n' + Array.from({length:200}, (_, i) => 'const row' + i + ' = "' + 'x'.repeat(100) + '";').join('\n')
       : '# Markdown revision ' + revision + '\n\n' + paragraphs;
     return {kind:'text', name, size:text.length, text};
@@ -65,6 +70,8 @@ window.runFileRefreshBrowserChecks = async () => {
 
     const html = await open('page.html');
     await until(()=>htmlMessages.some(message=>message.revision === 1));
+    await until(()=>htmlImages.some(message=>message.revision === 1 && message.source === html.body.querySelector('iframe')?.contentWindow));
+    check('HTML above the text limit renders embedded images inside the isolated preview', !!html.html && html.htmlMode === 'preview');
     const firstFrame = html.body.querySelector('iframe');
     revisions.set('page.html', 2); await refresh(html);
     await until(()=>htmlMessages.some(message=>message.revision === 2 && message.source === html.body.querySelector('iframe')?.contentWindow));

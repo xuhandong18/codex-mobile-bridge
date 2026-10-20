@@ -558,3 +558,28 @@ test('HTML preview switches to the original source and disposes its script frame
   await workbench.close('file:page.html');
   assert.deepEqual(lifecycle,['create','dispose','create','dispose']);
 });
+
+test('download-only HTML uses its own size limit and distinguishes invalid text', async () => {
+  const maxBytes=require('../web/features/workspace/html-preview.js').maxBytes;
+  const context={window:{},AbortController,BridgeI18n:{t:text=>text},BridgeHtmlPreview:{maxBytes},document:{createElement:element}};
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root,'web/features/workspace/workbench.js'),'utf8'),context);
+  const Workbench=vm.runInContext('Workbench',context);
+  for(const [name,size,message] of [
+    ['large.HTML',maxBytes+1,'HTML 文件超过 20 MB，无法在线预览。可下载后打开。'],
+    ['invalid.htm',1024*1024,'此文件不是 UTF-8 文本或可预览图片，可下载后打开。'],
+    ['large.txt',512*1024+1,'文件超过 512 KB，无法在线预览。可下载后打开。']
+  ]){
+    const workbench=Object.create(Workbench.prototype),session={key:'fixture',files:[],active:'chat'};
+    Object.assign(workbench,{current:session,sessions:new Map([[session.key,session]]),
+      node:(tag,cls='',text)=>{const node=element(tag);node.className=cls;if(text!==undefined)node.textContent=text;return node;},
+      button:(text,action)=>{const node=element('button');node.textContent=text;node.onclick=action;return node;},
+      raw:node=>node,select:()=>{},paint:()=>{},url:()=>'/api/workspace/download',
+      request:async()=>({kind:'binary',name,size})});
+    await workbench.preview(session,{name,path:name});
+    const body=session.files[0].body;
+    assert.equal(childWithClass(body,'wb-preview-content').textContent,message);
+    const actions=childWithClass(childWithClass(body,'wb-preview-head'),'wb-preview-actions');
+    assert.equal(childWithClass(actions,'wb-download').href,'/api/workspace/download');
+  }
+});

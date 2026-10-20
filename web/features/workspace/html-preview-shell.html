@@ -15,7 +15,7 @@
   const receive = event => {
     if (event.source !== parent || event.origin !== sourceOrigin ||
         event.data?.type !== 'bridge-html-preview-content' || event.data.instance !== instance || typeof event.data.text !== 'string' ||
-        new TextEncoder().encode(event.data.text).length > 512 * 1024) return;
+        new TextEncoder().encode(event.data.text).length > 20 * 1024 * 1024) return;
     window.removeEventListener('message', receive);
     document.open();
     document.write(event.data.text);

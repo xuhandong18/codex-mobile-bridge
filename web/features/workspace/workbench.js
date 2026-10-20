@@ -614,7 +614,12 @@ class Workbench {
           copy.className = 'wb-source-copy'; copyAction = copy;
           content.append(BridgeSourceView.create({name:result.name, text:result.text}));
         }
-      } else content.append(this.node('p', 'wb-empty', BridgeI18n.t(result.size > 512 * 1024 ? '文件超过 512 KB，无法在线预览。可下载后打开。' : '此文件不是 UTF-8 文本或可预览图片，可下载后打开。')));
+      } else {
+        const html = /\.html?$/i.test(result.name), limit = html ? BridgeHtmlPreview.maxBytes : 512 * 1024;
+        content.append(this.node('p', 'wb-empty', BridgeI18n.t(result.size > limit
+          ? html ? 'HTML 文件超过 20 MB，无法在线预览。可下载后打开。' : '文件超过 512 KB，无法在线预览。可下载后打开。'
+          : '此文件不是 UTF-8 文本或可预览图片，可下载后打开。')));
+      }
       if (['pdf','image','text'].includes(result.kind) || this.previewFullscreen?.tab === tab) {
         const fullscreen = tab.fullscreenButton ||= this.button('全屏', () => this.previewFullscreen?.tab === tab ? this.closePreviewFullscreen() : this.openPreviewFullscreen(session, tab, tab.previewContent, tab.fullscreenButton), '全屏预览');
         fullscreen.className = 'wb-preview-expand'; actions.append(fullscreen);
