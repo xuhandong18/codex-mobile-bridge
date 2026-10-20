@@ -3,12 +3,14 @@ import copy
 import http.client
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from symlink_support import require_symlink_support
 import uuid
 from pathlib import Path
 import hashlib
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import test_bridge as support
 from bridge.features.workspace.uploads import Uploads, MAX_FILE
@@ -118,7 +120,7 @@ class UploadActivityTests(unittest.TestCase):
             with session.condition: self.assertTrue(session.condition.wait_for(lambda: session.state['threadRuntimeStatus']['type']=='active', timeout=2))
             self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'active')
             self.bridge._disconnected()
-            self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'unknown')
+            self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'active')
 
     def test_unloaded_visible_chat_uses_verified_metadata_without_creating_a_writable_owner(self):
         from unittest.mock import Mock
@@ -128,6 +130,7 @@ class UploadActivityTests(unittest.TestCase):
         with patch.object(self.bridge, 'desktop_activity', native, create=True), \
                 patch.object(self.bridge, '_attach'), \
                 patch.object(self.bridge.subagent_activity, 'read', return_value={THREAD: {'runningSubagents': 0, 'subagentsKnown': True}}), \
+                patch.object(self.bridge.subagent_activity, 'wait', return_value={THREAD: {'runningSubagents': 0, 'subagentsKnown': True}}), \
                 patch('bridge.app.service.open_in_desktop', side_effect=AssertionError('No navigation')), \
                 patch.object(self.bridge.store, 'history', side_effect=AssertionError('No transcript reads')):
             row = self.bridge.activity([THREAD])[0]
@@ -136,7 +139,37 @@ class UploadActivityTests(unittest.TestCase):
         self.assertFalse(row['connected'])
         self.assertEqual((row['turnId'], row['turnStatus']), ('done', 'completed'))
         self.assertIsNone(self.bridge.live[THREAD].owner)
-        native.read.assert_called_once_with([THREAD])
+        native.read.assert_called_once_with([THREAD], timeout=ANY)
+
+    def test_one_activity_query_waits_for_native_metadata_and_returns_it_directly(self):
+        from unittest.mock import Mock
+        from bridge.clients.codex.activity import DesktopActivity
+        self.bridge.list();entered, release = threading.Event(), threading.Event()
+        native = Mock()
+        def read(*args, **kwargs):
+            entered.set();release.wait(1)
+            return {'thread': {'id': THREAD, 'hostId': 'local', 'status': {'type': 'notLoaded'}},
+                    'turns': [{'id': 'done', 'status': 'completed'}]}
+        native.call.side_effect = read
+        with patch.object(DesktopActivity, 'available', True), patch.object(self.bridge.desktop_activity, '_connect', return_value=native), \
+                patch.object(self.bridge, '_attach'), patch.object(self.bridge.store, 'history', side_effect=AssertionError('No history reads')), \
+                patch('bridge.app.service.open_in_desktop', side_effect=AssertionError('No desktop navigation')), ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(self.bridge.activity, [THREAD], .8)
+            try:
+                self.assertTrue(entered.wait(.3));self.assertFalse(waiting.done());release.set()
+                row = waiting.result(1)[0]
+            finally:
+                release.set()
+        self.assertEqual((row['status'], row['turnStatus']), ('notLoaded', 'completed'))
+        self.assertTrue(row['activityConnected']);self.assertFalse(row['connected']);native.call.assert_called_once()
+
+    def test_timeout_keeps_a_verified_live_running_chat_and_filters_unlisted_ids(self):
+        self.bridge.list();session=self.bridge.session(THREAD)
+        with session.condition:
+            session.state['threadRuntimeStatus']['type'] = 'active'
+        rows = self.bridge.activity_timeout_rows([THREAD, 'unlisted'])
+        self.assertEqual(len(rows), 1);self.assertEqual(rows[0]['status'], 'active')
+        self.assertNotIn('activityError', rows[0])
 
     def test_native_display_status_does_not_override_a_live_owner(self):
         from unittest.mock import Mock
@@ -159,7 +192,7 @@ class UploadActivityTests(unittest.TestCase):
         native.read.return_value = {THREAD: {'status': 'notLoaded', 'turnId': 'old', 'turnStatus': 'completed'}}
         with patch.object(self.bridge, 'desktop_activity', native, create=True), patch.object(self.bridge, '_attach'):
             self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'unknown')
-        native.read.assert_called_once_with([])
+        native.read.assert_called_once_with([], timeout=ANY)
 
     def test_opening_activity_only_session_still_loads_saved_prefix(self):
         self.fixture.state['turnsPagination'] = {'hasLoadedOldest': False}

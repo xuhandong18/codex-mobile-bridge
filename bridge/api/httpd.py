@@ -34,6 +34,7 @@ from bridge.features.updates.mobile import MobileUpdates
 from bridge.clients.codex.ipc import IPCError
 from bridge.features.sessions.goal import GoalError
 from bridge.features.sessions.answer_drafts import AnswerDrafts
+from bridge.features.sessions.activity import query_activity
 from bridge.clients.codex.catalog import CatalogError
 from bridge.features.sessions.store import StoreUnavailable
 from bridge.clients.codex.remote import RemoteUnavailable
@@ -714,10 +715,10 @@ class Handler(BaseHTTPRequestHandler):
                 groups = self.read_json().get('hosts')
                 if not isinstance(groups, dict) or len(groups) > 20:
                     raise ValueError('会话状态请求无效')
-                rows = []
-                for host, identifiers in groups.items():
-                    rows.extend(self.server.bridge.for_host(host).activity(identifiers))
-                return self.output(200, {'sessions': rows})
+                if any(not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(sid, str) for sid in ids)
+                       for ids in groups.values()):
+                    raise ValueError('会话状态请求无效')
+                return self.output(200, query_activity(self.server.bridge, groups))
             if write and path == '/api/sessions':
                 body = self.read_json()
                 fields = (body.get('project'), body.get('title'), body.get('id'))

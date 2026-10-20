@@ -7,7 +7,10 @@ const project='local|fixture-project',access={source:'desktop',canSend:false,can
 const rows=Array.from({length:36},(_,i)=>({id:'11111111-1111-4111-8111-'+String(i+1).padStart(12,'0'),host:'local',title:'自动状态测试 '+(i+1),
   cwd:'/fixture',projectKey:project,projectName:'测试项目',projectId:'fixture-project',updatedAt:100-i,recency:100-i,access}));
 const observations=[],writes=[],errors=[];
-let coldMetadataReady=false;
+let coldMode='ready',coldStarted;
+const coldWaiters=new Set();
+function blockCold(){coldMode='wait';return new Promise(resolve=>coldStarted=resolve);}
+function releaseCold(){coldMode='ready';for(const resolve of coldWaiters)resolve();coldWaiters.clear();}
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
   if(p.startsWith('/api/')){
@@ -20,8 +23,11 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/api/activity'){
       let data='';for await(const part of req)data+=part;
       const hosts=JSON.parse(data).hosts;observations.push(hosts);
+      if(coldMode==='wait'&&hosts.local?.includes(rows[1].id)){
+        await new Promise(resolve=>{coldWaiters.add(resolve);coldStarted?.();});
+      }
       value={sessions:Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>id===rows[1].id?
-        {id,host,connected:false,activityConnected:coldMetadataReady,status:coldMetadataReady?'notLoaded':'unknown',turnId:id+'-turn',turnStatus:'completed'}:
+        {id,host,connected:false,activityConnected:coldMode!=='timeout',status:coldMode==='timeout'?'unknown':'notLoaded',activityError:coldMode==='timeout'?'timeout':null,turnId:id+'-turn',turnStatus:'completed'}:
         {id,host,connected:true,activityConnected:true,status:'active',turnId:id+'-turn',turnStatus:'inProgress'}))};
     }else if(p.endsWith('/reconnect')||p.endsWith('/send')||p.endsWith('/timeline')||p.endsWith('/updates'))writes.push(p);
     res.end(JSON.stringify(value));return;
@@ -40,13 +46,13 @@ const server=http.createServer(async(req,res)=>{
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     for(const width of [390,820,1280]){
-      coldMetadataReady=false;
+      const initialRead=blockCold();
       const context=await browser.newContext({viewport:{width,height:720}}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
-      await context.addInitScript(()=>{localStorage.setItem('list-mode','recent');localStorage.setItem('navigation:sidebar','open');});
+      await context.addInitScript(id=>{localStorage.setItem('list-mode','recent');localStorage.setItem('navigation:sidebar','open');localStorage.setItem('bridge-session-activity',JSON.stringify({['local|'+id]:{offline:true}}));},rows[1].id);
       const start=observations.length;await page.goto('http://127.0.0.1:'+server.address().port+'/');
-      await page.waitForFunction(()=>document.querySelectorAll('#sessions .session-indicator.running').length>0);
-      check(await page.evaluate(()=>currentId===null),'列表初次显示即自动取得运行状态，无需打开聊天 '+width);
+      await initialRead;
+      check(await page.evaluate(()=>currentId===null&&activityBusy),'列表初次显示即查询并等待状态，无需打开聊天 '+width);
       const expected=await page.evaluate(()=>{
         const root=$('sessions'),bounds=root.getBoundingClientRect();
         return [...root.querySelectorAll('.session')].filter(node=>{const r=node.getBoundingClientRect();return node.getClientRects().length&&r.bottom>bounds.top&&r.top<bounds.bottom;}).map(node=>node.dataset.id);
@@ -55,18 +61,18 @@ const server=http.createServer(async(req,res)=>{
       check(initial.length>0&&initial.length<rows.length&&initial.every(id=>expected.includes(id)),'首次只订阅可见条目 '+width);
       const coldSelector='#sessions .session[data-id="'+rows[1].id+'"]';
       check(await page.locator(coldSelector+' .session-indicator.unknown').count()===1,'未取得原生元数据前保留未知状态 '+width);
-      const retryStart=observations.length;
-      await page.waitForResponse(response=>{
-        if(!response.url().endsWith('/api/activity'))return false;
-        const ids=response.request().postDataJSON()?.hosts?.local;return ids?.length===1&&ids[0]===rows[1].id;
-      },{timeout:1500});
-      coldMetadataReady=true;const readyAt=Date.now();
+      const waitingCount=observations.length;await page.waitForTimeout(350);
+      check(observations.length===waitingCount&&await page.evaluate(()=>activityBusy),'桌面结果未返回时保持同一个请求，不发起补查 '+width);
+      releaseCold();const readyAt=Date.now();
       await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded',rows[1].id,{timeout:1500});
       check(await page.locator(coldSelector+' .session-indicator').count()===0&&await page.evaluate(()=>currentId===null),'未加载且已完成的聊天自动消除灰点，无需打开 '+width);
-      check(Date.now()-readyAt<1500,'后台状态就绪后及时消除灰点，不等待五秒普通轮询 '+width);
-      check(observations.slice(retryStart).some(hosts=>hosts.local?.length===1&&hosts.local[0]===rows[1].id),'快速补读只查询尚未确认的聊天 '+width);
+      check(Date.now()-readyAt<1500,'同一个请求拿到结果后立即消除灰点 '+width);
+      await page.waitForTimeout(250);const newGrayRead=blockCold();
       const grayAt=observations.length;
       await page.evaluate(id=>{sessionActivity.rows['local|'+id].offline=true;renderActivity();},rows[1].id);
+      await newGrayRead;await page.waitForTimeout(350);
+      check(observations.length===grayAt+1,'灰点新出现时立即查询，等待期间不重复发送 '+width);
+      releaseCold();
       await page.waitForFunction(id=>!sessionActivity.rows['local|'+id]?.offline,rows[1].id,{timeout:1500});
       check(observations.length>grayAt&&await page.locator(coldSelector+' .session-indicator').count()===0,'已有条目新出现灰点时立即触发查询 '+width);
       const scrollStart=observations.length;
@@ -81,14 +87,19 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForTimeout(250);const closed=observations.length;
       await page.evaluate(()=>refreshActivity());await page.waitForTimeout(150);
       check(observations.length===closed,'折叠项目后不再观察隐藏聊天 '+width);
-      coldMetadataReady=false;
+      const reopenedRead=blockCold();
+      await page.evaluate(id=>{sessionActivity.rows['local|'+id].offline=true;renderActivity();},rows[1].id);
       await page.locator('#sessions .project-group').evaluate(node=>{node.open=true;});
-      await page.waitForFunction(()=>!activityBusy&&document.querySelector('#sessions .session .session-indicator.running'));
-      await page.waitForTimeout(180);
+      await reopenedRead;
       check(observations.length>closed,'展开项目后自动恢复状态同步 '+width);
-      await page.waitForSelector(coldSelector+' .session-indicator.unknown');coldMetadataReady=true;
+      await page.waitForSelector(coldSelector+' .session-indicator.unknown');releaseCold();
       await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded'&&!sessionActivity.rows['local|'+id]?.offline,rows[1].id,{timeout:1500});
-      check(await page.locator(coldSelector+' .session-indicator').count()===0,'再次展开项目的灰点也及时补读消除 '+width);
+      check(await page.locator(coldSelector+' .session-indicator').count()===0,'再次展开项目也在同一查询响应中确认状态 '+width);
+      await page.waitForTimeout(250);coldMode='timeout';await page.evaluate(()=>refreshActivity());
+      check(await page.locator(coldSelector+' .session-indicator.unknown').getAttribute('title')==='读取运行状态超时','超时响应保持灰点并说明原因 '+width);
+      const timeoutAt=observations.length;await page.waitForTimeout(450);
+      check(observations.slice(timeoutAt).every(hosts=>hosts.local?.length!==1),'超时后不再对未知聊天快速轮询 '+width);
+      coldMode='ready';await page.evaluate(()=>refreshActivity());
       // Exercise the chat layout without opening or executing a fixture chat.
       await page.evaluate(()=>$('app').classList.add('chat-open'));await page.waitForTimeout(200);
       const beforeHide=observations.length;
@@ -104,5 +115,5 @@ const server=http.createServer(async(req,res)=>{
     check(writes.length===0,'自动状态同步没有打开聊天、发送消息或读取聊天正文');
     check(errors.length===0,'浏览器无脚本异常：'+errors.join('; '));
     console.log(JSON.stringify({passed:checks.length,checks},null,2));
-  }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
+  }finally{releaseCold();if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

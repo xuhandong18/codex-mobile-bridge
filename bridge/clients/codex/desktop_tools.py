@@ -94,25 +94,32 @@ class DesktopTools:
         self.reader.join(timeout=2)
 
     @classmethod
-    def connect_profile(cls, bridge):
+    def connect_profile(cls, bridge, *, timeout=None):
+        deadline = time.monotonic()+timeout if timeout is not None else None
         from bridge.clients.desktop_app import DesktopApp
         projects = {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'}
         contexts = bridge.store.list(limit=1, source='desktop')
         if not projects or not contexts:
             raise ToolError('No verified desktop profile context')
         executable = bridge.accounts.index.get('desktopExecutable') or DesktopApp.scan(bridge.catalog_reader.executable, bridge.codex_home)
-        return cls.connect(executable, contexts[0]['id'], projects)
+        return cls.connect(executable, contexts[0]['id'], projects,
+                           **({'timeout': max(0, deadline-time.monotonic())} if deadline is not None else {}))
 
     @classmethod
-    def connect(cls, executable, context_id, project_ids):
+    def connect(cls, executable, context_id, project_ids, *, timeout=None):
         from bridge.platforms.windows.tool_pipe import endpoints, verify_server
+        deadline = time.monotonic()+timeout if timeout is not None else None
         for endpoint in endpoints():
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             client, stream = None, None
             try:
-                stream = connect_stream(endpoint, timeout=.3)
+                stream = connect_stream(endpoint, timeout=min(.3, max(.001, deadline-time.monotonic())) if deadline is not None else .3)
                 verify_server(stream, executable)
                 client = cls(stream, context_id)
-                native = client.call('list_projects', {})
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise ToolError('读取桌面状态超时')
+                native = client.call('list_projects', {}, **({'timeout': max(.001, deadline-time.monotonic())} if deadline is not None else {}))
                 if not project_ids.intersection(p.get('projectId') for p in native.get('projects', [])):
                     raise ToolError('桌面项目数据与当前 Codex 配置不一致')
                 return client

@@ -48,7 +48,9 @@ npm run test:updater
 
 导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
-灰点首次显示时主动预约读取；返回未知后，250 毫秒开始补查，逐步退避至每秒一次。每条持续未知的可见聊天最多连续查询八次，之后沿用五秒普通轮询；状态恢复后结束快速补查。补查仅覆盖仍可见、仍未知的聊天，不因重绘而反复重置预算，也不与正在执行的读取并发。Node 回归覆盖自动补查、成功停止、持续失败退避、可见范围变化、并发合并及 HTTP 失败；浏览器驱动实际验证首次灰点、已有条目新出现灰点与重新展开项目后的及时查询，并断言合成后台状态就绪后 1.5 秒内更新页面。该时限用于发现多等一轮五秒轮询的回归，不代表真实客户端或网络延迟的承诺。
+灰点首次显示时主动预约读取；`POST /api/activity` 在同一个请求内等待当前桌面状态，全部主机和聊天共享五秒截止时间。并发的相同只读查询合并等待；Windows 原生补读重新查询，不用十五秒内的旧快照直接返回。超时响应使用 `timedOut` 和条目的 `activityError: timeout` 标记，灰点说明为“读取运行状态超时”。前端不再为未知状态安排短间隔补查，等待中的请求不被普通五秒更新重复排队，网络请求另设十秒保护。
+
+后端定向回归为 `test_activity_query.py`、`test_desktop_metadata_activity.py`、`test_subagent_activity.py` 和 `test_uploads_activity.py`，覆盖单请求等待结果、查询去重、共同截止时间、超时/关闭/晚到结果、子代理初始快照、实时 owner 优先及只读边界。Node 回归覆盖阻塞请求完成、超时保留灰点、网络中断与视口变化后的合并刷新；浏览器驱动在三种尺寸实际阻塞合成响应，检查等待期间没有重复补查、同一响应更新页面，以及超时提示。上述时限不承诺真实客户端或网络必定在五秒内成功。
 
 完成已读同步运行 `python -B scripts/test-backend.py --source-only -p test_chat_read_state.py` 与 `node --test tests/chat-read-state.test.cjs tests/attachments-activity.test.cjs tests/desktop-sessions-ui.test.cjs tests/deepseek-personal.test.mjs`，检查 Codex/DeepSeek 前台完成、背景及文件页隔离、轮次变化、原生身份与主机核对、CSRF 和持久化未知回执；Harness 用例还实际运行客户端插件工厂并验证只清除目标蓝点。第 6 版接入升级与组件校验由 `test_deepseek_migration.py` 覆盖。以上均使用合成数据，不能代替已安装客户端的实机联调。
 
@@ -56,7 +58,7 @@ npm run test:updater
 
 同一浏览器驱动还验证历史提问同时提供原地重发和新建分支，运行中的会话禁用历史原地重发；并实际执行 `runQuestionReadingScrollTests()`，验证最后为问题框时，用户只向上滚动 50 像素或在布局恢复帧内滚动，也会立即停止跟随；连续问题刷新保持阅读锚点，仅主动返回最新后才恢复跟随。`test_message_actions.py` 和 `test_message_index.py` 覆盖历史原地编辑沿用原 owner、目录消息的原生历史加载及加载后重验、活动轮次阻止、过期版本和未知写入不重放；`message-actions-ui.test.cjs` 验证历史移除提示和成功后重建同一聊天的时间线与目录。
 
-未加载的 Desktop 聊天状态补读由 `test_desktop_metadata_activity.py`、`test_tool_pipe.py` 和 `test_uploads_activity.py` 覆盖，验证只读方法白名单、原生身份、缓存过期、失败回退、可见范围及不提升为可写连接。上述浏览器驱动同时验证“未知灰点 → 原生确认未加载/已完成 → 灰点消失”的自动轮询过程。
+未加载的 Desktop 聊天状态补读由 `test_desktop_metadata_activity.py`、`test_tool_pipe.py` 和 `test_uploads_activity.py` 覆盖，验证只读方法白名单、原生身份、缓存过期、失败回退、可见范围及不提升为可写连接。上述浏览器驱动同时验证“未知灰点 → 同一请求等待原生确认未加载/已完成 → 灰点消失”的查询过程。
 
 原桌面重建状态订阅后的完成同步由 `test_codex_ipc_following.py` 与 `test_bridge.py` 覆盖：经真实长度前缀帧恢复仍有效的订阅，检查聊天/主机/owner、取消与断连边界，并用隔离命名管道复现“桌面空闲、网关仍运行中”后确认状态变为空闲、下一条普通消息只发送一次且沿用原 owner。夹具不连接真实聊天。
 

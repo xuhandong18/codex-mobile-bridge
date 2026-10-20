@@ -104,45 +104,38 @@ function renderActivity(){let unknownAppeared=false;for(const button of $('sessi
   previous?.remove();
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
 }if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));if(unknownAppeared&&!activityBusy)scheduleActivityRefresh();}
-async function refreshActivity(retryKeys=null){
-  clearTimeout(activityRetryTimer);activityRetryTimer=null;
-  if($('app').hidden||document.hidden||clientNavigation.provider!=='codex'){activityRetryAttempts.clear();return;}
+async function refreshActivity(){
+  if($('app').hidden||document.hidden||clientNavigation.provider!=='codex')return;
   if(activityBusy){activityRefreshPending=true;return;}
-  const root=$('sessions');if(!root.clientWidth||!root.clientHeight){activityRetryAttempts.clear();return;}
+  const root=$('sessions');if(!root.clientWidth||!root.clientHeight)return;
   const bounds=root.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(window.innerHeight,bounds.bottom),left=Math.max(0,bounds.left),right=Math.min(window.innerWidth,bounds.right);
-  if(bottom<=top||right<=left){activityRetryAttempts.clear();return;}
-  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),visible=new Set(),requested=new Set(),hosts={};
+  if(bottom<=top||right<=left)return;
+  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),hosts={};
   for(const button of root.querySelectorAll('.session')){
     if(button.closest('details:not([open]),[hidden]')||!button.getClientRects().length)continue;
     const rect=button.getBoundingClientRect(),{id,host}=button.dataset,key=chatKey(id,host);
     if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key))continue;
-    visible.add(key);if(retryKeys instanceof Set&&!retryKeys.has(key))continue;requested.add(key);
     const ids=hosts[host]??=[];if(!ids.includes(id))ids.push(id);
   }
-  for(const key of activityRetryAttempts.keys())if(!visible.has(key))activityRetryAttempts.delete(key);
   if(!Object.keys(hosts).length)return;activityBusy=true;
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
   try{
-    const result=await api('/api/activity',{hosts});
+    const result=await api('/api/activity',{hosts},controller.signal);
     if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'){
       sessionActivity.update(result.sessions,visibleChat(),{sync:false});
-      const retry=new Set();let delay=1000;
-      for(const row of result.sessions){
-        if(row.recency)bumpRecency(row.id,row.host,row.recency);
-        const key=chatKey(row.id,row.host);if(!requested.has(key))continue;
-        if((row.activityConnected??row.connected)&&row.status!=='unknown'){activityRetryAttempts.delete(key);continue;}
-        // The first response starts a background read; collect it promptly, with a bounded backoff for unavailable owners.
-        const attempt=Math.min(8,(activityRetryAttempts.get(key)||0)+1);activityRetryAttempts.set(key,attempt);
-        if(attempt<8){retry.add(key);delay=Math.min(delay,250*2**(attempt-1));}
-      }
+      for(const row of result.sessions)if(row.recency)bumpRecency(row.id,row.host,row.recency);
       renderActivity();
-      if(retry.size)activityRetryTimer=setTimeout(()=>refreshActivity(retry),delay);
     }
-  }catch{}finally{activityBusy=false;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh();}}
+  }catch{
+    if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'){
+      const rows=Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>({id,host,connected:false,status:'unknown',activityError:controller.signal.aborted?'timeout':'unavailable'})));
+      sessionActivity.update(rows,visibleChat(),{sync:false});renderActivity();
+    }
+  }finally{clearTimeout(timeout);activityBusy=false;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh();}}
 }
-let activityRefreshTimer=null,activityRefreshPending=false,activityRetryTimer=null;
-const activityRetryAttempts=new Map();
-function scheduleActivityRefresh(){clearTimeout(activityRefreshTimer);clearTimeout(activityRetryTimer);activityRetryTimer=null;activityRefreshTimer=setTimeout(refreshActivity,100);}
-setInterval(refreshActivity,5000);
+let activityRefreshTimer=null,activityRefreshPending=false;
+function scheduleActivityRefresh(){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(refreshActivity,100);}
+setInterval(()=>{if(!activityBusy)refreshActivity();},5000);
 window.addEventListener('focus',refreshActivity);
 window.addEventListener('resize',scheduleActivityRefresh);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshActivity();});

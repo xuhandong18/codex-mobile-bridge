@@ -8,7 +8,7 @@ class SessionActivity {
       const key=this.id(row),previous=this.rows[key],running=row.status==='active'||row.runningSubagents>0;
       const terminal=!running&&['completed','failed','interrupted'].includes(row.turnStatus);
       if(!(row.activityConnected??row.connected)||row.status==='unknown'){
-        this.rows[key]={...previous,offline:true};continue;
+        this.rows[key]={...previous,offline:true,offlineReason:row.activityError||null};continue;
       }
       const token=terminal&&row.turnId?row.turnId+':'+row.turnStatus:previous?.token||null;
       const pending=token&&previous&&(previous.turnKnown||previous.token||previous.status==='active')&&(token!==previous.token||previous.pending||previous.status==='active')?token:null;
@@ -28,7 +28,7 @@ class SessionActivity {
   indicator(key){
     const row=this.rows[key];if(!row)return null;
     if(row.manualUnread)return {kind:'completed',label:'未读'};
-    if(row.offline)return {kind:'unknown',label:'运行状态暂不可用'};
+    if(row.offline)return {kind:'unknown',label:row.offlineReason==='timeout'?'读取运行状态超时':'运行状态暂不可用'};
     if(row.status==='active')return {kind:'running',label:row.runningSubagents?'子代理运行中':'运行中'};
     if(row.pending)return {kind:row.turnStatus==='completed'?'completed':'ended',label:row.turnStatus==='completed'?'已完成，未查看':row.turnStatus==='failed'?'运行失败，未查看':'已停止，未查看'};
     return null;

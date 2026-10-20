@@ -1,5 +1,6 @@
 import copy
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -161,3 +162,42 @@ class SubagentActivityTests(unittest.TestCase):
         self.assertEqual(self.refresh()['parent'],{'runningSubagents':0,'subagentsKnown':True})
         ipc.publish('child',revision=3,conversationState={'id':'child','threadRuntimeStatus':None})
         self.assertEqual(self.refresh()['parent'],{'runningSubagents':0,'subagentsKnown':False})
+
+    def test_wait_returns_the_initial_descendant_snapshot_without_a_second_metadata_request(self):
+        def follow(ipc, identifier, owner, enabled=True, host='local'):
+            ipc.calls.append(('follow', host, identifier, owner, enabled))
+        with patch.object(AgentIPC, 'follow', follow):
+            self.monitor.read(['parent'], force=True)
+            self.monitor.worker.join(1)
+            values = []
+            waiter = threading.Thread(target=lambda: values.append(self.monitor.wait(['parent'], time.monotonic()+.8)))
+            waiter.start()
+            try:
+                self.assertTrue(waiter.is_alive())
+                for child in ('child', 'nested'):
+                    AgentIPC.instances[0].publish(child)
+                waiter.join(1)
+                self.assertEqual(values[0]['parent'], {'runningSubagents': 1, 'subagentsKnown': True})
+                self.store.activity_tree.assert_called_once_with(['parent'])
+            finally:
+                self.monitor.close();waiter.join(1)
+
+    def test_slow_metadata_has_a_bounded_wait_and_does_not_return_cached_completion(self):
+        self.refresh()
+        entered, release = threading.Event(), threading.Event()
+        def read(ids):
+            entered.set();release.wait(1);return {'parent': {'agents': [], 'limited': False}}
+        self.store.activity_tree.side_effect = read
+        self.monitor.read(['parent'], force=True)
+        self.assertTrue(entered.wait(.3));started=time.monotonic()
+        try:
+            self.assertEqual(self.monitor.wait(['parent'], started+.03)['parent'], {'runningSubagents': 0, 'subagentsKnown': False})
+            self.assertLess(time.monotonic()-started, .3)
+        finally:
+            release.set();self.monitor.worker.join(1)
+
+    def test_explicit_query_rechecks_an_absent_child_without_waiting_for_retry_cooldown(self):
+        del AgentIPC.states['child'];self.refresh()
+        AgentIPC.states['child'] = agent_state('child')
+        self.monitor.read(['parent'], force=True)
+        self.assertEqual(self.monitor.wait(['parent'], time.monotonic()+.8)['parent']['runningSubagents'], 1)

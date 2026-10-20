@@ -21,7 +21,7 @@ from bridge.features.terminals.manager import TerminalManager
 from bridge.features.sessions.side_chat import SideChats
 from bridge.features.sessions.auto_titles import AutoTitles
 from bridge.clients.codex.title_runtime import generate_title, access_stamp, TitleError
-from bridge.features.sessions.activity import SubagentActivity
+from bridge.features.sessions.activity import ActivityQueries, SubagentActivity
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.activity import DesktopActivity
@@ -152,6 +152,7 @@ class Bridge:
         self.host_errors = []
         self.listed = set()
         self.activity_following = False
+        self.activity_queries = ActivityQueries(self._activity_query)
         self.notification_cursor = 0
         self.notification_client_id = None
         self.notification_dirty = set()
@@ -1072,9 +1073,38 @@ class Bridge:
         page = rows[offset:offset + limit]
         return (page, sorted({source for _, _, available in results for source in available})) if include_sources else page
 
-    def activity(self, identifiers):
+    def activity(self, identifiers, timeout=ActivityQueries.TIMEOUT):
         if not isinstance(identifiers, list) or len(identifiers) > 500 or any(not isinstance(v, str) for v in identifiers):
             raise ValueError('会话状态请求无效')
+        with self.lock:
+            selected = [sid for sid in dict.fromkeys(identifiers) if sid in self.listed]
+        if not selected:
+            return []
+        try:
+            return [dict(row) for row in self.activity_queries.query(selected, timeout)]
+        except TimeoutError:
+            return self.activity_timeout_rows(selected)
+
+    def activity_timeout_rows(self, identifiers):
+        with self.lock:
+            sessions = [(sid, self.live.get(sid)) for sid in dict.fromkeys(identifiers) if sid in self.listed]
+        rows = []
+        for sid, session in sessions:
+            if session is not None:
+                with session.condition:
+                    running = session.connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active'
+            else:
+                running = False
+            row = {'id': sid, 'host': self.host, 'connected': bool(session and session.connected),
+                   'activityConnected': bool(running), 'status': 'active' if running else 'unknown',
+                   'parentStatus': 'active' if running else 'unknown', 'runningSubagents': 0,
+                   'subagentsKnown': False, 'turnId': None, 'turnStatus': None}
+            if not running:
+                row['activityError'] = 'timeout'
+            rows.append(row)
+        return rows
+
+    def _activity_query(self, identifiers, deadline):
         with self.lock:
             sessions = []
             for identifier in dict.fromkeys(identifiers):
@@ -1088,27 +1118,36 @@ class Bridge:
                     session.access = self._access(session.origin, session)
                 session.touched = time.monotonic()
                 sessions.append(session)
-            pending = [s for s in sessions if not s.connected and time.monotonic() >= s.retry_at]
+            pending = [s for s in sessions if not s.connected]
             if pending and not self.activity_following:
                 self.activity_following = True
+                for session in pending:
+                    session.error = None
                 def follow():
                     try:
                         for session in pending:
-                            if self.closed.is_set(): break
+                            if self.closed.is_set() or time.monotonic() >= deadline: break
                             session.retry_at = time.monotonic() + 15
                             self._attach(session, timeout=0)
                     finally:
                         with self.lock: self.activity_following = False
                 threading.Thread(target=follow, daemon=True).start()
+        # Start independent passive reads before waiting. Each stage shares the
+        # caller's deadline; no second HTTP request is needed to collect results.
+        self.subagent_activity.read([session.id for session in sessions], force=True)
+        native_status = self.desktop_activity.read([s.id for s in sessions if not s.connected and s.origin == 'desktop'],
+                                                   timeout=max(0, deadline-time.monotonic()))
         try:
             recencies = self.store.recencies([s.id for s in sessions])
         except (OSError, ValueError, StoreUnavailable, RemoteUnavailable):
             recencies = {}
         rows = []
-        descendants = self.subagent_activity.read([session.id for session in sessions])
-        native_status = self.desktop_activity.read([s.id for s in sessions if not s.connected and s.origin == 'desktop'])
+        descendants = self.subagent_activity.wait([session.id for session in sessions], deadline)
         for session in sessions:
             with session.condition:
+                if not session.connected and session.id not in native_status and not session.error:
+                    session.condition.wait_for(lambda: session.connected or session.error or self.closed.is_set(),
+                                               timeout=max(0, deadline-time.monotonic()))
                 state = session.state or {}
                 turns = ordered_turns(state)
                 last = next((t for t in reversed(turns) if t.get('turnId')), {})
@@ -1124,6 +1163,8 @@ class Bridge:
                              'status': status, 'parentStatus': parent_status,
                              'activityConnected': session.connected or native is not None or bool(activity['runningSubagents']), **activity,
                              'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
+                if status == 'unknown':
+                    rows[-1]['activityError'] = 'timeout' if time.monotonic() >= deadline else 'unavailable'
         return rows
 
     def notification_candidates(self):
@@ -2917,6 +2958,7 @@ class Bridge:
         return self._call(session, mapping[method], payload)
 
     def close(self):
+        self.activity_queries.close()
         self.closed.set()
         self.auto_titles.close()
         self.subagent_activity.close()

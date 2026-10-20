@@ -1,11 +1,102 @@
 """Passive descendant activity for list display, separate from writable sessions."""
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.remote import RemoteUnavailable
 from bridge.features.sessions.model import apply_patches, ordered_turns, pending_requests
 from bridge.features.sessions.store import StoreUnavailable
+
+
+class ActivityQueries:
+    """One passive query per host at a time; identical callers share its result."""
+    TIMEOUT = 5
+
+    def __init__(self, read):
+        self.read = read
+        self.lock = threading.Lock()
+        self.pending, self.queue = {}, []
+        self.worker = None
+        self.closed = False
+
+    def query(self, identifiers, timeout=TIMEOUT):
+        deadline = time.monotonic()+max(0, timeout)
+        key = tuple(sorted(set(identifiers)))
+        with self.lock:
+            if self.closed or time.monotonic() >= deadline:
+                raise TimeoutError('Activity query timed out')
+            future = self.pending.get(key)
+            if future is not None and future.done():
+                future = None
+            if future is None:
+                if len(self.pending) >= 64:
+                    raise TimeoutError('Activity reader is busy')
+                future = self.pending[key] = Future()
+                self.queue.append((key, deadline, future))
+                if self.worker is None:
+                    self.worker = threading.Thread(target=self._run, daemon=True)
+                    self.worker.start()
+        return future.result(timeout=max(0, deadline-time.monotonic()))
+
+    def _run(self):
+        while True:
+            with self.lock:
+                if self.closed or not self.queue:
+                    self.worker = None
+                    return
+                key, deadline, future = self.queue.pop(0)
+            try:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Activity query timed out')
+                value = self.read(list(key), deadline)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Activity query timed out')
+            except Exception as exc:
+                with self.lock:
+                    if not future.done():
+                        future.set_exception(exc)
+            else:
+                with self.lock:
+                    if not future.done():
+                        future.set_result(value)
+            finally:
+                with self.lock:
+                    if self.pending.get(key) is future:
+                        del self.pending[key]
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            for future in self.pending.values():
+                if not future.done():
+                    future.set_exception(TimeoutError('Activity reader closed'))
+            self.pending.clear()
+            self.queue.clear()
+
+
+def query_activity(bridge, groups):
+    """Read the selected hosts in parallel within one HTTP request deadline."""
+    deadline = time.monotonic()+ActivityQueries.TIMEOUT
+    sources = [(bridge.for_host(host), identifiers) for host, identifiers in groups.items()]
+    rows = []
+    if sources:
+        def read(source, identifiers):
+            remaining = deadline-time.monotonic()
+            return source.activity(identifiers, remaining) if remaining > 0 else source.activity_timeout_rows(identifiers)
+        executor = ThreadPoolExecutor(max_workers=min(4, len(sources)))
+        reads = [executor.submit(read, source, identifiers) for source, identifiers in sources]
+        try:
+            for (source, identifiers), read in zip(sources, reads):
+                try:
+                    rows.extend(read.result(timeout=max(0, deadline-time.monotonic())))
+                except TimeoutError:
+                    rows.extend(source.activity_timeout_rows(identifiers))
+        finally:
+            for read in reads:
+                read.cancel()
+            executor.shutdown(wait=False)
+    return {'sessions': rows, 'timedOut': any(row.get('activityError') == 'timeout' for row in rows)}
 
 
 class SubagentActivity:
@@ -14,17 +105,23 @@ class SubagentActivity:
     def __init__(self, store, endpoint, host):
         self.store, self.endpoint, self.host = store, endpoint, host
         self.lock = threading.RLock()
+        self.condition = threading.Condition(self.lock)
         self.trees, self.records = {}, {}
         self.ipc = None
         self.worker = None
         self.closed = False
 
-    def read(self, identifiers):
+    def read(self, identifiers, *, force=False):
         identifiers = list(dict.fromkeys(identifiers))
         with self.lock:
             if not self.closed and identifiers and (self.worker is None or not self.worker.is_alive()):
-                self.worker = threading.Thread(target=self._refresh, args=(identifiers,), daemon=True)
+                self.worker_identifiers = set(identifiers)
+                self.worker = threading.Thread(target=self._refresh, args=(identifiers,), kwargs={'force': force}, daemon=True)
                 self.worker.start()
+            return self._summary(identifiers)
+
+    def _summary(self, identifiers):
+        with self.lock:
             result = {}
             for identifier in identifiers:
                 tree = self.trees.get(identifier)
@@ -49,7 +146,27 @@ class SubagentActivity:
                 result[identifier] = {'runningSubagents': running, 'subagentsKnown': not unknown}
             return result
 
-    def _refresh(self, identifiers):
+    def wait(self, identifiers, deadline):
+        for attempt in range(2):
+            with self.lock:
+                worker = self.worker
+                covered = set(identifiers) <= getattr(self, 'worker_identifiers', set())
+            if worker is not None:
+                worker.join(max(0, deadline-time.monotonic()))
+                if worker.is_alive():
+                    return {sid: {'runningSubagents': 0, 'subagentsKnown': False} for sid in identifiers}
+            if covered or attempt or time.monotonic() >= deadline:
+                break
+            self.read(identifiers, force=True)
+        def pending():
+            return any(record.get('owner') and not record.get('connected') for sid in identifiers
+                       for child in self.trees.get(sid, {}).get('agents', [])
+                       for record in [self.records.get(child, {})])
+        with self.condition:
+            self.condition.wait_for(lambda: self.closed or not pending(), timeout=max(0, deadline-time.monotonic()))
+            return self._summary(identifiers)
+
+    def _refresh(self, identifiers, *, force=False):
         try:
             trees = self.store.activity_tree(identifiers)
         except (OSError, ValueError, KeyError, StoreUnavailable, RemoteUnavailable):
@@ -73,7 +190,7 @@ class SubagentActivity:
                         self.records[child] = {'touched': now, 'retry': 0}
                     record = self.records[child]
                     record['touched'] = now
-                    if not record.get('connected') and now >= record['retry']:
+                    if not record.get('connected') and (force or now >= record['retry']):
                         record['retry'] = now + 15
                         pending.append(child)
             if pending and self.ipc is None:
@@ -100,6 +217,11 @@ class SubagentActivity:
                         record.update(connected=False, absent=str(exc) == 'no-client-found', owner=None, revision=None)
 
     def _event(self, message):
+        with self.condition:
+            self._apply_event(message)
+            self.condition.notify_all()
+
+    def _apply_event(self, message):
         params = message.get('params', {})
         with self.lock:
             if self.closed:
@@ -139,6 +261,7 @@ class SubagentActivity:
         with self.lock:
             for record in self.records.values():
                 record.update(connected=False, absent=False, retry=0, owner=None, revision=None)
+            self.condition.notify_all()
 
     def prune(self):
         with self.lock:
@@ -156,6 +279,7 @@ class SubagentActivity:
     def close(self):
         with self.lock:
             self.closed = True
+            self.condition.notify_all()
             ipc, worker = self.ipc, self.worker
         if ipc:
             ipc.close()

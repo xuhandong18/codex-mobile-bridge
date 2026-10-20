@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -96,3 +97,52 @@ class DesktopMetadataActivityTests(unittest.TestCase):
         for method in ('thread/resume', 'turn/start', 'create_project', 'send_message_to_thread'):
             with self.subTest(method=method), self.assertRaises(ToolError):
                 client.call(method, {})
+
+    def test_waiting_read_returns_the_result_of_this_query_without_a_second_request(self):
+        entered, release = threading.Event(), threading.Event()
+        def read(*args, **kwargs):
+            entered.set()
+            release.wait(1)
+            return metadata()
+        self.native.call.side_effect = read
+        result = []
+        caller = threading.Thread(target=lambda: result.append(self.reader.read(['cold'], timeout=.8)))
+        caller.start()
+        try:
+            self.assertTrue(entered.wait(.3))
+            self.assertTrue(caller.is_alive(), 'The request must wait for the desktop result')
+            release.set();caller.join(1)
+            self.assertEqual(result[0]['cold']['status'], 'notLoaded')
+            self.native.call.assert_called_once()
+        finally:
+            release.set();caller.join(1)
+
+    def test_waiting_read_fetches_fresh_metadata_even_inside_the_old_cache_lifetime(self):
+        self.refresh()
+        self.native.call.return_value = metadata(status='active', result='inProgress')
+        result = self.reader.read(['cold'], timeout=.5)
+        self.assertEqual(result['cold']['status'], 'active')
+        self.assertEqual(self.native.call.call_count, 2)
+
+    def test_waiting_read_has_one_deadline_and_does_not_return_stale_status_after_timeout(self):
+        self.refresh()
+        entered, release = threading.Event(), threading.Event()
+        def read(*args, **kwargs):
+            entered.set();release.wait(1);return metadata(status='active')
+        self.native.call.side_effect = read
+        started = time.monotonic()
+        try:
+            self.assertEqual(self.reader.read(['cold'], timeout=.04), {})
+            self.assertTrue(entered.is_set())
+            self.assertLess(time.monotonic()-started, .3)
+        finally:
+            release.set();self.reader.worker.join(1)
+        self.assertNotIn('cold', self.reader.snapshots, 'A reply after the query deadline cannot become a fresh snapshot')
+
+    def test_account_operation_gate_is_part_of_the_query_deadline(self):
+        gate = threading.RLock()
+        self.reader.bridge.accounts = SimpleNamespace(gate=gate)
+        with gate:
+            self.assertEqual(self.reader.read(['cold'], timeout=.03), {})
+        self.reader.worker.join(1)
+        self.connect.assert_not_called()
