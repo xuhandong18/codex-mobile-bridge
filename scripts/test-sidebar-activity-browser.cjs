@@ -55,9 +55,20 @@ const server=http.createServer(async(req,res)=>{
       check(initial.length>0&&initial.length<rows.length&&initial.every(id=>expected.includes(id)),'首次只订阅可见条目 '+width);
       const coldSelector='#sessions .session[data-id="'+rows[1].id+'"]';
       check(await page.locator(coldSelector+' .session-indicator.unknown').count()===1,'未取得原生元数据前保留未知状态 '+width);
-      coldMetadataReady=true;
-      await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded',rows[1].id);
+      const retryStart=observations.length;
+      await page.waitForResponse(response=>{
+        if(!response.url().endsWith('/api/activity'))return false;
+        const ids=response.request().postDataJSON()?.hosts?.local;return ids?.length===1&&ids[0]===rows[1].id;
+      },{timeout:1500});
+      coldMetadataReady=true;const readyAt=Date.now();
+      await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded',rows[1].id,{timeout:1500});
       check(await page.locator(coldSelector+' .session-indicator').count()===0&&await page.evaluate(()=>currentId===null),'未加载且已完成的聊天自动消除灰点，无需打开 '+width);
+      check(Date.now()-readyAt<1500,'后台状态就绪后及时消除灰点，不等待五秒普通轮询 '+width);
+      check(observations.slice(retryStart).some(hosts=>hosts.local?.length===1&&hosts.local[0]===rows[1].id),'快速补读只查询尚未确认的聊天 '+width);
+      const grayAt=observations.length;
+      await page.evaluate(id=>{sessionActivity.rows['local|'+id].offline=true;renderActivity();},rows[1].id);
+      await page.waitForFunction(id=>!sessionActivity.rows['local|'+id]?.offline,rows[1].id,{timeout:1500});
+      check(observations.length>grayAt&&await page.locator(coldSelector+' .session-indicator').count()===0,'已有条目新出现灰点时立即触发查询 '+width);
       const scrollStart=observations.length;
       await page.locator('#sessions').evaluate(node=>{node.scrollTop=node.scrollHeight;});
       await page.waitForFunction(id=>!!document.querySelector('#sessions .session[data-id="'+id+'"] .session-indicator.running'),rows.at(-1).id);
@@ -70,10 +81,14 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForTimeout(250);const closed=observations.length;
       await page.evaluate(()=>refreshActivity());await page.waitForTimeout(150);
       check(observations.length===closed,'折叠项目后不再观察隐藏聊天 '+width);
+      coldMetadataReady=false;
       await page.locator('#sessions .project-group').evaluate(node=>{node.open=true;});
       await page.waitForFunction(()=>!activityBusy&&document.querySelector('#sessions .session .session-indicator.running'));
       await page.waitForTimeout(180);
       check(observations.length>closed,'展开项目后自动恢复状态同步 '+width);
+      await page.waitForSelector(coldSelector+' .session-indicator.unknown');coldMetadataReady=true;
+      await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded'&&!sessionActivity.rows['local|'+id]?.offline,rows[1].id,{timeout:1500});
+      check(await page.locator(coldSelector+' .session-indicator').count()===0,'再次展开项目的灰点也及时补读消除 '+width);
       // Exercise the chat layout without opening or executing a fixture chat.
       await page.evaluate(()=>$('app').classList.add('chat-open'));await page.waitForTimeout(200);
       const beforeHide=observations.length;
