@@ -12,6 +12,7 @@
 - 草稿模块随既有 `/app.js` 一起提供，不要求正在运行的网关新增静态资源路由。旧网关尚未加载草稿接口时，仍显示提问框、保留本机输入并提示尚未同步；跨设备保存需要网关进程加载新版后端。独立脚本与组合脚本重复加载时复用同一模块。
 - 保存以单个问题为单位。同一问题的并发修改带版本核验，过期设备不能覆盖新答案；发生冲突时保留本机输入，提示用户核对并重新编辑。
 - 网络失败时提示“答案暂未同步”，保留本机草稿。保存结果未知时通过读取核对，不自动重放已经派发的保存；再次主动编辑会发起新的保存。
+- 点击提交后的送达结果与草稿保存分别判断：网关返回 `unknown` 或 `ignored` 时，问题卡片明确提示“尚未确认”或“未发送”，保留填写内容，不提示发送成功。已接受回复但问题卡片超过 15 秒仍未消失时，改为提示桌面尚未确认；该提示不会自动重发回复，也不据等待时间认定发送失败。
 - 退出登录或失去认证时清除本机缓存。网关草稿继续供其他已登录设备使用；过期请求不会因此被重新提交。
 
 草稿最多保存 4096 个问题，每个问题的答案上限为 64 KiB；90 天没有保存更新的网关记录不再返回，并在后续保存时清理。本机仍保留的输入会提示尚未同步。问题身份使用客户端提供的轮次、工具调用、请求 ID（如有）和问题描述，问题卡片消失后不会再显示其草稿。
@@ -20,4 +21,4 @@
 
 共享浏览器逻辑位于 `web/features/chat/answer-drafts.js`；持久化及版本核验位于 `bridge/features/sessions/answer_drafts.py`。`/api/answer-drafts` 仅处理网关草稿元数据，读取要求登录，写入沿用来源、登录和 CSRF 核验。共享中继只开放该固定路径的 GET/POST。
 
-后端回归入口为 `python -B scripts/test-backend.py --source-only -p test_answer_drafts.py`。真实 DOM 回归入口为 `node scripts/test-answer-drafts-browser.cjs`，需要已有的 Playwright 与 Chromium，可通过 `NODE_PATH` 和 `BROWSER_EXECUTABLE` 指定现有测试环境。夹具按真实页面和资源清单加载草稿模块，并模拟旧网关缺少新增静态路由与保存接口、独立脚本重复加载。其他检查使用独立手机和平板浏览器上下文及合成问题，不操作真实聊天或模型。
+后端回归入口为 `python -B scripts/test-backend.py --source-only -p test_answer_drafts.py`。提交结果回归为 `node --test tests/approval-responses.test.cjs`。真实 DOM 回归入口为 `node scripts/test-answer-drafts-browser.cjs`，需要已有的 Playwright 与 Chromium，可通过 `NODE_PATH` 和 `BROWSER_EXECUTABLE` 指定现有测试环境。夹具按真实页面和资源清单加载草稿模块，并模拟旧网关缺少新增静态路由与保存接口、独立脚本重复加载；在手机、平板和电脑宽度实际提交六个合成答案，检查未知、已忽略、已接受及确认超时状态。其他检查使用独立手机和平板浏览器上下文及合成问题，不操作真实聊天或模型。

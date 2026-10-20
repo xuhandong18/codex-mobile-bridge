@@ -29,7 +29,7 @@ function showDesktop(){
   view.renderRequests([{id:7,tool:'AskUserQuestion',needsInput:true,input:{questions:[{id:'many',question:'选择多项',multiSelect:true,options:[{label:'甲'},{label:'乙'}]},{id:'single',question:'选择一项',options:[{label:'一'},{label:'二'}]}]}}]);
 }
 `;
-const drafts=new Map(),writeLog=[];let writes=0,responses=0,failWrite=false,loseReceipt=false;
+const drafts=new Map(),writeLog=[];let writes=0,responses=0,failWrite=false,loseReceipt=false,responseResult={};
 function cutReceipt(res){res.writeHead(200,{'Content-Length':1000});res.flushHeaders();res.write('{');setTimeout(()=>res.destroy(),10);}
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1');res.setHeader('Cache-Control','no-store');
@@ -43,7 +43,7 @@ const server=http.createServer(async(req,res)=>{
     if((old?.version||0)!==body.version){res.statusCode=409;return res.end(JSON.stringify({error:'conflict',field:old}));}
     fields[body.field]={value:body.value,version:(old?.version||0)+1};drafts.set(body.scope,fields);if(loseReceipt){loseReceipt=false;cutReceipt(res);return;}return res.end(JSON.stringify(fields[body.field]));
   }
-  if(url.pathname==='/respond'){responses++;return res.end('{}');}
+  if(url.pathname==='/respond'){responses++;return res.end(JSON.stringify(responseResult));}
   if(url.pathname==='/'){
     const legacy=url.searchParams.get('legacy')==='1';
     res.setHeader('Content-Type','text/html');return res.end('<!doctype html><meta charset="utf-8"><div id="approvals"></div>'+draftScripts.map(src=>'<script src="'+src+(legacy?'?legacy=1':'')+'"></script>').join(''));
@@ -157,6 +157,34 @@ const server=http.createServer(async(req,res)=>{
     await page.evaluate(()=>{document.dispatchEvent(new Event('bridge-logged-out'));});
     check(await page.evaluate(()=>AnswerDrafts.entries.size===0&&!Object.keys(localStorage).some(k=>k.startsWith(AnswerDrafts.prefix))),'退出登录清除本机答案缓存');
     check(responses===0,'保存草稿没有提交回复');check(writes>=2,'执行了真实草稿写请求');
+    // Submit synthetic six-question cards through the production handler.
+    for(const width of [390,820,1280]){
+      const context=await browser.newContext({viewport:{width,height:900}}),reply=await context.newPage();
+      reply.on('pageerror',error=>errors.push(error.message));await reply.goto(origin);
+      for(const status of ['ignored','unknown','accepted']){
+        responseResult={status,duplicate:status!=='accepted',id:'synthetic-submission'};
+        await reply.evaluate(status=>{
+          currentId='response-'+status;submittedRequestIds.clear();approvalStamp='';
+          renderApprovals([{id:'async:synthetic-turn:'+status,supported:true,method:'bridge/requestUserInputAsync',
+            params:{questions:Array.from({length:6},(_,i)=>({id:'q'+i,question:'合成问题 '+i}))}}]);
+        },status);
+        for(let i=0;i<6;i++)await reply.locator('textarea').nth(i).fill('合成答案 '+i);
+        const beforeReply=responses;await reply.locator('button[type=submit]').click();
+        if(status==='accepted'){
+          await reply.waitForFunction(()=>submittedRequestIds.size===1);
+          check(await reply.locator('button[type=submit]').isDisabled(),width+' 像素下已接受回复等待原生状态且禁止重复提交');
+          if(width===390){
+            await reply.waitForFunction(()=>document.querySelector('#approvals').textContent.includes('桌面尚未确认这条回复'),{},{timeout:20000});
+            check(responses===beforeReply+1,'桌面确认超时后明确提示并且没有自动重发');
+          }
+        }else{
+          await reply.waitForFunction(status=>document.querySelector('.error').textContent.includes(status==='ignored'?'未发送':'尚未确认'),status);
+          check(await reply.evaluate(()=>submittedRequestIds.size===0)&&await reply.locator('button[type=submit]').isEnabled(),width+' 像素下 '+status+' 回复不会误报发送成功或卡在等待确认');
+        }
+        check(responses===beforeReply+1&&await reply.evaluate(()=>[...document.querySelectorAll('textarea')].every((node,i)=>node.value==='合成答案 '+i)),width+' 像素下 '+status+' 回复仅提交一次并保留六个答案');
+      }
+      await context.close();
+    }
     check(errors.length===0,'浏览器无页面脚本错误');console.log(JSON.stringify({passed:checks.length,checks},null,2));
     await phone.close();await tablet.close();
   }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
