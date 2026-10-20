@@ -1,4 +1,5 @@
 import copy
+import base64
 from contextlib import nullcontext
 from collections import OrderedDict
 import hashlib
@@ -27,7 +28,7 @@ from bridge.clients.codex.activity import DesktopActivity
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
-from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text, session_title, session_title_source
+from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text, session_title, session_title_source, embedded_image_id
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
@@ -40,7 +41,7 @@ from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
 from bridge.features.accounts.cli_access import CliAccess
 from bridge.features.sessions.goal import GoalRPC, GoalError, GoalUnavailable, GoalUnsupported, goal_activation, goal_identity, normalize_goal_result, normalize_ui_locale, goal_command_fingerprint, goal_state_confirms_command, native_goal_absent, normalize_goal, plan_goal_command, read_native_goal
-from bridge.features.workspace.uploads import Uploads, image_type
+from bridge.features.workspace.uploads import Uploads, image_type, MAX_FILE
 from bridge.clients.codex.remote import upload_file
 
 
@@ -668,10 +669,26 @@ class Bridge:
             with session.action_lock:
                 with session.condition:
                     session.timeline.update(session.view())
-                    position = session.timeline.position(body.get('key', ''))
+                    projection = session.timeline
+                    epoch = str(body.get('key', '')).partition('.')[0]
+                    historical = session.navigation_windows.get(epoch)
+                    if historical is not None:
+                        # Re-read the bounded source window before a mutation;
+                        # display caches never authorize an edit on their own.
+                        result = self.message_navigation.window(thread_id, **historical.navigation_options,
+                            excluded=self._goal_activation_ids(thread_id))
+                        if result['revision'] != historical.navigation_revision:
+                            raise ValueError('消息位置已变化，请刷新后重试')
+                        projection = Timeline()
+                        projection.update({**session.view(), 'turns': normalize_state(result['state'], False)['turns'],
+                            'sequence': session.sequence, 'goalActivationIds': sorted(self._goal_activation_ids(thread_id))})
+                        projection.meta['latestUserTurnId'] = result['latestUserTurnId']
+                        # The client still holds the original opaque epoch.
+                        projection.epoch = historical.epoch
+                    position = projection.position(body.get('key', ''))
                     if position is None:
                         raise ValueError('消息位置已变化，请刷新后重试')
-                    row = session.timeline.rows[position]
+                    row = projection.rows[position]
                     if row['version'] != body.get('version'):
                         raise ValueError('消息内容已变化，请重新打开编辑')
                     if action == 'fork' and not row['forkable'] or action != 'fork' and not row['editable']:
@@ -679,7 +696,7 @@ class Bridge:
                     if row.get('turnStatus') == 'inProgress':
                         raise ValueError('请先停止当前任务，再编辑或分支')
                     if action == 'edit':
-                        if session.timeline.meta['latestUserTurnId'] != row['turnId']:
+                        if projection.meta['latestUserTurnId'] != row['turnId']:
                             raise ValueError('只有最近一条消息可原地编辑，请使用编辑并新建分支')
                         if session.state.get('threadRuntimeStatus', {}).get('type') == 'active':
                             raise ValueError('请先停止当前任务，再编辑或分支')
@@ -1851,7 +1868,7 @@ class Bridge:
         if not re.fullmatch(r'[0-9a-f]{64}', image_id):
             raise ValueError('桌面图片标识无效')
         session = self.session(thread_id, attach=False)
-        paths = []
+        paths, embedded = [], []
         with session.condition:
             states = [session.state or {}] + [p.record_state for p in session.navigation_windows.values()]
             turns = [turn for state in states for turn in ordered_turns(state)]
@@ -1863,6 +1880,10 @@ class Bridge:
                     if not isinstance(content, list):
                         continue
                     for attachment in content:
+                        if isinstance(attachment, dict) and attachment.get('type') == 'input_image':
+                            value = attachment.get('image_url')
+                            if embedded_image_id(value) == image_id:
+                                embedded.append(value)
                         if not isinstance(attachment, dict) or attachment.get('type') != 'localImage':
                             continue
                         path = attachment.get('path')
@@ -1870,6 +1891,20 @@ class Bridge:
                             paths.append(Path(path))
             for state in states:
                 paths.extend(referenced_model_images(state, image_views_only=True))
+        for value in embedded:
+            encoded = value.partition(',')[2]
+            if len(encoded) > ((MAX_FILE + 2) // 3) * 4:
+                continue
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except ValueError:
+                continue
+            mime = image_type(data)
+            if not mime or not 0 < len(data) <= MAX_FILE:
+                continue
+            suffix = {'image/png':'png', 'image/jpeg':'jpg', 'image/gif':'gif', 'image/webp':'webp'}[mime]
+            return {'previewData': data, 'previewMime': mime, 'previewSha256': hashlib.sha256(data).hexdigest(),
+                    'name': 'image.' + suffix}, 'embedded'
         for path in paths:
             try:
                 resolved = path.resolve()
@@ -1928,12 +1963,15 @@ class Bridge:
 
     def _navigation_page(self, session, thread_id, **options):
         from bridge.features.sessions.timeline import PAGE_BYTES, encoded
-        result = self.message_navigation.window(thread_id, **options)
+        result = self.message_navigation.window(thread_id, **options, excluded=self._goal_activation_ids(thread_id))
         view = normalize_state(result['state'], False)
         projection = Timeline()
         with session.condition:
             projection.update({**session.view(), 'turns': view['turns'], 'sequence': session.sequence,
                                'goalActivationIds': sorted(self._goal_activation_ids(thread_id))})
+            projection.meta['latestUserTurnId'] = result['latestUserTurnId']
+            projection.navigation_options = dict(options)
+            projection.navigation_revision = result['revision']
             projection.record_state = {'cwd': (session.state or {}).get('cwd') or session.saved_cwd,
                 'turns': [{'items': [item for turn in result['state']['turns'] for item in turn['items']
                     if item.get('type') in ('userMessage', 'steeringUserMessage', 'agentMessage', 'ImageView', 'imageView')]}]}

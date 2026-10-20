@@ -118,6 +118,8 @@ def scan_rollout(path, thread_id, previous=None, summarize=None):
                 raise ValueError('会话记录不属于这个聊天，请刷新列表')
             _context(record, context)
             payload = record.get('payload', {})
+            if record.get('type') == 'event_msg' and payload.get('type') == 'task_started':
+                statuses[context['turnId']] = 'inProgress'
             if record.get('type') == 'event_msg' and payload.get('type') in ('task_complete', 'turn_aborted'):
                 statuses[context['turnId']] = 'completed' if payload['type'] == 'task_complete' else 'interrupted'
             item = _item(record, context['itemId'])
@@ -135,6 +137,7 @@ def scan_rollout(path, thread_id, previous=None, summarize=None):
                     base = _digest(json.dumps([context['turnId'], item['id'], item['type']], ensure_ascii=False, separators=(',', ':')).encode())[:24]
                     entries.append({'id': _anchor(thread_id, revision, begin, raw), 'turnId': context['turnId'],
                                     'rowKey': base+'-0', 'summary': summary, 'requestId': row.get('requestId'),
+                                    'messageId': item['id'], 'kind': item['type'], 'isUserContext': row.get('isUserContext', False),
                                     'offset': begin, 'digest': _digest(raw), 'item': count})
                     context['user'] += 1
                 context['itemId'] += 1
@@ -233,7 +236,7 @@ class MessageNavigation:
                 if not since:
                     raise
                 position, reset = 0, True
-            entries = [entry for entry in value['entries'] if entry.get('requestId') not in excluded]
+            entries = [entry for entry in value['entries'] if not entry.get('isUserContext') and entry.get('requestId') not in excluded]
             if position > len(entries):
                 position, reset = 0, True
             end = min(len(entries), position+max(1, min(200, limit)))
@@ -243,7 +246,7 @@ class MessageNavigation:
                     'nextCursor': self._token(identifier, revision, end, 'index') if end < len(entries) else None,
                     'tailCursor': self._token(identifier, revision, end, 'index')}
 
-    def window(self, identifier, around=None, before=None, after=None, limit=100):
+    def window(self, identifier, around=None, before=None, after=None, limit=100, excluded=()):
         with self.lock:
             if sum(bool(v) for v in (around, before, after)) != 1:
                 raise ValueError('请选择有效的消息位置')
@@ -274,10 +277,18 @@ class MessageNavigation:
                 # match. Force the next directory read to verify it all again.
                 self.cache.pop(identifier, None)
                 raise
+            users = [entry for entry in value['entries'] if not entry.get('isUserContext') and entry.get('requestId') not in excluded]
+            first_users = {}
+            for entry in users:
+                if entry['kind'] == 'userMessage':
+                    first_users.setdefault(entry['turnId'], entry['messageId'])
             for turn in result['state']['turns']:
                 turn['status'] = value['statuses'].get(turn['turnId'], turn['status'])
+                turn['firstUserMessageId'] = first_users.get(turn['turnId'])
+                turn['actionable'] = turn['turnId'] != 'history'
             result.update(revision=source['revision'], before=self._token(identifier, source['revision'], start, 'window') if start else None,
                           after=self._token(identifier, source['revision'], result['end'], 'window') if result['end'] < source['count'] else None,
+                          latestUserTurnId=users[-1]['turnId'] if users else None,
                           targetId=around, navigationWindow=True)
             return result
 

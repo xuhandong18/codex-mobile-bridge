@@ -2,20 +2,20 @@
 async function setupMessageNavigationFixture({count=5000,failIndex=false}={}) {
   window.navigationFixture?.timeline.dispose();
   document.getElementById('messages').replaceChildren();
-  const requests=[],errors=[],held=new Map(),brokenJumps=new Set();let indexFailure=failIndex,liveResolve,sequence=1;
+  const requests=[],errors=[],actions=[],held=new Map(),brokenJumps=new Set(),brokenPages=new Set();let indexFailure=failIndex,liveResolve,sequence=1;
   const entry=i=>({id:'u'+i,rowKey:'q'+i,turnId:'t'+i,summary:i===2?'attachment.png':'Question '+i,order:i});
   const row=position=>{
     const i=Math.floor(position/2),user=position%2===0;
     return {key:(user?'q':'a')+i,order:position,role:user?'user':'assistant',kind:user?'userMessage':'agentMessage',
-      turnId:'t'+i,navigationId:user?'u'+i:undefined,version:'v1',
+      turnId:'t'+i,navigationId:user?'u'+i:undefined,version:'v1',editable:user,forkable:!user,turnStatus:'completed',
       text:user?(i===2?'':'Question '+i):('Answer '+i+' paragraph '.repeat(35)),
-      ...(user&&i===2?{attachments:[{type:'image',name:'attachment.png'}]}:{})};
+      ...(user&&i===2?{attachments:[{type:'image',name:'attachment.png',desktopId:'a'.repeat(64)}]}:{})};
   };
   const windowPage=(start,limit=100,target=null)=>{
     const end=Math.min(count*2,start+limit);
     return {epoch:'window'+start,sequence,rows:Array.from({length:end-start},(_,i)=>row(start+i)),files:[],
       before:start?'nav.w.'+start:null,after:end<count*2?'nav.w.'+end:null,hasMore:start>0,
-      meta:{requests:[]},navigationWindow:true,targetKey:target===null?null:'q'+target};
+      meta:{requests:[],latestUserTurnId:'t'+(count-1),status:'idle'},navigationWindow:true,targetKey:target===null?null:'q'+target};
   };
   const request=async(url,body,signal)=>{
     const u=new URL(url,location.origin),action=u.pathname.split('/').pop(),p=u.searchParams;requests.push({action,params:Object.fromEntries(p)});
@@ -39,6 +39,7 @@ async function setupMessageNavigationFixture({count=5000,failIndex=false}={}) {
       return value;
     }
     if(action==='timeline'&&(p.get('before')?.startsWith('nav.')||p.has('after'))){
+      if(brokenPages.delete(p.has('after')?'after':'before'))throw Error('Page network failure');
       const position=Number((p.get('before')||p.get('after')).split('.').pop());
       return p.has('after')?windowPage(position):windowPage(Math.max(0,position-100),Math.min(position,100));
     }
@@ -51,8 +52,9 @@ async function setupMessageNavigationFixture({count=5000,failIndex=false}={}) {
     throw Error('Unexpected fixture request: '+url);
   };
   const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?host=local',request,
-    renderMeta:()=>{},renderText:(node,text)=>node.textContent=text,status:message=>errors.push(message)});
-  window.navigationFixture={timeline,requests,errors,entry,
+    renderMeta:()=>{},renderText:(node,text)=>node.textContent=text,status:message=>errors.push(message),onAction:(action,row)=>actions.push({action,key:row.key})});
+  window.navigationFixture={timeline,requests,errors,actions,entry,
+    failPage:direction=>brokenPages.add(direction),
     failJump:i=>brokenJumps.add(i),
     hold:i=>held.set(i,null),release:i=>{const resolve=held.get(i);if(typeof resolve!=='function')throw Error('No pending jump '+i);held.delete(i);resolve();},
     live:()=>{if(!liveResolve)throw Error('No live poll');const resolve=liveResolve;liveResolve=null;sequence++;

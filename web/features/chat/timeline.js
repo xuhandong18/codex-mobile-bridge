@@ -88,15 +88,25 @@ class ChatTimeline {
     this.files=new Map();this.sequence=-1;this.epoch='';this.before=null;this.hasMore=false;
     this.busy=false;this.generation=0;this.windowRevision=0;this.following=true;this.lastTop=0;this.retryCount=0;
     this.messageIndex=new Map();this.indexBusy=false;this.indexReady=false;this.indexError=false;this.indexRevision='';this.indexTail=null;this.indexUpdated=0;this.indexRetryAt=0;
-    this.navigationMode=false;this.navigationRequest=0;this.navigationBusy=false;this.liveCursor=null;this.hasLiveChanges=false;
+    this.navigationMode=false;this.navigationRequest=0;this.navigationBusy=false;this.navigationPages=[];this.navigationRetry=null;this.liveCursor=null;this.hasLiveChanges=false;
     this.showReasoning=document.documentElement.dataset.showReasoning!=='false';
     this.showProcess=document.documentElement.dataset.showProcess!=='false';
     this.onScroll=()=>{
-      if(this.suppress||!this.viewport.clientHeight)return;
+      if(!this.viewport.clientHeight)return;
       const upward=this.viewport.scrollTop<this.lastTop;
-      this.lastTop=this.viewport.scrollTop;this.following=!this.navigationMode&&this.atBottom();this.anchor=this.capture();
+      // Layout restoration records its own scroll position before dispatch.
+      // A later upward movement is the reader's choice, even within that frame.
+      if(this.suppress&&!upward)return;
+      this.lastTop=this.viewport.scrollTop;this.following=!this.navigationMode&&!upward&&this.atBottom();this.anchor=this.capture();
       if(this.following)this.newer.hidden=true;
-      if(upward&&this.nearTop()&&!this.retryCount)this.loadOlder(100);
+      if(this.navigationMode){
+        if(this.navigationBusy)return;
+        if(upward&&this.hasMore&&this.nearTop())this.pageNavigation('before',true);
+        else if(!upward&&this.atBottom()){
+          if(this.after)this.pageNavigation('after',true);
+          else this.loadLatest();
+        }
+      }else if(upward&&this.nearTop()&&!this.retryCount)this.loadOlder(100);
     };
     this.viewport.addEventListener('scroll',this.onScroll,{passive:true});
     this.older.onclick=()=>this.sequence<0?this.start():this.loadOlder(this.retryCount||100);
@@ -157,28 +167,42 @@ class ChatTimeline {
       const page=await this.read('timeline',{around:entry.id,limit:100});
       if(this.abort.signal.aborted||ticket!==this.navigationRequest)return;
       if(!page.navigationWindow||!page.targetKey)throw Error(timelineText('这条消息已变化，请刷新消息目录'));
-      this.navigationMode=true;this.liveCursor=live;this.following=false;this.apply(page,true);this.focusMessage(page.targetKey);
+      this.navigationMode=true;this.navigationRetry=null;this.liveCursor=live;this.following=false;this.apply(page,true);this.focusMessage(page.targetKey);
       this.newer.textContent=timelineText(this.hasLiveChanges?'有新内容 ↓':'返回最新内容 ↓');this.newer.hidden=false;
     }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest){this.status(error.message);this.loadMessageIndex(true);}}
     finally{if(ticket===this.navigationRequest){this.navigationBusy=false;this.historyStatus();}}
   }
-  async pageNavigation(direction){
+  async pageNavigation(direction,automatic=false){
     const cursor=direction==='before'?this.before:this.after;
     if(!this.navigationMode||!cursor||this.navigationBusy||this.abort.signal.aborted)return;
+    if(automatic&&this.navigationRetry===cursor)return;
+    this.navigationRetry=null;
     const ticket=++this.navigationRequest;this.navigationBusy=true;this.generation++;this.historyStatus();
     try{
       const page=await this.read('timeline',{[direction]:cursor,limit:100});
       if(this.abort.signal.aborted||ticket!==this.navigationRequest)return;
-      this.following=false;this.apply(page,true);this.viewport.scrollTop=direction==='before'?this.viewport.scrollHeight-this.viewport.clientHeight:0;
-      this.lastTop=this.viewport.scrollTop;this.anchor=this.capture();
-    }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest)this.status(error.message);}
+      this.following=false;this.mergeNavigationPage(page,direction);
+    }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest){this.navigationRetry=cursor;this.status(error.message);}}
     finally{if(ticket===this.navigationRequest){this.navigationBusy=false;this.historyStatus();}}
+  }
+  mergeNavigationPage(page,direction){
+    const anchor=this.capture(),next={before:page.before,after:page.after,keys:page.rows.map(row=>row.key),files:page.files||[]};
+    const pages=direction==='before'?[next,...this.navigationPages]:[...this.navigationPages,next];
+    // Two adjacent server projections retain continuous reading and valid
+    // attachment/detail/action evidence without accumulating the whole chat.
+    this.navigationPages=direction==='before'?pages.slice(0,2):pages.slice(-2);
+    this.files=new Map(this.navigationPages.flatMap(value=>value.files||[]).map(file=>[file.id,file]));
+    const keep=new Set(this.navigationPages.flatMap(value=>value.keys));
+    for(const [key,{node}] of this.nodes)if(!keep.has(key)){node.remove();this.nodes.delete(key);this.rows.delete(key);this.details.delete(key);}
+    this.apply(page,false,true);
+    this.before=this.navigationPages[0].before;this.after=this.navigationPages.at(-1).after;this.hasMore=!!this.before;
+    this.historyStatus();this.restore(anchor,false);
   }
   async loadLatest(){
     const ticket=++this.navigationRequest;this.generation++;this.navigationBusy=true;
     try{
       const page=await this.read('timeline',{limit:20});if(this.abort.signal.aborted||ticket!==this.navigationRequest)return;
-      this.navigationMode=false;this.liveCursor=null;this.hasLiveChanges=false;this.following=true;this.apply(page,true);this.jumpBottom();
+      this.navigationMode=false;this.navigationRetry=null;this.liveCursor=null;this.hasLiveChanges=false;this.following=true;this.apply(page,true);this.jumpBottom();
     }catch(error){if(!this.abort.signal.aborted&&ticket===this.navigationRequest)this.status(error.message);}
     finally{if(ticket===this.navigationRequest){this.navigationBusy=false;this.historyStatus();}}
   }
@@ -246,7 +270,7 @@ class ChatTimeline {
   }
   apply(page,reset=false,history=false){
     const anchor=this.capture(),bottom=this.following;
-    if(reset){this.generation++;this.rows.clear();this.nodes.clear();this.details.clear();this.files.clear();this.container.replaceChildren();this.epoch=page.epoch;this.retryCount=0;}
+    if(reset){this.generation++;this.rows.clear();this.nodes.clear();this.details.clear();this.files.clear();this.container.replaceChildren();this.epoch=page.epoch;this.retryCount=0;this.navigationPages=page.navigationWindow?[{before:page.before,after:page.after,keys:page.rows.map(row=>row.key),files:page.files||[]}]:[];}
     for(const file of page.files||[])this.files.set(file.id,file);
     if((!history&&page.sequence>=this.sequence)||reset){this.sequence=page.sequence;this.meta=page.meta;this.renderMeta({...page.meta,files:[...this.files.values()]});}
     if(!history)this.pendingRequests=!!page.meta.requests?.length;
@@ -254,7 +278,7 @@ class ChatTimeline {
     for(const row of page.rows){
       const previous=this.rows.get(row.key);
       if(previous&&previous.sequence>page.sequence)continue;
-      this.rows.set(row.key,{row,sequence:page.sequence});
+      this.rows.set(row.key,{row,sequence:page.sequence,epoch:page.epoch});
       const stamp=JSON.stringify(row),old=this.nodes.get(row.key);
       if(old?.stamp===stamp)continue;
       const open=old?.node.tagName==='DETAILS'&&old.node.open;
@@ -293,7 +317,7 @@ class ChatTimeline {
       const prior=this.details.get(row.key);if(prior?.next===null)return;
       more.disabled=true;more.textContent=timelineText('正在读取…');
       try{
-        const detail=await this.read('detail',{key:this.epoch+'.'+row.key,offset:prior?.next||0,version:prior?.version||row.version});
+        const detail=await this.read('detail',{key:this.rowCursor(row),offset:prior?.next||0,version:prior?.version||row.version});
         if(this.abort.signal.aborted||!node.isConnected||this.rows.get(row.key)?.row.version!==detail.version)return;
         for(const file of detail.files||[])this.files.set(file.id,file);
         this.details.set(row.key,{version:detail.version,text:(detail.offset?prior?.text||'':'')+detail.text,next:detail.next});paint();
@@ -329,13 +353,14 @@ class ChatTimeline {
     if(activity){node.open=!!open;node.ontoggle=()=>{if(node.open&&row.truncated&&!this.details.has(row.key))load();};}
     return node;
   }
+  rowCursor(row){return (this.rows.get(row.key)?.epoch||this.epoch)+'.'+row.key;}
   async fullText(row){
     const valid=()=>!this.abort.signal.aborted&&this.rows.get(row.key)?.row.version===row.version;
     if(!valid())throw Error(timelineText('消息内容已变化，请重新打开编辑'));
     if(!row.truncated)return row.text;
     let text='',offset=0;
     do{
-      const detail=await this.read('detail',{key:this.epoch+'.'+row.key,offset,version:row.version});
+      const detail=await this.read('detail',{key:this.rowCursor(row),offset,version:row.version});
       if(!valid()||detail.version!==row.version||detail.offset!==offset||detail.key!==row.key)throw Error(timelineText('消息内容已变化，请重新打开编辑'));
       text+=detail.text;
       if(detail.next===null)return text;
@@ -384,6 +409,7 @@ class ChatTimeline {
         if(this.navigationMode){
           this.liveCursor={sequence:page.sequence,epoch:page.epoch,start:page.reset?page.before||'':cursor.start};
           this.meta=page.meta;this.renderMeta({...page.meta,files:[...this.files.values()]});
+          this.refreshActions();
           if(page.rows.length||page.reset||page.meta.requests?.length){this.hasLiveChanges=true;this.newer.textContent=timelineText(page.meta.requests?.length?'有待确认请求 ↓':'有新内容 ↓');this.newer.hidden=false;}
         }else{this.apply(page,!!page.reset);this.fillRecent();}
         if(!this.indexUnsupported&&Date.now()>=this.indexRetryAt&&Date.now()-this.indexUpdated>15000)this.loadMessageIndex();

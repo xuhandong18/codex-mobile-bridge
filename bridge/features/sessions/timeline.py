@@ -37,6 +37,7 @@ class Timeline:
             occurrences = {}
             first_user = next((m for m in turn['messages'] if m['role'] == 'user'
                                and not m.get('isUserContext')
+                               and ('firstUserMessageId' not in turn or m.get('id') == turn['firstUserMessageId'])
                                and (not m.get('requestId') or m['requestId'] not in activation_ids)), None)
             for message in turn['messages']:
                 if message.get('requestId') and message['requestId'] in activation_ids:
@@ -60,7 +61,7 @@ class Timeline:
                 if message['role'] == 'assistant':
                     row.update({k:turn[k] for k in ('model','effort') if turn.get(k)})
                 if message.get('attachments'):
-                    row['attachments'] = [{k: str(a[k])[:300] for k in ('type', 'name', 'path') if k in a}
+                    row['attachments'] = [{k: str(a[k])[:300] for k in ('type', 'name', 'path', 'desktopId') if k in a}
                                           for a in message['attachments'][:20]]
                 rows.append(row)
                 details[key] = text

@@ -1122,7 +1122,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def desktop_image_preview(self, bridge, thread_id, image_id):
         artifact, served_variant = bridge.desktop_image_preview(thread_id, image_id)
-        data = Path(artifact["previewPath"]).read_bytes()
+        data = artifact.get('previewData')
+        if data is None:
+            data = Path(artifact["previewPath"]).read_bytes()
         etag = '"' + artifact["previewSha256"] + '"'
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)

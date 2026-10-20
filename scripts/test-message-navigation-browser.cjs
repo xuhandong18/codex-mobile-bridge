@@ -14,6 +14,7 @@ button[hidden]{display:none!important}.timeline-row{overflow-wrap:anywhere}
 const server=http.createServer((req,res)=>{
   const p=new URL(req.url,'http://127.0.0.1').pathname;
   if(p==='/'){res.setHeader('Content-Type','text/html;charset=utf-8');res.end(html);return;}
+  if(p.startsWith('/fixture/desktop-images/')){res.setHeader('Content-Type','image/png');res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9foAAAAASUVORK5CYII=','base64'));return;}
   const files=p==='/fixture.js'?['tests/browser/message-navigation.browser.js']:p==='/legacy.js'?['tests/browser/timeline.browser.js']:
     assets[p]?[].concat(assets[p]).map(file=>'web/'+file):null;
   if(!files){res.writeHead(404);res.end();return;}
@@ -38,9 +39,19 @@ const server=http.createServer((req,res)=>{
       await activate('.chat-message-map-rail button[data-key="u0"]');
       await page.waitForFunction(()=>navigationFixture.timeline.navigationMode&&navigationFixture.timeline.nodes.has('q0'));
       check(await page.evaluate(()=>Math.abs(navigationFixture.timeline.nodes.get('q0').node.getBoundingClientRect().top-document.querySelector('#timeline').getBoundingClientRect().top)<80),'单次点击准确跳最早消息 '+width);
-      await activate('.timeline-later');await page.waitForFunction(()=>!navigationFixture.timeline.nodes.has('q0')&&!navigationFixture.timeline.navigationBusy);
-      await activate('#older');await page.waitForFunction(()=>navigationFixture.timeline.nodes.has('q0')&&!navigationFixture.timeline.navigationBusy);
-      check(await page.evaluate(()=>navigationFixture.timeline.rows.size<=100),'历史窗口支持向前、向后分页 '+width);
+      await activate('#messages [data-key="q0"] .message-edit');
+      check(await page.evaluate(()=>navigationFixture.actions.some(item=>item.action==='edit-fork'&&item.key==='q0')),'导航定位后的历史提问仍有编辑分支入口 '+width);
+      const forward=await page.evaluate(()=>({after:navigationFixture.timeline.after,last:[...navigationFixture.timeline.nodes.keys()].at(-1)}));
+      await page.evaluate(()=>{const t=navigationFixture.timeline;t.viewport.scrollTop=t.viewport.scrollHeight;t.viewport.dispatchEvent(new Event('scroll'));});
+      await page.waitForFunction(after=>navigationFixture.timeline.after!==after&&!navigationFixture.timeline.navigationBusy,forward.after);
+      check(await page.evaluate(last=>navigationFixture.timeline.nodes.has(last)&&navigationFixture.timeline.rows.size<=200,forward.last),'向下滚动自动补后续正文并保留相邻内容 '+width);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await page.evaluate(()=>{const t=navigationFixture.timeline;t.viewport.scrollTop=t.viewport.scrollHeight;t.viewport.dispatchEvent(new Event('scroll'));});
+      await page.waitForFunction(()=>!navigationFixture.timeline.nodes.has('q0')&&!navigationFixture.timeline.navigationBusy);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await page.evaluate(()=>{const t=navigationFixture.timeline;t.viewport.scrollTop=0;t.viewport.dispatchEvent(new Event('scroll'));});
+      await page.waitForFunction(()=>navigationFixture.timeline.nodes.has('q0')&&!navigationFixture.timeline.navigationBusy);
+      check(await page.evaluate(()=>navigationFixture.timeline.rows.size<=200),'向上滚动也自动补历史且正文窗口保持有界 '+width);
       await page.evaluate(()=>{const rail=document.querySelector('.chat-message-map-rail');rail.scrollTop=2500*7;rail.dispatchEvent(new Event('scroll'));});
       await activate('.chat-message-map-rail button[data-key="u2500"]');
       await page.waitForFunction(()=>navigationFixture.timeline.nodes.has('q2500')&&!navigationFixture.timeline.navigationBusy);
@@ -80,12 +91,28 @@ const server=http.createServer((req,res)=>{
       check(await page.evaluate(()=>!navigationFixture.timeline.indexError),'点击重试自动补齐目录 '+width);
       await page.evaluate(()=>navigationFixture.timeline.navigateMessage(navigationFixture.entry(2)));
       check(await page.evaluate(()=>navigationFixture.timeline.nodes.get('q2').node.textContent.includes('attachment.png')),'纯附件消息有目录摘要并能定位 '+width);
+      await page.waitForFunction(()=>navigationFixture.timeline.nodes.get('q2').node.querySelector('img')?.naturalWidth>0);
+      check(await page.evaluate(()=>!!navigationFixture.timeline.nodes.get('q2').node.querySelector('a[data-image-preview]')),'导航定位后图片实际加载并保留原图入口 '+width);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await page.evaluate(()=>{navigationFixture.failPage('after');const t=navigationFixture.timeline;t.viewport.scrollTop=t.viewport.scrollHeight;t.viewport.dispatchEvent(new Event('scroll'));});
+      await page.waitForFunction(()=>navigationFixture.errors.includes('Page network failure')&&!navigationFixture.timeline.navigationBusy);
+      const failedReads=await page.evaluate(()=>navigationFixture.requests.length);
+      await page.evaluate(()=>navigationFixture.timeline.viewport.dispatchEvent(new Event('scroll')));
+      check(await page.evaluate(()=>navigationFixture.requests.length)===failedReads,'分页失败后不会因滚动事件重复请求 '+width);
+      await page.evaluate(()=>navigationFixture.timeline.later.click());
+      await page.waitForFunction(()=>navigationFixture.timeline.after!=='nav.w.100'&&!navigationFixture.timeline.navigationBusy);
+      check(await page.evaluate(()=>navigationFixture.timeline.nodes.has('q2')),'分页显式重试恢复后仍保留相邻阅读内容 '+width);
+      await page.evaluate(()=>navigationFixture.timeline.navigateMessage(navigationFixture.entry(499)));
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await page.evaluate(()=>{const t=navigationFixture.timeline;t.viewport.scrollTop=t.viewport.scrollHeight;t.viewport.dispatchEvent(new Event('scroll'));});
+      await page.waitForFunction(()=>!navigationFixture.timeline.navigationMode&&!navigationFixture.timeline.navigationBusy);
+      check(await page.evaluate(()=>navigationFixture.timeline.atBottom()),'主动滚到历史末尾自动回到最新内容 '+width);
       await page.evaluate(()=>setupMessageNavigationFixture());
       await page.waitForFunction(()=>navigationFixture.timeline.messageIndex.size===5000&&!navigationFixture.timeline.indexBusy);
       check(await page.evaluate(()=>navigationFixture.timeline.rows.size<=100),'重新打开后恢复完整目录且不加载全部正文 '+width);
       await page.evaluate(()=>navigationFixture.timeline.dispose());
       await page.reload();
-      for(const name of ['runTimelineTests','runTimelineVisibilityTests','runReasoningSummaryTests']){
+      for(const name of ['runTimelineTests','runTimelineVisibilityTests','runReasoningSummaryTests','runQuestionReadingScrollTests']){
         const assertions=await page.evaluate(name=>window[name](),name);check(assertions.length>0,name+' 实际执行 '+assertions.length+' 项 '+width);
       }
       await context.close();

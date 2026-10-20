@@ -5,6 +5,7 @@ function timeline(){
  const context=vm.createContext({BridgeI18n:{t:s=>s}});vm.runInContext(source('timeline.js'),context);
  const row={key:'row',version:'v',text:'preview',truncated:true};
  const stub={abort:{signal:{aborted:false}},epoch:'epoch',rows:new Map([['row',{row}]])};
+ stub.rowCursor=vm.runInContext('ChatTimeline.prototype.rowCursor',context).bind(stub);
  const full=vm.runInContext('ChatTimeline.prototype.fullText',context);
  return {row,stub,read:()=>full.call(stub,row)};
 }
@@ -21,6 +22,11 @@ test('copy of short text needs no fetch and switching chat cancels full-text res
  const ui=timeline();ui.row.truncated=false;ui.stub.read=()=>assert.fail('no request expected');assert.equal(await ui.read(),'preview');
  ui.row.truncated=true;ui.stub.read=async()=>{ui.stub.abort.signal.aborted=true;return {key:'row',version:'v',offset:0,text:'old',next:null};};
  await assert.rejects(ui.read(),/已变化/);
+});
+test('details retain their own navigation epoch when adjacent pages are kept',async()=>{
+ const ui=timeline();ui.stub.epoch='new-window';ui.stub.rows.get('row').epoch='old-window';
+ ui.stub.read=async(_action,args)=>{assert.equal(args.key,'old-window.row');return {key:'row',version:'v',offset:0,text:'old page',next:null};};
+ assert.equal(await ui.read(),'old page');
 });
 function fixture(){
  const nodes=new Map(),saved=new Map(),requests=[],opened=[],notices=[];
@@ -44,4 +50,8 @@ test('successful fork opens only returned host/id and unavailable child retains 
  const ui=fixture();await ui.control.open('edit-fork',ui.row,ui.line);
  ui.setResponse({status:'created',action:'edit-fork',id:'child',host:'remote',draft:'replacement',source:{id:'source',turnId:'turn'}});
  await ui.control.send();assert.deepEqual(ui.opened,[['child','remote']]);assert.equal(JSON.parse(ui.saved.get('fork-edit:remote|child')).text,'replacement');assert.equal(ui.control.dialog.open,false);
+});
+test('editing a retained navigation row submits its source epoch',async()=>{
+ const ui=fixture();ui.line.rowCursor=()=> 'old-window.row';await ui.control.open('edit-fork',ui.row,ui.line);
+ await ui.control.send();assert.equal(ui.requests[0].body.key,'old-window.row');
 });

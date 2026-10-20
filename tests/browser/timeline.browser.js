@@ -183,3 +183,36 @@ async function runReasoningSummaryTests() {
   timeline.dispose();
   return checks;
 }
+
+async function runQuestionReadingScrollTests(){
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  const viewport=document.getElementById('timeline'),container=document.getElementById('messages');
+  container.replaceChildren();viewport.style.height='400px';
+  const questions=document.createElement('div');questions.id='question-scroll-fixture';
+  container.after(questions);
+  const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?host=local',request:async()=>({}),
+    renderMeta:meta=>{
+      const card=document.createElement('section');card.className='approval';
+      const heading=document.createElement('h3');heading.textContent='Codex 需要你的回复';
+      const label=document.createElement('label');label.textContent=meta.requests[0].question;
+      const input=document.createElement('textarea');input.rows=8;label.append(input);card.append(heading,label);questions.replaceChildren(card);
+    },renderText:(node,text)=>node.textContent=text,status:()=>{}});
+  const page=sequence=>({epoch:'question-scroll',sequence,rows:sequence===1?Array.from({length:20},(_,i)=>({key:'read-'+i,order:i,role:'assistant',version:'v1',text:'资料 '+i+' 参考内容 '.repeat(25)})):[],
+    files:[],before:null,hasMore:false,meta:{requests:[{id:'question',question:'请选择下一步操作。'.repeat(sequence+2)}]}});
+  try{
+    timeline.apply(page(1),true);await frame();
+    check(timeline.atBottom(),'问题框首次出现时可以跟随到末尾');
+    // A real upward gesture can arrive during the frame used to restore layout.
+    timeline.restore(timeline.capture(),true);viewport.scrollTop-=50;viewport.dispatchEvent(new Event('scroll'));
+    check(!timeline.following,'向上移动不足底部阈值也立即停止跟随');
+    viewport.scrollTop-=600;viewport.dispatchEvent(new Event('scroll'));
+    const anchor=timeline.capture(),top=viewport.scrollTop;
+    for(let sequence=2;sequence<=5;sequence++){timeline.apply(page(sequence));await frame();}
+    check(timeline.capture()?.key===anchor.key&&Math.abs(viewport.scrollTop-top)<2,'问题框反复刷新时保留用户正在阅读的资料位置');
+    check(!timeline.following,'问题框和消息布局变化不会重新开启自动跟随');
+    timeline.newer.click();await frame();
+    check(timeline.following&&timeline.atBottom(),'用户主动返回最新内容后才恢复跟随');
+  }finally{timeline.dispose();questions.remove();}
+  return checks;
+}

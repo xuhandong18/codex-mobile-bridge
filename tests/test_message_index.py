@@ -60,6 +60,17 @@ class MessageIndexTests(unittest.TestCase):
         self.assertEqual(first['items'][0]['id'],updated['items'][0]['id'])
         self.assertEqual(len(updated['items']),2)
 
+    def test_window_starting_mid_turn_does_not_make_a_supplementary_message_editable(self):
+        from bridge.features.sessions.model import normalize_state
+        from bridge.features.sessions.timeline import Timeline
+        self.turn(0,tools=40)
+        self.write({'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':'supplement'}]}})
+        catalog=self.nav.page(self.thread)
+        result=self.nav.window(self.thread,around=catalog['items'][-1]['id'],limit=10)
+        timeline=Timeline();timeline.update({**normalize_state(result['state']),'sequence':1})
+        row=next(r for r in timeline.rows if r['text']=='supplement')
+        self.assertFalse(row['editable'])
+
     def test_replacement_and_cross_chat_locators_are_rejected(self):
         self.turn(0)
         anchor = self.nav.page(self.thread)['items'][0]['id']
@@ -172,13 +183,59 @@ class NavigationBridgeTests(unittest.TestCase):
             self.assertLessEqual(len(encoded(page['rows'])),PAGE_BYTES)
             self.assertEqual(session.state,state)
             self.assertTrue(any(r['text']=='question 0' for r in page['rows']))
-            self.assertFalse(any(r.get('editable') or r.get('forkable') for r in page['rows']))
+            self.assertTrue(next(r for r in page['rows'] if r['text']=='question 0')['editable'])
+            self.assertTrue(any(r.get('forkable') for r in page['rows']))
             old=next(r for r in page['rows'] if r['role']=='assistant')
             detail=self.bridge.timeline_read(self.support.THREAD,'detail',cursor=page['epoch']+'.'+old['key'],offset=0,version=old['version'])
             self.assertTrue(detail['text'].startswith('answer 0'))
             next_page=self.bridge.timeline_read(self.support.THREAD,after=page['after'],limit=30)
             self.assertTrue(next_page['navigationWindow'])
         self.assertTrue(all(call['method'] in ('initialize','thread-owner-discovery') for call in self.fixture.requests))
+
+    def test_navigation_embedded_image_has_a_scoped_preview(self):
+        import base64
+        data=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9foAAAAASUVORK5CYII=')
+        records=[json.loads(line) for line in self.path.read_text().splitlines()]
+        records[1]['payload']['content'].append({'type':'input_image','image_url':'data:image/png;base64,'+base64.b64encode(data).decode()})
+        self.path.write_text(''.join(json.dumps(record)+'\n' for record in records))
+        page=self.bridge.timeline_read(self.support.THREAD,around=self.bridge.message_index(self.support.THREAD)['items'][0]['id'])
+        row=next(r for r in page['rows'] if r['text']=='question 0')
+        attachment=row['attachments'][0]
+        self.assertIn('desktopId',attachment)
+        self.assertNotIn('image_url',json.dumps(page))
+        preview,_=self.bridge.desktop_image_preview(self.support.THREAD,attachment['desktopId'])
+        self.assertEqual(preview['previewData'],data)
+        with self.assertRaises(KeyError):self.bridge.desktop_image_preview(self.support.THREAD,'0'*64)
+        from bridge.app.service import LiveSession
+        other=LiveSession('other');other.state={}
+        with patch.object(self.bridge,'session',return_value=other):
+            with self.assertRaises(KeyError):self.bridge.desktop_image_preview('other',attachment['desktopId'])
+
+    def test_navigation_malformed_embedded_image_cannot_be_served(self):
+        records=[json.loads(line) for line in self.path.read_text().splitlines()]
+        records[1]['payload']['content'].append({'type':'input_image','image_url':'data:image/png;base64,not-an-image'})
+        self.path.write_text(''.join(json.dumps(record)+'\n' for record in records))
+        page=self.bridge.timeline_read(self.support.THREAD,around=self.bridge.message_index(self.support.THREAD)['items'][0]['id'])
+        image=next(r for r in page['rows'] if r['text']=='question 0')['attachments'][0]
+        with self.assertRaises(KeyError):self.bridge.desktop_image_preview(self.support.THREAD,image['desktopId'])
+
+    def test_navigation_edit_revalidates_its_anchor_before_creating_a_branch(self):
+        import uuid
+        session=self.bridge.session(self.support.THREAD)
+        with session.condition:session.state['cwd']=str(self.root)
+        page=self.bridge.timeline_read(self.support.THREAD,around=self.bridge.message_index(self.support.THREAD)['items'][0]['id'])
+        row=next(r for r in page['rows'] if r['text']=='question 0')
+        body={'id':str(uuid.uuid4()),'action':'edit-fork','key':page['epoch']+'.'+row['key'],'version':row['version'],'text':'replacement'}
+        child=str(uuid.uuid4())
+        with patch.object(self.bridge,'_target',side_effect=[session,RuntimeError('activation unavailable')]),patch('bridge.app.service.fork_copy',return_value=child) as fork:
+            with self.assertRaisesRegex(RuntimeError,'activation unavailable'):
+                self.bridge.message_action(self.support.THREAD,body)
+            self.assertEqual(fork.call_args.kwargs['turn_id'],'old-0')
+        body['id']=str(uuid.uuid4())
+        self.path.write_bytes(self.path.read_bytes().replace(b'question 0',b'replaced 0'))
+        with patch.object(self.bridge,'_target',return_value=session),patch('bridge.app.service.fork_copy') as fork:
+            with self.assertRaises(ValueError):self.bridge.message_action(self.support.THREAD,body)
+            fork.assert_not_called()
 
     def test_ssh_navigation_source_runs_without_an_installed_project_package(self):
         from bridge.clients.codex.remote import RemoteStore
@@ -283,6 +340,22 @@ class MessageIndexHttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST',path,{},headers=headers)[0],404)
         self.assertEqual(read.call_count,1)
         self.assertEqual(self.request('GET',path+'?limit=bad',headers=headers)[0],400)
+
+    def test_embedded_image_preview_requires_login_and_returns_image_bytes(self):
+        import hashlib,http.client
+        from unittest.mock import Mock
+        data=b'\x89PNG\r\n\x1a\nfixture-image'
+        preview=Mock(return_value=({'previewData':data,'previewMime':'image/png','previewSha256':hashlib.sha256(data).hexdigest(),'name':'image.png'},'embedded'))
+        self.server.bridge.desktop_image_preview=preview
+        path='/api/sessions/'+self.support.THREAD+'/desktop-images/'+'a'*64
+        self.assertEqual(self.request('GET',path)[0],401);preview.assert_not_called()
+        headers=self.login()
+        connection=http.client.HTTPConnection('127.0.0.1',self.port,timeout=3)
+        try:
+            connection.request('GET',path,headers=headers);response=connection.getresponse()
+            self.assertEqual(response.status,200);self.assertEqual(response.getheader('Content-Type'),'image/png')
+            self.assertEqual(response.read(),data)
+        finally:connection.close()
 
     def test_around_and_forward_cursor_reach_the_existing_timeline_route(self):
         from unittest.mock import Mock

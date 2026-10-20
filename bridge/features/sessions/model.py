@@ -1,5 +1,6 @@
 """Normalize desktop state without changing the native thread or provider."""
 import copy
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -107,6 +108,13 @@ def is_user_context(text):
     return bool(re.fullmatch(envelope + r'(?:\s*' + envelope + r')*', text, re.S))
 
 
+def embedded_image_id(value):
+    """Opaque identity for an image already embedded in this chat's record."""
+    if isinstance(value, str) and re.match(r'^data:image/(?:png|jpeg|gif|webp);base64,', value):
+        return hashlib.sha256(('embedded:' + value).encode()).hexdigest()
+    return None
+
+
 def normalize_item(item):
     kind = item.get("type", "unknown")
     row = {"id": item.get("id"), "kind": kind, "status": item.get("status")}
@@ -172,7 +180,10 @@ def normalize_item(item):
     # Preserve non-text attachment descriptors. They are not fetched from arbitrary URLs.
     attachments = [x for x in item.get("content", []) if isinstance(x, dict) and x.get("type") not in ("text", "input_text", "output_text")] if isinstance(item.get("content"), list) else []
     if attachments:
-        row["attachments"] = attachments
+        row["attachments"] = []
+        for attachment in attachments:
+            image_id = embedded_image_id(attachment.get('image_url')) if attachment.get('type') == 'input_image' else None
+            row['attachments'].append({'type': 'image', 'name': '图片附件', 'desktopId': image_id} if image_id else attachment)
     return row
 
 
@@ -279,6 +290,7 @@ def normalize_state(state, connected=True):
         effort = params.get('effort') or params.get('reasoningEffort') or settings.get('reasoning_effort') or turn.get('reasoningEffort')
         result.append({"model": model, "effort": effort, "id": turn.get("turnId") or str(ordinal), "status": turn.get("status"),
                        "startedAt": turn.get("turnStartedAtMs"), "messages": messages,
+                       **({'firstUserMessageId': turn['firstUserMessageId']} if 'firstUserMessageId' in turn else {}),
                        "actionable": turn.get('actionable', True) and bool(turn.get("turnId")) and turn.get("turnId") != "history",
                        "error": turn.get("error"), "diff": turn.get("diff")})
     history = state.get("turnHistory", {}).get("history", {})

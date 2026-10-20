@@ -125,7 +125,7 @@ class MessageActions {
     const text=action==='fork'?null:this.input.value;
     const key='message-action-attempt:'+url+':'+row.key;
     let attempt;try{attempt=JSON.parse(sessionStorage.getItem(key));}catch{}
-    const identity={action,key:timeline.epoch+'.'+row.key,version:row.version,text};
+    const identity={action,key:timeline.rowCursor?timeline.rowCursor(row):timeline.epoch+'.'+row.key,version:row.version,text};
     if(!attempt||Object.keys(identity).some(k=>attempt[k]!==identity[k]))attempt={id:this.uuid(),...identity};
     sessionStorage.setItem(key,JSON.stringify(attempt));
     this.pending=true;this.busy(true);this.error.textContent='';this.submit.textContent=actionText('正在提交…');
