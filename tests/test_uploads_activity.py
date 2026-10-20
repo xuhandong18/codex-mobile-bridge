@@ -122,6 +122,35 @@ class UploadActivityTests(unittest.TestCase):
             self.bridge._disconnected()
             self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'active')
 
+    def test_an_expanded_chat_can_follow_its_owner_while_an_older_follow_is_blocked(self):
+        from unittest.mock import Mock
+        from bridge.app.service import LiveSession
+        self.bridge.list()
+        newer = str(uuid.uuid4())
+        with self.bridge.lock:
+            self.bridge.listed.add(newer)
+            self.bridge.live[newer] = LiveSession(newer)
+        entered, release = threading.Event(), threading.Event()
+        def attach(session, timeout=0):
+            if session.id == THREAD:
+                entered.set();release.wait(1)
+            with session.condition:
+                session.state = {'id': session.id, 'threadRuntimeStatus': {'type': 'idle'}, 'turns': []}
+                session.connected = True
+                session.changed()
+        def tree(ids):
+            return {sid: {'agents': [], 'limited': False} for sid in ids}
+        native = Mock();native.read.return_value = {}
+        with patch.object(self.bridge, '_attach', side_effect=attach), patch.object(self.bridge, 'desktop_activity', native), \
+                patch.object(self.bridge.store, 'activity_tree', side_effect=tree), ThreadPoolExecutor(max_workers=1) as pool:
+            older = pool.submit(self.bridge.activity, [THREAD], .8)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertEqual(self.bridge.activity([newer], .15)[0]['status'], 'idle')
+                self.assertFalse(older.done())
+            finally:
+                release.set();older.result(1)
+
     def test_unloaded_visible_chat_uses_verified_metadata_without_creating_a_writable_owner(self):
         from unittest.mock import Mock
         self.bridge.list()
@@ -304,6 +333,7 @@ class UploadActivityTests(unittest.TestCase):
             self.bridge.activity([THREAD], .2)
             self.bridge.activity_recency_worker.join(1)
         self.assertEqual(self.bridge.activity_recency_snapshot[THREAD], 123)
+
         entered, release = threading.Event(), threading.Event()
         def recencies(ids):
             entered.set();release.wait(1)
@@ -317,6 +347,24 @@ class UploadActivityTests(unittest.TestCase):
                 release.set()
                 self.bridge.activity_recency_worker.join(1)
         self.assertEqual(self.bridge.activity_recency_snapshot[THREAD], 123)
+
+    def test_shutdown_waits_for_an_inflight_recency_read_to_release_its_resources(self):
+        self.bridge.list()
+        entered, release = threading.Event(), threading.Event()
+        def recencies(ids):
+            entered.set();release.wait(1)
+            return {THREAD: 123}
+        with patch.object(self.bridge.store, 'recencies', side_effect=recencies), ThreadPoolExecutor(max_workers=1) as pool:
+            self.bridge._refresh_activity_recencies([THREAD])
+            try:
+                self.assertTrue(entered.wait(.3))
+                shutdown = pool.submit(self.bridge.close)
+                with self.assertRaises(TimeoutError):
+                    shutdown.result(.04)
+                release.set();shutdown.result(.5)
+                self.assertFalse(self.bridge.activity_recency_worker.is_alive())
+            finally:
+                release.set();self.bridge.activity_recency_worker.join(1)
 
     def test_native_display_status_does_not_override_a_live_owner(self):
         from unittest.mock import Mock

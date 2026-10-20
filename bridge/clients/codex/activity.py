@@ -19,7 +19,7 @@ class DesktopActivity:
         self.bridge = bridge
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
-        self.query_lock = threading.Lock()
+        self.querying = False
         self.snapshots, self.retry_at = {}, {}
         self.worker = self.native = None
         self.worker_done, self.worker_ids = None, set()
@@ -62,8 +62,14 @@ class DesktopActivity:
     def _wait_read(self, identifiers, timeout, live):
         deadline = time.monotonic()+timeout
         live = live or (lambda sid: False)
-        if not identifiers or not self.query_lock.acquire(timeout=max(0, deadline-time.monotonic())):
+        if not identifiers:
             return {}
+        with self.condition:
+            self.condition.wait_for(lambda: self.closed or not self.querying or all(live(sid) for sid in identifiers),
+                                    timeout=max(0, deadline-time.monotonic()))
+            if self.closed or self.querying or all(live(sid) for sid in identifiers) or time.monotonic() >= deadline:
+                return {}
+            self.querying = True
         try:
             with self.condition:
                 if self.closed:
@@ -91,7 +97,9 @@ class DesktopActivity:
                 self.condition.wait_for(lambda: self.closed or done.is_set() or ready(), timeout=max(0, deadline-time.monotonic()))
                 return snapshot()
         finally:
-            self.query_lock.release()
+            with self.condition:
+                self.querying = False
+                self.condition.notify_all()
 
     def _connect(self, *, timeout=None):
         return ActivityTools.connect_profile(self.bridge, **({'timeout': timeout} if timeout is not None else {}))

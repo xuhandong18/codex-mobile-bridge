@@ -166,3 +166,24 @@ class DesktopMetadataActivityTests(unittest.TestCase):
                 self.assertEqual(waiting.result()['cold']['status'], 'notLoaded')
             finally:
                 release.set()
+
+    def test_live_owner_can_finish_while_another_query_owns_the_metadata_reader(self):
+        entered, release, started, confirmed = (threading.Event() for _ in range(4))
+        def read(*args, **kwargs):
+            entered.set();release.wait(1);return metadata()
+        def newer():
+            started.set()
+            return self.reader.read(['new'], timeout=.8, live=lambda sid: confirmed.is_set())
+        self.native.call.side_effect = read
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            older = pool.submit(self.reader.read, ['cold'], timeout=.8)
+            try:
+                self.assertTrue(entered.wait(.3))
+                waiting = pool.submit(newer)
+                self.assertTrue(started.wait(.3))
+                confirmed.set();self.reader.wake()
+                self.assertEqual(waiting.result(.2), {})
+                self.assertFalse(older.done())
+                self.native.call.assert_called_once()
+            finally:
+                release.set();older.result(1)

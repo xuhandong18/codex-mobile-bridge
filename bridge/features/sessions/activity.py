@@ -10,14 +10,15 @@ from bridge.features.sessions.store import StoreUnavailable
 
 
 class ActivityQueries:
-    """One passive query per host at a time; identical callers share its result."""
+    """Bounded parallel passive queries; identical callers share their result."""
     TIMEOUT = 5
+    MAX_WORKERS = 4
 
     def __init__(self, read):
         self.read = read
         self.lock = threading.Lock()
         self.pending, self.queue = {}, []
-        self.worker = None
+        self.workers = set()
         self.closed = False
 
     def query(self, identifiers, timeout=TIMEOUT):
@@ -34,16 +35,17 @@ class ActivityQueries:
                     raise TimeoutError('Activity reader is busy')
                 future = self.pending[key] = Future()
                 self.queue.append((key, deadline, future))
-                if self.worker is None:
-                    self.worker = threading.Thread(target=self._run, daemon=True)
-                    self.worker.start()
+                if len(self.workers) < self.MAX_WORKERS:
+                    worker = threading.Thread(target=self._run, daemon=True)
+                    self.workers.add(worker)
+                    worker.start()
         return future.result(timeout=max(0, deadline-time.monotonic()))
 
     def _run(self):
         while True:
             with self.lock:
                 if self.closed or not self.queue:
-                    self.worker = None
+                    self.workers.discard(threading.current_thread())
                     return
                 key, deadline, future = self.queue.pop(0)
             try:

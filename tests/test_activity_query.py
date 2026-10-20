@@ -49,6 +49,54 @@ class ActivityQueryTests(unittest.TestCase):
         self.assertEqual(reader.query(['chat'])[0]['status'], 'idle')
         self.assertEqual(callback.call_count, 2)
 
+    def test_a_new_visible_chat_does_not_queue_behind_an_unrelated_slow_query(self):
+        entered, release = threading.Event(), threading.Event()
+        def read(ids, deadline):
+            if ids == ['old']:
+                entered.set();release.wait(1)
+            return [{'id': ids[0], 'status': 'idle'}]
+        reader = self.reader(read)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            older = pool.submit(reader.query, ['old'], .8)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertEqual(reader.query(['new'], .15)[0]['id'], 'new')
+                self.assertFalse(older.done(), 'The original slow request should still be blocked')
+            finally:
+                release.set();older.result(1)
+
+    def test_parallel_queries_stay_bounded_and_a_freed_slot_serves_the_next_query(self):
+        entered = {sid: threading.Event() for sid in ('one', 'two', 'three')}
+        releases = {sid: threading.Event() for sid in ('one', 'two')}
+        queued, callers = threading.Event(), []
+        class ObservedFuture(Future):
+            def result(self, timeout=None):
+                callers.append(1)
+                if len(callers) == 3:
+                    queued.set()
+                return super().result(timeout)
+        def read(ids, deadline):
+            sid = ids[0];entered[sid].set()
+            if sid in releases:
+                releases[sid].wait(1)
+            return [{'id': sid, 'status': 'idle'}]
+        reader = self.reader(read);reader.MAX_WORKERS = 2
+        with patch('bridge.features.sessions.activity.Future', ObservedFuture), ThreadPoolExecutor(max_workers=3) as pool:
+            first = pool.submit(reader.query, ['one'], .8)
+            second = pool.submit(reader.query, ['two'], .8)
+            third = None
+            try:
+                self.assertTrue(entered['one'].wait(.3));self.assertTrue(entered['two'].wait(.3))
+                third = pool.submit(reader.query, ['three'], .8)
+                self.assertTrue(queued.wait(.3));self.assertFalse(entered['three'].is_set())
+                releases['one'].set()
+                self.assertEqual(third.result(.3)[0]['id'], 'three')
+                self.assertFalse(second.done())
+            finally:
+                for event in releases.values():event.set()
+                first.result(1);second.result(1)
+                if third is not None:third.result(1)
+
     def test_timeout_bounds_the_request_even_if_native_io_has_not_returned(self):
         entered, release = threading.Event(), threading.Event()
         def read(ids, deadline):
@@ -64,14 +112,14 @@ class ActivityQueryTests(unittest.TestCase):
             callback.assert_called_once()
         finally:
             release.set()
-            if reader.worker:
-                reader.worker.join(1)
+            for worker in tuple(reader.workers):
+                worker.join(1)
 
     def test_queued_query_expires_without_starting_extra_native_io(self):
         entered, release = threading.Event(), threading.Event()
         def read(ids, deadline):
             entered.set();release.wait(1);return []
-        callback = Mock(side_effect=read);reader = self.reader(callback)
+        callback = Mock(side_effect=read);reader = self.reader(callback);reader.MAX_WORKERS = 1
         try:
             with self.assertRaises(TimeoutError):
                 reader.query(['first'], .03)
@@ -79,8 +127,8 @@ class ActivityQueryTests(unittest.TestCase):
                 reader.query(['second'], .03)
         finally:
             release.set()
-            if reader.worker:
-                reader.worker.join(1)
+            for worker in tuple(reader.workers):
+                worker.join(1)
         callback.assert_called_once()
 
     def test_closing_wakes_waiters_and_discards_a_late_result(self):

@@ -63,6 +63,12 @@ const server=http.createServer(async(req,res)=>{
       check(await page.locator(coldSelector+' .session-indicator.unknown').count()===1,'未取得原生元数据前保留未知状态 '+width);
       const waitingCount=observations.length;await page.waitForTimeout(350);
       check(observations.length===waitingCount&&await page.evaluate(()=>activityBusy),'桌面结果未返回时保持同一个请求，不发起补查 '+width);
+      await page.locator('#sessions').evaluate(node=>{node.scrollTop=node.scrollHeight;});
+      await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='active',rows.at(-1).id,{timeout:1500});
+      check(coldWaiters.size===1&&await page.evaluate(()=>activityBusy),'旧请求仍在等待时，新出现的聊天已取得状态 '+width);
+      check(observations.slice(start+1).some(hosts=>hosts.local?.includes(rows.at(-1).id))&&
+        observations.slice(start+1).every(hosts=>!hosts.local?.includes(rows[1].id)),'新条目立即查询，已有请求中的聊天不重复读取 '+width);
+      await page.locator('#sessions').evaluate(node=>{node.scrollTop=0;});
       releaseCold();const readyAt=Date.now();
       await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded',rows[1].id,{timeout:1500});
       check(await page.locator(coldSelector+' .session-indicator').count()===0&&await page.evaluate(()=>currentId===null),'未加载且已完成的聊天自动消除灰点，无需打开 '+width);
@@ -76,7 +82,9 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(id=>!sessionActivity.rows['local|'+id]?.offline,rows[1].id,{timeout:1500});
       check(observations.length>grayAt&&await page.locator(coldSelector+' .session-indicator').count()===0,'已有条目新出现灰点时立即触发查询 '+width);
       const scrollStart=observations.length;
+      const scrolledRead=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/activity'&&request.postDataJSON()?.hosts?.local?.includes(rows.at(-1).id));
       await page.locator('#sessions').evaluate(node=>{node.scrollTop=node.scrollHeight;});
+      await scrolledRead;
       await page.waitForFunction(id=>!!document.querySelector('#sessions .session[data-id="'+id+'"] .session-indicator.running'),rows.at(-1).id);
       check(observations.slice(scrollStart).some(hosts=>hosts.local?.includes(rows.at(-1).id)),'滚动后自动连接新出现的聊天 '+width);
       check(observations.slice(scrollStart).every(hosts=>!hosts.local?.includes(rows[0].id)),'移出屏幕的聊天停止轮询 '+width);

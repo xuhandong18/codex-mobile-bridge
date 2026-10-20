@@ -37,6 +37,7 @@ function bumpRecency(id,host,at=Date.now()){
   if(row&&at>row.recency){row.recency=at;listRows.sort((a,b)=>b.recency-a.recency);renderList();}
 }
 let activityBusy=false;
+const activityRequests=new Set(),activityInFlight=new Set();
 const fastModeControl=new FastModeControl({root:$('fast-mode-control'),input:$('fast-mode-enabled'),status:$('fast-mode-status')});
 let modelRequest=0,modelTarget=null,modelSaving=false;
 async function goalAction(action,payload) {
@@ -99,14 +100,13 @@ const attachments=new ChatAttachments({root:$('attachment-list'),button:$('attac
 },upload:uploadAttachmentWithRetry});
 function visibleChat(){return clientNavigation.provider==='codex'&&currentId&&!workbench.isFileVisible&&!document.hidden&&$('app').classList.contains('chat-open')?chatKey():null;}
 function renderActivity(){let unknownAppeared=false;for(const button of $('sessions').querySelectorAll('.session')){
-  const previous=button.querySelector('.session-indicator'),indicator=sessionActivity.indicator(chatKey(button.dataset.id,button.dataset.host));
-  if(indicator?.kind==='unknown'&&!previous?.classList.contains('unknown'))unknownAppeared=true;
+  const key=chatKey(button.dataset.id,button.dataset.host),previous=button.querySelector('.session-indicator'),indicator=sessionActivity.indicator(key);
+  if(indicator?.kind==='unknown'&&!previous?.classList.contains('unknown')&&!activityInFlight.has(key))unknownAppeared=true;
   previous?.remove();
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
-}if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));if(unknownAppeared&&!activityBusy)scheduleActivityRefresh();}
+}if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));if(unknownAppeared)scheduleActivityRefresh();}
 async function refreshActivity(){
   if($('app').hidden||document.hidden||clientNavigation.provider!=='codex')return;
-  if(activityBusy){activityRefreshPending=true;return;}
   const root=$('sessions');if(!root.clientWidth||!root.clientHeight)return;
   const bounds=root.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(window.innerHeight,bounds.bottom),left=Math.max(0,bounds.left),right=Math.min(window.innerWidth,bounds.right);
   if(bottom<=top||right<=left)return;
@@ -114,11 +114,14 @@ async function refreshActivity(){
   for(const button of root.querySelectorAll('.session')){
     if(button.closest('details:not([open]),[hidden]')||!button.getClientRects().length)continue;
     const rect=button.getBoundingClientRect(),{id,host}=button.dataset,key=chatKey(id,host);
-    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key))continue;
+    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key)||activityInFlight.has(key))continue;
     const ids=hosts[host]??=[];if(!ids.includes(id))ids.push(id);
   }
-  if(!Object.keys(hosts).length)return;activityBusy=true;
+  if(!Object.keys(hosts).length)return;
+  if(activityRequests.size>=4){activityRefreshPending=true;return;}
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
+  const keys=Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>chatKey(id,host)));
+  activityRequests.add(controller);for(const key of keys)activityInFlight.add(key);activityBusy=true;
   try{
     const result=await api('/api/activity',{hosts},controller.signal);
     if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'){
@@ -131,11 +134,11 @@ async function refreshActivity(){
       const rows=Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>({id,host,connected:false,status:'unknown',activityError:controller.signal.aborted?'timeout':'unavailable'})));
       sessionActivity.update(rows,visibleChat(),{sync:false});renderActivity();
     }
-  }finally{clearTimeout(timeout);activityBusy=false;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh();}}
+  }finally{clearTimeout(timeout);activityRequests.delete(controller);for(const key of keys)activityInFlight.delete(key);activityBusy=activityRequests.size>0;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh();}}
 }
 let activityRefreshTimer=null,activityRefreshPending=false;
 function scheduleActivityRefresh(){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(refreshActivity,100);}
-setInterval(()=>{if(!activityBusy)refreshActivity();},5000);
+setInterval(refreshActivity,5000);
 window.addEventListener('focus',refreshActivity);
 window.addEventListener('resize',scheduleActivityRefresh);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshActivity();});

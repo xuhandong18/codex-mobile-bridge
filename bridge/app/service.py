@@ -151,7 +151,7 @@ class Bridge:
         self.remote_bridges = {}
         self.host_errors = []
         self.listed = set()
-        self.activity_following = False
+        self.activity_following = set()
         self.activity_queries = ActivityQueries(self._activity_query)
         self.activity_recency_snapshot = {}
         self.activity_recency_worker = None
@@ -1138,9 +1138,9 @@ class Bridge:
                     session.access = self._access(session.origin, session)
                 session.touched = time.monotonic()
                 sessions.append(session)
-            pending = [s for s in sessions if not s.connected]
-            if pending and not self.activity_following:
-                self.activity_following = True
+            pending = [s for s in sessions if not s.connected and s.id not in self.activity_following]
+            if pending:
+                self.activity_following.update(s.id for s in pending)
                 for session in pending:
                     session.error = None
                 def follow():
@@ -1150,7 +1150,7 @@ class Bridge:
                             session.retry_at = time.monotonic() + 15
                             self._attach(session, timeout=0)
                     finally:
-                        with self.lock: self.activity_following = False
+                        with self.lock: self.activity_following.difference_update(s.id for s in pending)
                 threading.Thread(target=follow, daemon=True).start()
         # Start independent passive reads before waiting. Each stage shares the
         # caller's deadline; no second HTTP request is needed to collect results.
@@ -3016,6 +3016,10 @@ class Bridge:
         self.cli_sessions.close()
         if self.goal:
             self.goal.close()
+        with self.lock:
+            worker = self.activity_recency_worker
+        if worker and worker is not threading.current_thread():
+            worker.join(timeout=2)
 
 
 def validate_form(value, schema):

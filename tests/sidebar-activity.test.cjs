@@ -9,7 +9,7 @@ function fixture(){
   const node=(row,top,rendered=true)=>({dataset:row,closest:()=>null,getClientRects:()=>rendered?[{}]:[],getBoundingClientRect:()=>({top,bottom:top+30,left:0,right:240})});
   nodes.push(node(rows[0],10),node(rows[1],400),node(rows[2],60,false));
   const activity=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});let now=0;
-  let periodic;const context=vm.createContext({AbortController,setInterval:fn=>periodic=fn,activityBusy:false,listRows:rows,document:{hidden:false},window:{innerWidth:1000,innerHeight:800},
+  let periodic;const context=vm.createContext({AbortController,setInterval:fn=>periodic=fn,activityBusy:false,activityRequests:new Set(),activityInFlight:new Set(),listRows:rows,document:{hidden:false},window:{innerWidth:1000,innerHeight:800},
     clientNavigation:{provider:'codex'},$:id=>id==='sessions'?root:{hidden:false},sessionActivity:activity,visibleChat:()=>null,
     setTimeout:(fn,delay=0)=>{const id={delay,at:now+delay};timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),
     chatKey:(id,host)=>host+'|'+id,renderActivity(){},bumpRecency(){},api:async(url,body)=>{calls.push({url,body});return {sessions:[]};}});
@@ -49,16 +49,44 @@ test('closed details are excluded even when a browser reports their child rectan
   assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[0].body)),{hosts:{local:['visible']}});
 });
 
-test('layout events coalesce and a changed viewport is refreshed after an in-flight read',async()=>{
+test('layout events coalesce without queueing another read for the same in-flight chats',async()=>{
   const ui=fixture();let release;ui.context.api=async(url,body)=>{ui.calls.push({url,body});await new Promise(resolve=>release=resolve);return {sessions:[]};};
   const reading=ui.refresh();ui.schedule();ui.schedule();assert.equal(ui.timers.size,2);
   await ui.next();assert.equal(ui.calls.length,1);
-  ui.nodes[0].getBoundingClientRect=()=>({top:-50,bottom:-20,left:0,right:240});
-  ui.nodes[1].getBoundingClientRect=()=>({top:20,bottom:50,left:0,right:240});
-  release();await reading;assert.equal(ui.timers.size,1);
-  ui.context.api=async(url,body)=>{ui.calls.push({url,body});return {sessions:[]};};
-  await [...ui.timers.values()][0]();
-  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.at(-1).body)),{hosts:{local:['below']}});
+  release();await reading;assert.equal(ui.timers.size,0);assert.equal(ui.calls.length,1);
+});
+
+test('newly visible chats start their read while an older periodic request is still waiting',async()=>{
+  const ui=fixture();let release;
+  ui.context.api=async(url,body)=>{ui.calls.push({url,body});if(body.hosts.local?.includes('visible'))await new Promise(resolve=>release=resolve);return {sessions:[]};};
+  const reading=ui.refresh();
+  try{
+    ui.nodes[1].getBoundingClientRect=()=>({top:20,bottom:50,left:0,right:240});
+    ui.schedule();await ui.next();
+    assert.equal(ui.calls.length,2,'A newly expanded project must not wait for the old request deadline or the next five-second tick');
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[1].body)),{hosts:{local:['below']}});
+    assert.equal(ui.context.activityBusy,true,'Completing the new read cannot release the older in-flight read');
+    await ui.periodic();assert.equal(ui.calls.length,3,'Periodic updates can refresh completed chats without waiting for another chat');
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[2].body)),{hosts:{local:['below']}});
+  }finally{release();await reading;}
+});
+
+test('rapid viewport changes bound concurrent requests and use the next free slot',async()=>{
+  const ui=fixture(),releases=[],reading=[];
+  ui.context.api=async(url,body)=>{ui.calls.push({url,body});await new Promise(resolve=>releases.push(resolve));return {sessions:[]};};
+  try{
+    for(let i=0;i<5;i++){
+      const row={id:'project-'+i,host:'local'};ui.rows.push(row);ui.nodes[0].dataset=row;
+      const task=ui.refresh();if(i<4)reading.push(task);else await task;
+    }
+    assert.equal(ui.calls.length,4,'Fast scrolling must not create unbounded concurrent reads');
+    releases[0]();await reading[0];
+    const scheduled=ui.next();await Promise.resolve();
+    assert.equal(ui.calls.length,5);
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[4].body)),{hosts:{local:['project-4']}});
+    for(const release of releases)release();await scheduled;
+  }finally{for(const release of releases)release();await Promise.all(reading);}
+  assert.equal(ui.context.activityBusy,false);
 });
 
 test('one blocking activity request returns the desktop result without follow-up reads',async()=>{
@@ -96,13 +124,14 @@ test('a hung network request is aborted and releases the activity request lock',
 test('newly rendered gray dots trigger a read while existing gray dots do not restart it',()=>{
   const source=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');let dot=null,scheduled=0;
   const button={dataset:{id:'chat',host:'local'},querySelector:selector=>selector==='.session-indicator'?dot:{prepend:value=>dot=value}};
-  let periodic;const context=vm.createContext({AbortController,setInterval:fn=>periodic=fn,activityBusy:false,state:null,currentId:null,chatKey:(id,host)=>host+'|'+id,t:value=>value,
+  let periodic;const context=vm.createContext({AbortController,setInterval:fn=>periodic=fn,activityBusy:false,activityInFlight:new Set(),state:null,currentId:null,chatKey:(id,host)=>host+'|'+id,t:value=>value,
     $:()=>({querySelectorAll:()=>[button]}),sessionActivity:{indicator:()=>({kind:'unknown',label:'运行状态暂不可用'})},scheduleActivityRefresh:()=>scheduled++,
     el:(tag,cls)=>({classList:{contains:value=>cls.split(' ').includes(value)},setAttribute(){},remove(){dot=null;}})});
   vm.runInContext(source.slice(source.indexOf('function renderActivity(){'),source.indexOf('async function refreshActivity(')),context);
   vm.runInContext('renderActivity()',context);assert.equal(scheduled,1);
   vm.runInContext('renderActivity()',context);assert.equal(scheduled,1);
-  dot=null;context.activityBusy=true;vm.runInContext('renderActivity()',context);assert.equal(scheduled,1,'An in-flight read already handles the new gray status');
+  dot=null;context.activityBusy=true;context.activityInFlight.add('local|chat');vm.runInContext('renderActivity()',context);assert.equal(scheduled,1,'An in-flight read already handles the new gray status');
+  dot=null;context.activityInFlight.clear();vm.runInContext('renderActivity()',context);assert.equal(scheduled,2,'An unrelated in-flight request cannot suppress a newly visible gray chat');
 });
 
 test('a failed HTTP read releases the lock without automatic resubmission',async()=>{
