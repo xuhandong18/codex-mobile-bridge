@@ -52,6 +52,8 @@ npm run test:updater
 
 后端定向回归为 `test_activity_query.py`、`test_desktop_metadata_activity.py`、`test_subagent_activity.py` 和 `test_uploads_activity.py`，覆盖单请求等待结果、查询去重、共同截止时间、超时/关闭/晚到结果、子代理初始快照、实时 owner 优先及只读边界。Node 回归覆盖阻塞请求完成、超时保留灰点、网络中断与视口变化后的合并刷新；浏览器驱动在三种尺寸实际阻塞合成响应，检查等待期间没有重复补查、同一响应更新页面，以及超时提示。上述时限不承诺真实客户端或网络必定在五秒内成功。
 
+延迟回归用事件控制合成读取：实时 owner 已就绪时不等较慢的原生补读，已核验的原生结果不等连接清理，运行中的父会话不等子代理发现；等待期间收到的新运行状态也能唤醒查询，空闲父会话仍等待子代理确认。排序时间读取被阻塞时，状态仍在同一请求返回，并检查辅助读取的并发合并、后续时间更新、失败保留与关闭后晚到结果丢弃。
+
 完成已读同步运行 `python -B scripts/test-backend.py --source-only -p test_chat_read_state.py` 与 `node --test tests/chat-read-state.test.cjs tests/attachments-activity.test.cjs tests/desktop-sessions-ui.test.cjs tests/deepseek-personal.test.mjs`，检查 Codex/DeepSeek 前台完成、背景及文件页隔离、轮次变化、原生身份与主机核对、CSRF 和持久化未知回执；Harness 用例还实际运行客户端插件工厂并验证只清除目标蓝点。第 6 版接入升级与组件校验由 `test_deepseek_migration.py` 覆盖。以上均使用合成数据，不能代替已安装客户端的实机联调。
 
 长聊天消息目录运行 `python -B scripts/test-backend.py --source-only -p test_message_index.py`，覆盖 5000 条目录缓存、增量追加、替换/截断、未写完尾行、附件摘要、过期/跨聊天/跨主机标识、只读 HTTP、文件边界及独立 SSH 源码执行，并核验导航窗口的历史编辑、半轮补充消息限制、内嵌图片鉴权预览及变更后拒绝写入。真实浏览器驱动为 `node scripts/test-message-navigation-browser.cjs`，复用已有 Playwright/Chromium，在 390、820、1280 像素下实际执行 `message-navigation.browser.js` 和原有时间线、显隐、公开思考摘要夹具，检查完整目录、虚拟条目、早期/中间定位、上下滚动自动补页、相邻两页的有界保留、编辑入口、实际图片加载、实时阅读隔离、竞态与分页失败后的显式重试；仅使用合成数据，不操作真实客户端。

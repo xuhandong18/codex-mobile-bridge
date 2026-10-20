@@ -1,5 +1,6 @@
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -146,3 +147,22 @@ class DesktopMetadataActivityTests(unittest.TestCase):
             self.assertEqual(self.reader.read(['cold'], timeout=.03), {})
         self.reader.worker.join(1)
         self.connect.assert_not_called()
+
+    def test_verified_result_is_returned_before_the_tool_connection_finishes_cleanup(self):
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        def close():
+            entered.set();release.wait(1)
+        self.native.close.side_effect = close
+        def read():
+            try:
+                return self.reader.read(['cold'], timeout=.8)
+            finally:
+                finished.set()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(read)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertTrue(finished.wait(.2), 'A verified status must not wait for connection cleanup')
+                self.assertEqual(waiting.result()['cold']['status'], 'notLoaded')
+            finally:
+                release.set()

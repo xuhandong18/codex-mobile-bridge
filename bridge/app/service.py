@@ -153,6 +153,8 @@ class Bridge:
         self.listed = set()
         self.activity_following = False
         self.activity_queries = ActivityQueries(self._activity_query)
+        self.activity_recency_snapshot = {}
+        self.activity_recency_worker = None
         self.notification_cursor = 0
         self.notification_client_id = None
         self.notification_dirty = set()
@@ -999,6 +1001,7 @@ class Bridge:
             session.changed()
         if newly_connected:
             logging.getLogger(__name__).info("Codex connection transition thread=%s cause=native_attached", thread_id)
+        self.subagent_activity.wake()
         self.notification_event.set()
 
     def _cli_disconnected(self, thread_id=None):
@@ -1104,6 +1107,23 @@ class Bridge:
             rows.append(row)
         return rows
 
+    def _refresh_activity_recencies(self, identifiers):
+        # Sidebar ordering is independent of runtime confirmation. Keep one
+        # background read per host; a slow SQLite/SSH read cannot hold badges up.
+        with self.lock:
+            if self.closed.is_set() or self.activity_recency_worker is not None and self.activity_recency_worker.is_alive():
+                return
+            def refresh():
+                try:
+                    recencies = self.store.recencies(identifiers)
+                except (OSError, ValueError, StoreUnavailable, RemoteUnavailable):
+                    return
+                with self.lock:
+                    if not self.closed.is_set():
+                        self.activity_recency_snapshot.update({sid: at for sid, at in recencies.items() if sid in self.listed})
+            self.activity_recency_worker = threading.Thread(target=refresh, daemon=True)
+            self.activity_recency_worker.start()
+
     def _activity_query(self, identifiers, deadline):
         with self.lock:
             sessions = []
@@ -1134,20 +1154,16 @@ class Bridge:
                 threading.Thread(target=follow, daemon=True).start()
         # Start independent passive reads before waiting. Each stage shares the
         # caller's deadline; no second HTTP request is needed to collect results.
-        self.subagent_activity.read([session.id for session in sessions], force=True)
+        descendants = self.subagent_activity.read([session.id for session in sessions], force=True)
+        self._refresh_activity_recencies([session.id for session in sessions])
+        by_id = {session.id: session for session in sessions}
         native_status = self.desktop_activity.read([s.id for s in sessions if not s.connected and s.origin == 'desktop'],
-                                                   timeout=max(0, deadline-time.monotonic()))
-        try:
-            recencies = self.store.recencies([s.id for s in sessions])
-        except (OSError, ValueError, StoreUnavailable, RemoteUnavailable):
-            recencies = {}
-        rows = []
-        descendants = self.subagent_activity.wait([session.id for session in sessions], deadline)
-        for session in sessions:
+                                                   timeout=max(0, deadline-time.monotonic()), live=lambda sid: by_id[sid].connected)
+        with self.lock:
+            recencies = {session.id: self.activity_recency_snapshot.get(session.id, 0) for session in sessions}
+
+        def parent_snapshot(session):
             with session.condition:
-                if not session.connected and session.id not in native_status and not session.error:
-                    session.condition.wait_for(lambda: session.connected or session.error or self.closed.is_set(),
-                                               timeout=max(0, deadline-time.monotonic()))
                 state = session.state or {}
                 turns = ordered_turns(state)
                 last = next((t for t in reversed(turns) if t.get('turnId')), {})
@@ -1155,16 +1171,32 @@ class Bridge:
                 parent_status = state.get('threadRuntimeStatus', {}).get('type') if session.connected else native['status'] if native else 'unknown'
                 if native:
                     last = {'turnId': native['turnId'], 'status': native['turnStatus']}
+                return parent_status, last, session.connected, native is not None
+
+        rows = []
+        for session in sessions:
+            with session.condition:
+                if not session.connected and session.id not in native_status and not session.error:
+                    session.condition.wait_for(lambda: session.connected or session.error or self.closed.is_set(),
+                                               timeout=max(0, deadline-time.monotonic()))
+            parent_status, last, connected, native = parent_snapshot(session)
+            # A confirmed active parent already determines the aggregate. Idle
+            # parents still need confirmed descendants before showing completion.
+            if parent_status == 'active':
                 activity = descendants[session.id]
-                status = 'active' if activity['runningSubagents'] else parent_status
-                if status != 'active' and not activity['subagentsKnown']:
-                    status = 'unknown'
-                rows.append({'id': session.id, 'host': self.host, 'recency': recencies.get(session.id, 0), 'connected': session.connected,
-                             'status': status, 'parentStatus': parent_status,
-                             'activityConnected': session.connected or native is not None or bool(activity['runningSubagents']), **activity,
-                             'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
-                if status == 'unknown':
-                    rows[-1]['activityError'] = 'timeout' if time.monotonic() >= deadline else 'unavailable'
+            else:
+                activity = self.subagent_activity.wait([session.id], deadline, confirmed=lambda:
+                    session.connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active')[session.id]
+                parent_status, last, connected, native = parent_snapshot(session)
+            status = 'active' if activity['runningSubagents'] else parent_status
+            if status != 'active' and not activity['subagentsKnown']:
+                status = 'unknown'
+            rows.append({'id': session.id, 'host': self.host, 'recency': recencies.get(session.id, 0), 'connected': connected,
+                         'status': status, 'parentStatus': parent_status,
+                         'activityConnected': connected or native or bool(activity['runningSubagents']), **activity,
+                         'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
+            if status == 'unknown':
+                rows[-1]['activityError'] = 'timeout' if time.monotonic() >= deadline else 'unavailable'
         return rows
 
     def notification_candidates(self):
@@ -1610,6 +1642,8 @@ class Bridge:
                 session.revision = None
                 session.error = "现有 Codex App 连接与此会话不匹配，未连接" if session.origin == 'cli' else "同步状态发生变化，正在重新读取桌面快照"
                 session.changed()
+        self.desktop_activity.wake()
+        self.subagent_activity.wake()
 
     def _invalidate(self, session, message, runtime=None, owner=None, reason=None):
         with session.condition:

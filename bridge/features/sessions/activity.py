@@ -109,6 +109,7 @@ class SubagentActivity:
         self.trees, self.records = {}, {}
         self.ipc = None
         self.worker = None
+        self.worker_done = None
         self.closed = False
 
     def read(self, identifiers, *, force=False):
@@ -116,9 +117,21 @@ class SubagentActivity:
         with self.lock:
             if not self.closed and identifiers and (self.worker is None or not self.worker.is_alive()):
                 self.worker_identifiers = set(identifiers)
-                self.worker = threading.Thread(target=self._refresh, args=(identifiers,), kwargs={'force': force}, daemon=True)
+                done = self.worker_done = threading.Event()
+                def refresh():
+                    try:
+                        self._refresh(identifiers, force=force)
+                    finally:
+                        with self.condition:
+                            done.set()
+                            self.condition.notify_all()
+                self.worker = threading.Thread(target=refresh, daemon=True)
                 self.worker.start()
             return self._summary(identifiers)
+
+    def wake(self):
+        with self.condition:
+            self.condition.notify_all()
 
     def _summary(self, identifiers):
         with self.lock:
@@ -146,14 +159,17 @@ class SubagentActivity:
                 result[identifier] = {'runningSubagents': running, 'subagentsKnown': not unknown}
             return result
 
-    def wait(self, identifiers, deadline):
+    def wait(self, identifiers, deadline, *, confirmed=None):
+        confirmed = confirmed or (lambda: False)
         for attempt in range(2):
-            with self.lock:
-                worker = self.worker
+            with self.condition:
+                done = self.worker_done
                 covered = set(identifiers) <= getattr(self, 'worker_identifiers', set())
-            if worker is not None:
-                worker.join(max(0, deadline-time.monotonic()))
-                if worker.is_alive():
+                self.condition.wait_for(lambda: self.closed or confirmed() or done is None or done.is_set(),
+                                        timeout=max(0, deadline-time.monotonic()))
+                if self.closed or confirmed():
+                    return {sid: {**row, 'subagentsKnown': False} for sid, row in self._summary(identifiers).items()}
+                if done is not None and not done.is_set():
                     return {sid: {'runningSubagents': 0, 'subagentsKnown': False} for sid in identifiers}
             if covered or attempt or time.monotonic() >= deadline:
                 break
@@ -163,7 +179,7 @@ class SubagentActivity:
                        for child in self.trees.get(sid, {}).get('agents', [])
                        for record in [self.records.get(child, {})])
         with self.condition:
-            self.condition.wait_for(lambda: self.closed or not pending(), timeout=max(0, deadline-time.monotonic()))
+            self.condition.wait_for(lambda: self.closed or confirmed() or not pending(), timeout=max(0, deadline-time.monotonic()))
             return self._summary(identifiers)
 
     def _refresh(self, identifiers, *, force=False):

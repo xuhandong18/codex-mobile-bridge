@@ -18,21 +18,23 @@ class DesktopActivity:
     def __init__(self, bridge):
         self.bridge = bridge
         self.lock = threading.RLock()
+        self.condition = threading.Condition(self.lock)
         self.query_lock = threading.Lock()
         self.snapshots, self.retry_at = {}, {}
         self.worker = self.native = None
+        self.worker_done, self.worker_ids = None, set()
         self.closed = False
 
     @property
     def available(self):
         return sys.platform == 'win32' and self.bridge.host == 'local'
 
-    def read(self, identifiers, *, timeout=0):
+    def read(self, identifiers, *, timeout=0, live=None):
         if not self.available:
             return {}
         identifiers = list(dict.fromkeys(identifiers))[:self.MAX_BATCH]
         if timeout > 0:
-            return self._wait_read(identifiers, timeout)
+            return self._wait_read(identifiers, timeout, live)
         now = time.monotonic()
         with self.lock:
             if self.closed:
@@ -44,35 +46,50 @@ class DesktopActivity:
             if pending and (self.worker is None or not self.worker.is_alive()):
                 for sid in pending:
                     self.retry_at[sid] = now+self.REFRESH_INTERVAL
-                self.worker = threading.Thread(target=self._refresh, args=(pending,), daemon=True)
-                self.worker.start()
+                self._start_refresh(pending)
             return {sid: dict(self.snapshots[sid][1]) for sid in identifiers if sid in self.snapshots}
 
-    def _wait_read(self, identifiers, timeout):
+    def _start_refresh(self, identifiers, deadline=None):
+        self.worker_done, self.worker_ids = threading.Event(), set(identifiers)
+        self.worker = threading.Thread(target=self._refresh, args=(identifiers,),
+                                       kwargs={'deadline': deadline, 'done': self.worker_done}, daemon=True)
+        self.worker.start()
+
+    def wake(self):
+        with self.condition:
+            self.condition.notify_all()
+
+    def _wait_read(self, identifiers, timeout, live):
         deadline = time.monotonic()+timeout
+        live = live or (lambda sid: False)
         if not identifiers or not self.query_lock.acquire(timeout=max(0, deadline-time.monotonic())):
             return {}
         try:
-            with self.lock:
+            with self.condition:
                 if self.closed:
                     return {}
-                previous = self.worker
-            if previous is not None and previous.is_alive():
-                previous.join(max(0, deadline-time.monotonic()))
-                if previous.is_alive():
-                    return {}
-            with self.lock:
-                if self.closed or time.monotonic() >= deadline:
+                def ready():
+                    return all(sid in self.snapshots or live(sid) for sid in identifiers)
+                def snapshot():
+                    return {} if self.closed else {sid: dict(self.snapshots[sid][1]) for sid in identifiers if sid in self.snapshots}
+                previous = self.worker_done
+                if previous is not None and not previous.is_set():
+                    covered = set(identifiers) <= self.worker_ids
+                    self.condition.wait_for(lambda: self.closed or previous.is_set() or all(live(sid) for sid in identifiers) or
+                                             (covered and ready()), timeout=max(0, deadline-time.monotonic()))
+                    if covered:
+                        return snapshot()
+                    if not previous.is_set():
+                        return {}
+                if self.closed or time.monotonic() >= deadline or all(live(sid) for sid in identifiers):
                     return {}
                 for sid in identifiers:
                     self.snapshots.pop(sid, None)
                     self.retry_at[sid] = time.monotonic()+self.REFRESH_INTERVAL
-                self.worker = threading.Thread(target=self._refresh, args=(identifiers,), kwargs={'deadline': deadline}, daemon=True)
-                worker = self.worker
-                worker.start()
-            worker.join(max(0, deadline-time.monotonic()))
-            with self.lock:
-                return {} if self.closed else {sid: dict(self.snapshots[sid][1]) for sid in identifiers if sid in self.snapshots}
+                self._start_refresh(identifiers, deadline)
+                done = self.worker_done
+                self.condition.wait_for(lambda: self.closed or done.is_set() or ready(), timeout=max(0, deadline-time.monotonic()))
+                return snapshot()
         finally:
             self.query_lock.release()
 
@@ -92,7 +109,7 @@ class DesktopActivity:
         return {'status': status, 'turnId': last.get('id'),
                 'turnStatus': turn_status if turn_status in ('inProgress', 'completed', 'interrupted', 'failed') else None}
 
-    def _refresh(self, identifiers, *, deadline=None):
+    def _refresh(self, identifiers, *, deadline=None, done=None):
         native = None
         remaining = set(identifiers)
         gate = getattr(getattr(self.bridge, 'accounts', None), 'gate', None)
@@ -121,6 +138,7 @@ class DesktopActivity:
                             if not self.closed and time.monotonic() < deadline:
                                 self.snapshots[sid] = (time.monotonic(), snapshot)
                                 remaining.discard(sid)
+                                self.condition.notify_all()
                     except (OSError, ValueError, TypeError, KeyError, AttributeError):
                         with self.lock:
                             self.snapshots.pop(sid, None)
@@ -131,6 +149,9 @@ class DesktopActivity:
                 self.native = None
                 for sid in remaining:
                     self.snapshots.pop(sid, None)
+                if done is not None:
+                    done.set()
+                self.condition.notify_all()
             if gate is not None and acquired:
                 gate.release()
             if native:
@@ -140,6 +161,7 @@ class DesktopActivity:
         with self.lock:
             self.closed = True
             self.snapshots.clear()
+            self.condition.notify_all()
             native, worker = self.native, self.worker
         if native:
             native.close()

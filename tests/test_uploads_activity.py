@@ -139,7 +139,7 @@ class UploadActivityTests(unittest.TestCase):
         self.assertFalse(row['connected'])
         self.assertEqual((row['turnId'], row['turnStatus']), ('done', 'completed'))
         self.assertIsNone(self.bridge.live[THREAD].owner)
-        native.read.assert_called_once_with([THREAD], timeout=ANY)
+        native.read.assert_called_once_with([THREAD], timeout=ANY, live=ANY)
 
     def test_one_activity_query_waits_for_native_metadata_and_returns_it_directly(self):
         from unittest.mock import Mock
@@ -171,6 +171,153 @@ class UploadActivityTests(unittest.TestCase):
         self.assertEqual(len(rows), 1);self.assertEqual(rows[0]['status'], 'active')
         self.assertNotIn('activityError', rows[0])
 
+    def test_live_owner_result_does_not_wait_for_a_slow_metadata_fallback(self):
+        from unittest.mock import Mock
+        from bridge.clients.codex.activity import DesktopActivity
+        self.bridge.list();entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        original_attach = self.bridge._attach
+        def attach(session, timeout=0):
+            entered.wait(1)
+            return original_attach(session, timeout=timeout)
+        native = Mock()
+        def read(*args, **kwargs):
+            entered.set();release.wait(1)
+            return {'thread': {'id': THREAD, 'hostId': 'local', 'status': {'type': 'notLoaded'}}, 'turns': []}
+        native.call.side_effect = read
+        def query():
+            try:
+                return self.bridge.activity([THREAD], .8)
+            finally:
+                finished.set()
+        with patch.object(DesktopActivity, 'available', True), patch.object(self.bridge.desktop_activity, '_connect', return_value=native), \
+                patch.object(self.bridge, '_attach', side_effect=attach), ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(query)
+            try:
+                self.assertTrue(entered.wait(.3))
+                session = self.bridge.live[THREAD]
+                with session.condition:
+                    self.assertTrue(session.condition.wait_for(lambda: session.connected, timeout=.3))
+                self.assertTrue(finished.wait(.2), 'An already valid live owner must not wait for the slower metadata fallback')
+                self.assertEqual(waiting.result()[0]['status'], 'idle')
+            finally:
+                release.set()
+
+    def test_verified_running_parent_does_not_wait_for_slow_descendant_discovery(self):
+        self.bridge.list();session=self.bridge.session(THREAD)
+        with session.condition:
+            session.state['threadRuntimeStatus']['type'] = 'active'
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        def tree(ids):
+            entered.set();release.wait(1)
+            return {THREAD: {'agents': [], 'limited': False}}
+        def read():
+            try:
+                return self.bridge.activity([THREAD], .8)
+            finally:
+                finished.set()
+        with patch.object(self.bridge.store, 'activity_tree', side_effect=tree), ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(read)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertTrue(finished.wait(.2), 'A verified running parent is already running regardless of unfinished descendant discovery')
+                self.assertEqual(waiting.result()[0]['status'], 'active')
+            finally:
+                release.set()
+
+    def test_idle_parent_still_waits_for_descendant_confirmation(self):
+        self.bridge.list();self.bridge.session(THREAD)
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        def tree(ids):
+            entered.set();release.wait(1)
+            return {THREAD: {'agents': [], 'limited': False}}
+        def read():
+            try:
+                return self.bridge.activity([THREAD], .8)
+            finally:
+                finished.set()
+        with patch.object(self.bridge.store, 'activity_tree', side_effect=tree), ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(read)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertFalse(finished.wait(.04), 'An idle parent cannot establish that its descendants have finished')
+                release.set()
+                row = waiting.result(1)[0]
+                self.assertEqual(row['status'], 'idle')
+                self.assertTrue(row['subagentsKnown'])
+            finally:
+                release.set()
+
+    def test_status_result_does_not_wait_for_optional_recency_metadata(self):
+        self.bridge.list();self.bridge.session(THREAD)
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        def recencies(ids):
+            entered.set();release.wait(1);return {THREAD: 123}
+        def read():
+            try:
+                return self.bridge.activity([THREAD], .8)
+            finally:
+                finished.set()
+        with patch.object(self.bridge.store, 'recencies', side_effect=recencies) as lookup, ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(read)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertTrue(finished.wait(.2), 'Known runtime status must not wait for sidebar sorting metadata')
+                self.assertEqual(waiting.result()[0]['status'], 'idle')
+                self.assertEqual(self.bridge.activity([THREAD], .2)[0]['status'], 'idle')
+                lookup.assert_called_once_with([THREAD])
+            finally:
+                release.set()
+                self.bridge.activity_recency_worker.join(1)
+            self.assertEqual(self.bridge.activity([THREAD], .2)[0]['recency'], 123)
+            self.bridge.activity_recency_worker.join(1)
+
+    def test_parent_updates_received_while_waiting_for_descendants_are_in_the_response(self):
+        self.bridge.list();session=self.bridge.session(THREAD)
+        entered, release, waiting_descendants = threading.Event(), threading.Event(), threading.Event()
+        original_wait = self.bridge.subagent_activity.wait
+        def tree(ids):
+            entered.set();release.wait(1)
+            return {THREAD: {'agents': [], 'limited': False}}
+        def wait(ids, deadline, **kwargs):
+            waiting_descendants.set()
+            return original_wait(ids, deadline, **kwargs)
+        with patch.object(self.bridge.store, 'activity_tree', side_effect=tree), \
+                patch.object(self.bridge.subagent_activity, 'wait', side_effect=wait), ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(self.bridge.activity, [THREAD], .8)
+            try:
+                self.assertTrue(entered.wait(.3))
+                self.assertTrue(waiting_descendants.wait(.3))
+                self.fixture.state['threadRuntimeStatus']['type'] = 'active'
+                self.fixture.state['turns'] = [{'turnId': 'running', 'status': 'inProgress', 'items': []}]
+                self.fixture.revision += 1;self.fixture.snapshot()
+                with session.condition:
+                    self.assertTrue(session.condition.wait_for(lambda: session.state['threadRuntimeStatus']['type'] == 'active', timeout=.3))
+                row = waiting.result(.2)[0]
+                self.assertEqual((row['status'], row['turnId'], row['turnStatus']), ('active', 'running', 'inProgress'))
+            finally:
+                release.set()
+
+    def test_recency_failure_and_late_shutdown_reply_preserve_the_last_successful_snapshot(self):
+        self.bridge.list();self.bridge.session(THREAD)
+        self.bridge.activity_recency_snapshot[THREAD] = 123
+        with patch.object(self.bridge.store, 'recencies', side_effect=OSError('unavailable')):
+            self.bridge.activity([THREAD], .2)
+            self.bridge.activity_recency_worker.join(1)
+        self.assertEqual(self.bridge.activity_recency_snapshot[THREAD], 123)
+        entered, release = threading.Event(), threading.Event()
+        def recencies(ids):
+            entered.set();release.wait(1)
+            return {THREAD: 999}
+        with patch.object(self.bridge.store, 'recencies', side_effect=recencies):
+            try:
+                self.bridge.activity([THREAD], .2)
+                self.assertTrue(entered.wait(.3))
+                self.bridge.close()
+            finally:
+                release.set()
+                self.bridge.activity_recency_worker.join(1)
+        self.assertEqual(self.bridge.activity_recency_snapshot[THREAD], 123)
+
     def test_native_display_status_does_not_override_a_live_owner(self):
         from unittest.mock import Mock
         self.bridge.list()
@@ -192,7 +339,7 @@ class UploadActivityTests(unittest.TestCase):
         native.read.return_value = {THREAD: {'status': 'notLoaded', 'turnId': 'old', 'turnStatus': 'completed'}}
         with patch.object(self.bridge, 'desktop_activity', native, create=True), patch.object(self.bridge, '_attach'):
             self.assertEqual(self.bridge.activity([THREAD])[0]['status'], 'unknown')
-        native.read.assert_called_once_with([], timeout=ANY)
+        native.read.assert_called_once_with([], timeout=ANY, live=ANY)
 
     def test_opening_activity_only_session_still_loads_saved_prefix(self):
         self.fixture.state['turnsPagination'] = {'hasLoadedOldest': False}
