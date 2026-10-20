@@ -645,6 +645,36 @@ class Bridge:
                 result[key] = latest[key] if key in latest else permissions[key]
         return result
 
+    def _message_action_row(self, session, body, action):
+        # Called under the session condition, again after any native history load.
+        session.timeline.update(session.view())
+        projection = session.timeline
+        epoch = str(body.get('key', '')).partition('.')[0]
+        historical = session.navigation_windows.get(epoch)
+        if historical is not None:
+            result = self.message_navigation.window(session.id, **historical.navigation_options,
+                excluded=self._goal_activation_ids(session.id))
+            if result['revision'] != historical.navigation_revision:
+                raise ValueError('消息位置已变化，请刷新后重试')
+            projection = Timeline()
+            projection.update({**session.view(), 'turns': normalize_state(result['state'], False)['turns'],
+                'sequence': session.sequence, 'goalActivationIds': sorted(self._goal_activation_ids(session.id))})
+            projection.meta['latestUserTurnId'] = result['latestUserTurnId']
+            projection.epoch = historical.epoch
+        position = projection.position(body.get('key', ''))
+        if position is None:
+            raise ValueError('消息位置已变化，请刷新后重试')
+        row = projection.rows[position]
+        if row['version'] != body.get('version'):
+            raise ValueError('消息内容已变化，请重新打开编辑')
+        if action == 'fork' and not row['forkable'] or action != 'fork' and not row['editable']:
+            raise ValueError('此消息不支持该操作')
+        if row.get('turnStatus') == 'inProgress' or action == 'edit' and (
+                session.state.get('threadRuntimeStatus', {}).get('type') == 'active'
+                or any(turn.get('status') == 'inProgress' for turn in ordered_turns(session.state))):
+            raise ValueError('请先停止当前任务，再编辑或分支')
+        return row, projection.meta['latestUserTurnId']
+
     @operation
     def message_action(self, thread_id, body):
         self._require_desktop_feature(thread_id)
@@ -668,38 +698,21 @@ class Bridge:
             session = self._target(thread_id)
             with session.action_lock:
                 with session.condition:
-                    session.timeline.update(session.view())
-                    projection = session.timeline
-                    epoch = str(body.get('key', '')).partition('.')[0]
-                    historical = session.navigation_windows.get(epoch)
-                    if historical is not None:
-                        # Re-read the bounded source window before a mutation;
-                        # display caches never authorize an edit on their own.
-                        result = self.message_navigation.window(thread_id, **historical.navigation_options,
-                            excluded=self._goal_activation_ids(thread_id))
-                        if result['revision'] != historical.navigation_revision:
-                            raise ValueError('消息位置已变化，请刷新后重试')
-                        projection = Timeline()
-                        projection.update({**session.view(), 'turns': normalize_state(result['state'], False)['turns'],
-                            'sequence': session.sequence, 'goalActivationIds': sorted(self._goal_activation_ids(thread_id))})
-                        projection.meta['latestUserTurnId'] = result['latestUserTurnId']
-                        # The client still holds the original opaque epoch.
-                        projection.epoch = historical.epoch
-                    position = projection.position(body.get('key', ''))
-                    if position is None:
-                        raise ValueError('消息位置已变化，请刷新后重试')
-                    row = projection.rows[position]
-                    if row['version'] != body.get('version'):
-                        raise ValueError('消息内容已变化，请重新打开编辑')
-                    if action == 'fork' and not row['forkable'] or action != 'fork' and not row['editable']:
-                        raise ValueError('此消息不支持该操作')
-                    if row.get('turnStatus') == 'inProgress':
-                        raise ValueError('请先停止当前任务，再编辑或分支')
-                    if action == 'edit':
-                        if projection.meta['latestUserTurnId'] != row['turnId']:
-                            raise ValueError('只有最近一条消息可原地编辑，请使用编辑并新建分支')
-                        if session.state.get('threadRuntimeStatus', {}).get('type') == 'active':
-                            raise ValueError('请先停止当前任务，再编辑或分支')
+                    row, latest_user_turn = self._message_action_row(session, body, action)
+                    load_history = action == 'edit' and not any(
+                        turn.get('turnId') == row['turnId'] for turn in ordered_turns(session.state))
+                if load_history:
+                    # Navigation windows are display data; the original owner must
+                    # load the selected native turn before it can revert and resend.
+                    self._call(session, 'thread-follower-load-complete-history', {}, timeout=180)
+                    with session.condition:
+                        session.condition.wait_for(lambda: not session.connected or any(
+                            turn.get('turnId') == row['turnId'] for turn in ordered_turns(session.state)), timeout=6)
+                        if not session.connected or not any(
+                                turn.get('turnId') == row['turnId'] for turn in ordered_turns(session.state)):
+                            raise ValueError('尚未取得要编辑的原始消息，请重新连接后重试')
+                with session.condition:
+                    row, latest_user_turn = self._message_action_row(session, body, action)
                     snapshot = copy.deepcopy(session.state)
                     entry = {**identity, 'turnId': row['turnId'], 'sourceTitle': snapshot.get('title') or '未命名聊天',
                              'status': 'unknown', 'at': time.time()}
@@ -748,6 +761,8 @@ class Bridge:
                 entry['status'] = 'unknown'
                 self._save_actions()
                 params = {'turnId': entry['turnId'], 'message': text, 'shouldSendPermissionOverrides': False}
+                if action == 'edit' and latest_user_turn != entry['turnId']:
+                    params['allowEarlierMessages'] = True
                 tier = (snapshot.get('latestThreadSettings') or {})
                 if 'serviceTier' in tier:
                     params['serviceTier'] = tier['serviceTier']

@@ -50,7 +50,7 @@ npm run test:updater
 
 长聊天消息目录运行 `python -B scripts/test-backend.py --source-only -p test_message_index.py`，覆盖 5000 条目录缓存、增量追加、替换/截断、未写完尾行、附件摘要、过期/跨聊天/跨主机标识、只读 HTTP、文件边界及独立 SSH 源码执行，并核验导航窗口的历史编辑、半轮补充消息限制、内嵌图片鉴权预览及变更后拒绝写入。真实浏览器驱动为 `node scripts/test-message-navigation-browser.cjs`，复用已有 Playwright/Chromium，在 390、820、1280 像素下实际执行 `message-navigation.browser.js` 和原有时间线、显隐、公开思考摘要夹具，检查完整目录、虚拟条目、早期/中间定位、上下滚动自动补页、相邻两页的有界保留、编辑入口、实际图片加载、实时阅读隔离、竞态与分页失败后的显式重试；仅使用合成数据，不操作真实客户端。
 
-同一浏览器驱动还实际执行 `runQuestionReadingScrollTests()`，验证最后为问题框时，用户只向上滚动 50 像素或在布局恢复帧内滚动，也会立即停止跟随；连续问题刷新保持阅读锚点，仅主动返回最新后才恢复跟随。
+同一浏览器驱动还验证历史提问同时提供原地重发和新建分支，运行中的会话禁用历史原地重发；并实际执行 `runQuestionReadingScrollTests()`，验证最后为问题框时，用户只向上滚动 50 像素或在布局恢复帧内滚动，也会立即停止跟随；连续问题刷新保持阅读锚点，仅主动返回最新后才恢复跟随。`test_message_actions.py` 和 `test_message_index.py` 覆盖历史原地编辑沿用原 owner、目录消息的原生历史加载及加载后重验、活动轮次阻止、过期版本和未知写入不重放；`message-actions-ui.test.cjs` 验证历史移除提示和成功后重建同一聊天的时间线与目录。
 
 未加载的 Desktop 聊天状态补读由 `test_desktop_metadata_activity.py`、`test_tool_pipe.py` 和 `test_uploads_activity.py` 覆盖，验证只读方法白名单、原生身份、缓存过期、失败回退、可见范围及不提升为可写连接。上述浏览器驱动同时验证“未知灰点 → 原生确认未加载/已完成 → 灰点消失”的自动轮询过程。
 

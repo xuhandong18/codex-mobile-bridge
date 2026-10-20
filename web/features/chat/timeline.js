@@ -372,10 +372,15 @@ class ChatTimeline {
     for(const [key,{node}] of this.nodes){
       const row=this.rows.get(key)?.row,bar=node.querySelector('.message-actions');if(!bar||!row)continue;
       if(!this.onAction)continue;
-      const add=(action,label,disabled)=>{const cls=action==='fork'?'message-fork':'message-edit';let b=bar.querySelector('.'+cls);if(!b){b=document.createElement('button');b.type='button';b.className='plain '+cls;bar.append(b);}b.textContent=timelineText(label);b.disabled=disabled;b.onclick=()=>this.onAction(action,row,this);};
-      for(const action of bar.querySelectorAll('.message-edit,.message-fork'))action.hidden=!this.canEdit();
-      if(row.editable&&this.canEdit()){const latest=this.meta?.latestUserTurnId===row.turnId;add(latest?'edit':'edit-fork',latest?'编辑并重新发送':'编辑并新建分支',row.turnStatus==='inProgress'||latest&&this.meta?.status==='active');}
+      const actions=new Set();
+      const add=(action,label,disabled)=>{actions.add(action);const cls=action==='fork'?'message-fork':'message-edit';let b=bar.querySelector('[data-message-action="'+action+'"]');if(!b){b=document.createElement('button');b.type='button';b.className='plain '+cls;b.dataset.messageAction=action;bar.append(b);}b.textContent=timelineText(label);b.hidden=false;b.disabled=disabled;b.onclick=()=>this.onAction(action,row,this);};
+      if(row.editable&&this.canEdit()){
+        const latest=this.meta?.latestUserTurnId===row.turnId;
+        add('edit','编辑并重新发送',row.turnStatus==='inProgress'||this.meta?.status==='active');
+        if(!latest)add('edit-fork','编辑并新建分支',row.turnStatus==='inProgress');
+      }
       if(row.forkable&&this.canEdit())add('fork','从这里分支',false);
+      for(const button of bar.querySelectorAll('[data-message-action]'))if(!actions.has(button.dataset.messageAction))button.remove();
     }
   }
   relabel(){

@@ -55,3 +55,16 @@ test('editing a retained navigation row submits its source epoch',async()=>{
  const ui=fixture();ui.line.rowCursor=()=> 'old-window.row';await ui.control.open('edit-fork',ui.row,ui.line);
  await ui.control.send();assert.equal(ui.requests[0].body.key,'old-window.row');
 });
+
+test('in-place historical edit explains removed history and reloads the same chat',async()=>{
+ const ui=fixture();ui.line.rowCursor=()=> 'old-window.row';
+ await ui.control.open('edit',ui.row,ui.line);
+ assert.match(ui.control.description.textContent,/移除它之后的聊天记录/);
+ assert.match(ui.control.description.textContent,/文件修改和命令不会撤销/);
+ ui.control.input.value='edited history';
+ ui.setResponse({status:'accepted',id:'source',host:'remote',source:{id:'source'},draft:null});
+ await ui.control.send();
+ assert.equal(ui.requests[0].body.action,'edit');assert.equal(ui.requests[0].body.key,'old-window.row');
+ assert.deepEqual(ui.opened,[['source','remote']]);assert.deepEqual(ui.notices,['已重新发送']);
+ assert.equal(ui.control.dialog.open,false);
+});

@@ -72,16 +72,95 @@ class MessageActionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.bridge.message_action(self.source, {**body, 'text': 'Different'})
 
-    def test_active_stale_and_older_edit_are_rejected_before_mutation(self):
-        for mode in ('active', 'stale', 'older'):
-            body = self.body('first' if mode == 'older' else 'last')
+    def test_historical_edit_uses_original_owner_and_allows_earlier_messages(self):
+        body = self.body('first')
+        before = copy.deepcopy(self.session.state)
+        result = self.bridge.message_action(self.source, body)
+        self.assertEqual((result['status'], result['id']), ('accepted', self.source))
+        self.assertIs(self.call.call_args.args[0], self.session)
+        self.assertEqual(self.call.call_args.args[2], {'turnId': 'first', 'message': 'Edited',
+            'allowEarlierMessages': True, 'shouldSendPermissionOverrides': False, 'serviceTier': 'default'})
+        self.assertEqual(self.session.state, before)
+        self.assertEqual(self.session.owner, 'original-owner')
+        self.fork.assert_not_called()
+        self.bridge.message_action(self.source, body)
+        self.call.assert_called_once()
+
+    def test_active_stale_and_streaming_edit_are_rejected_before_mutation(self):
+        for mode in ('active', 'stale', 'streaming'):
+            body = self.body('first')
             if mode == 'active': self.session.state['threadRuntimeStatus']['type'] = 'active'
+            if mode == 'streaming': self.session.state['turns'][-1]['status'] = 'inProgress'
             if mode == 'stale': body['version'] = 'old'
             with self.assertRaises(ValueError): self.bridge.message_action(self.source, body)
             self.session.state['threadRuntimeStatus']['type'] = 'idle'
+            self.session.state['turns'][-1]['status'] = 'completed'
         self.call.assert_not_called()
         self.fork.assert_not_called()
         self.assertEqual(self.bridge.message_actions, {})
+
+    def prepare_unloaded_history(self):
+        body = self.body('first')
+        complete = copy.deepcopy(self.session.state)
+        self.session.saved_view = self.session.view()
+        self.session.state['turns'] = self.session.state['turns'][-1:]
+        self.session.state['turnsPagination'] = {'hasLoadedOldest': False}
+        with self.session.condition:
+            self.session.changed()
+        return body, complete
+
+    def test_missing_native_turn_is_loaded_before_one_edit(self):
+        body, complete = self.prepare_unloaded_history()
+        def respond(session, method, params, **kwargs):
+            if method == 'thread-follower-load-complete-history':
+                with session.condition:
+                    session.state = complete
+                    session.changed()
+            return {'ok': True}
+        self.call.side_effect = respond
+        self.assertEqual(self.bridge.message_action(self.source, body)['status'], 'accepted')
+        self.assertEqual([call.args[1] for call in self.call.call_args_list],
+            ['thread-follower-load-complete-history', 'thread-follower-edit-last-user-turn'])
+        self.assertTrue(self.call.call_args.args[2]['allowEarlierMessages'])
+
+    def test_native_history_load_rechecks_message_and_running_state(self):
+        for mode in ('changed', 'active'):
+            with self.subTest(mode=mode):
+                body, complete = self.prepare_unloaded_history()
+                def respond(session, method, params, **kwargs):
+                    self.assertEqual(method, 'thread-follower-load-complete-history')
+                    changed = copy.deepcopy(complete)
+                    if mode == 'changed': changed['turns'][0]['items'][0]['content'][0]['text'] = 'Changed'
+                    else: changed['threadRuntimeStatus']['type'] = 'active'
+                    with session.condition:
+                        session.state = changed
+                        session.changed()
+                    return {'ok': True}
+                self.call.side_effect = respond
+                with self.assertRaises(ValueError): self.bridge.message_action(self.source, body)
+                self.assertNotIn(body['id'], self.bridge.message_actions)
+                self.assertEqual(self.call.call_count, 1)
+                self.call.reset_mock()
+                self.session.state = complete
+                self.session.saved_view = None
+                with self.session.condition: self.session.changed()
+
+    def test_history_read_failure_does_not_submit_edit(self):
+        body, _ = self.prepare_unloaded_history()
+        self.call.side_effect = IPCError('history unavailable')
+        with self.assertRaises(IPCError): self.bridge.message_action(self.source, body)
+        self.assertEqual(self.call.call_args.args[1], 'thread-follower-load-complete-history')
+        self.call.assert_called_once()
+        self.assertNotIn(body['id'], self.bridge.message_actions)
+
+    def test_history_read_without_selected_turn_cannot_submit_edit(self):
+        body, _ = self.prepare_unloaded_history()
+        with patch.object(self.session.condition, 'wait_for', return_value=False):
+            with self.assertRaisesRegex(ValueError, '尚未取得要编辑的原始消息'):
+                self.bridge.message_action(self.source, body)
+        self.assertEqual(self.call.call_args.args[1], 'thread-follower-load-complete-history')
+        self.call.assert_called_once()
+        self.assertNotIn(body['id'], self.bridge.message_actions)
 
     def test_fork_keeps_source_untouched_and_retains_provider_settings(self):
         before = copy.deepcopy(self.session.state)
@@ -139,7 +218,7 @@ class MessageActionTests(unittest.TestCase):
         self.call.assert_not_called()
 
     def test_unknown_native_edit_or_fork_never_replays(self):
-        body = self.body()
+        body = self.body('first')
         self.call.side_effect = IPCError('lost acknowledgement')
         with self.assertRaises(IPCError): self.bridge.message_action(self.source, body)
         self.assertEqual(self.bridge.message_action(self.source, body)['status'], 'unknown')

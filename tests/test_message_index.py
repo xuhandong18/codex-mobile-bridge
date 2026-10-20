@@ -237,6 +237,32 @@ class NavigationBridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.bridge.message_action(self.support.THREAD,body)
             fork.assert_not_called()
 
+    def test_navigation_in_place_edit_loads_original_owner_and_rechecks_source(self):
+        import uuid
+        session=self.bridge.session(self.support.THREAD)
+        page=self.bridge.timeline_read(self.support.THREAD,around=self.bridge.message_index(self.support.THREAD)['items'][0]['id'])
+        row=next(r for r in page['rows'] if r['text']=='question 0')
+        body={'id':str(uuid.uuid4()),'action':'edit','key':page['epoch']+'.'+row['key'],'version':row['version'],'text':'replacement'}
+        def load(session,method,params,**kwargs):
+            if method=='thread-follower-load-complete-history':
+                with session.condition:
+                    session.state['turns'].insert(0,{'turnId':'old-0','status':'completed',
+                        'params':{'input':[{'type':'text','text':'question 0'}]},'items':[]})
+                    session.changed()
+            return {'ok':True}
+        with patch.object(self.bridge,'_target',return_value=session),patch.object(self.bridge,'_call',side_effect=load) as call,patch('bridge.app.service.fork_copy') as fork:
+            self.assertEqual(self.bridge.message_action(self.support.THREAD,body)['id'],self.support.THREAD)
+            self.assertEqual([entry.args[1] for entry in call.call_args_list],
+                ['thread-follower-load-complete-history','thread-follower-edit-last-user-turn'])
+            self.assertTrue(call.call_args.args[2]['allowEarlierMessages'])
+            self.assertEqual(call.call_args.args[2]['turnId'],'old-0')
+            fork.assert_not_called()
+        body['id']=str(uuid.uuid4())
+        self.path.write_bytes(self.path.read_bytes().replace(b'question 0',b'replaced 0'))
+        with patch.object(self.bridge,'_target',return_value=session),patch.object(self.bridge,'_call') as call:
+            with self.assertRaises(ValueError):self.bridge.message_action(self.support.THREAD,body)
+            call.assert_not_called()
+
     def test_ssh_navigation_source_runs_without_an_installed_project_package(self):
         from bridge.clients.codex.remote import RemoteStore
         remote=RemoteStore('fixture')

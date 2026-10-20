@@ -109,7 +109,7 @@ class MessageActions {
     this.error.textContent='';this.input.value='';this.input.hidden=action==='fork';this.input.required=action!=='fork';
     this.title.textContent=actionText(action==='fork'?'从这里分支':action==='edit'?'编辑并重新发送':'编辑并新建分支');
     this.submit.textContent=this.title.textContent;
-    this.description.textContent=actionText(action==='edit'?'将替换这条消息并重新生成回答。已经执行的文件修改和命令不会撤销。':action==='fork'?'保留截至这一轮的上下文，创建后等待你继续输入。新会话与原会话共享工作目录。':'保留原会话，在新分支中修改并重新生成这一轮。新会话与原会话共享工作目录。');
+    this.description.textContent=actionText(action==='edit'?'将替换这条消息，移除它之后的聊天记录并重新生成回答。已经执行的文件修改和命令不会撤销。':action==='fork'?'保留截至这一轮的上下文，创建后等待你继续输入。新会话与原会话共享工作目录。':'保留原会话，在新分支中修改并重新生成这一轮。新会话与原会话共享工作目录。');
     this.submit.disabled=true;this.dialog.showModal();
     try{
       const text=action==='fork'?'':await timeline.fullText(row);
@@ -150,7 +150,12 @@ class MessageActions {
           this.notify('分支已创建，修改尚未发送。请连接后编辑最后一条消息。');
         }else this.notify(action==='fork'?'已创建分支':'已在分支中重新发送');
         await this.openChat(result.id,result.host);
-      }else this.notify('已重新发送');
+      }else{
+        this.notify('已重新发送');
+        // Recreate both the live timeline and directory after native history
+        // truncation, including when editing from a retained navigation window.
+        await this.openChat(result.id,result.host);
+      }
     }catch(error){if(this.dialog.open)this.error.textContent=actionText(error.message);else this.notify(error.message);}
     finally{
       this.pending=false;this.busy(false);this.dialog.querySelectorAll('button,textarea').forEach(n=>n.disabled=false);

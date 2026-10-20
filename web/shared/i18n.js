@@ -1668,6 +1668,8 @@ const en={
   "复制内容": "Copy text",
   "编辑消息": "Edit message",
   "编辑并重新发送": "Edit and resend",
+  "将替换这条消息，移除它之后的聊天记录并重新生成回答。已经执行的文件修改和命令不会撤销。": "Replace this message, remove the chat history after it, and generate a new answer. File changes and commands already executed will not be undone.",
+  "尚未取得要编辑的原始消息，请重新连接后重试": "The original message is not loaded yet. Reconnect and try again.",
   "编辑并新建分支": "Edit in new branch",
   "从这里分支": "Branch from here",
   "来源会话：": "Source chat: ",
