@@ -39,6 +39,7 @@ class DesktopIPC:
         self.socket = None
         self.client_id = None
         self.pending = {}
+        self.following = {}
         self.lock = threading.RLock()
         self.write_lock = threading.Lock()
         self.connect_lock = threading.Lock()
@@ -111,12 +112,40 @@ class DesktopIPC:
         return response["handledByClientId"]
 
     def follow(self, session_id, owner, enabled=True, host="local"):
+        with self.lock:
+            key = (host, session_id)
+            if not enabled:
+                self.following.pop(key, None)
+            self._send_following(session_id, owner, enabled, host)
+            if enabled:
+                self.following[key] = owner
+
+    def _send_following(self, session_id, owner, enabled, host):
         message = {"type": "broadcast", "sourceClientId": self.client_id,
                    "method": "thread-stream-following-changed", "version": 1,
                    "params": {"hostId": host, "conversationId": session_id, "following": enabled}}
         if owner:
             message["targetClientIds"] = [owner]
         self._send(message)
+
+    def _restore_following(self, message):
+        # An owner can rebuild its follower list while this IPC socket stays
+        # connected. Only reannounce subscriptions this connection still owns;
+        # this is a broadcast, never an owner-discovery or turn-start request.
+        params = message.get('params') or {}
+        source = message.get('sourceClientId')
+        if message.get('version') != 1 or not isinstance(params, dict) or not isinstance(source, str) or not source:
+            return
+        key = (params.get('hostId'), params.get('conversationId'))
+        if not all(isinstance(value, str) and value for value in key):
+            return
+        with self.lock:
+            if key not in self.following:
+                return
+            owner = self.following[key]
+            if owner is not None and owner != source:
+                return
+            self._send_following(key[1], source, True, key[0])
 
     @staticmethod
     def _exact(sock, length):
@@ -146,6 +175,8 @@ class DesktopIPC:
                 elif message.get("type") == "broadcast":
                     targets = message.get("targetClientIds")
                     if not targets or self.client_id in targets:
+                        if message.get('method') == 'thread-stream-following-status-requested':
+                            self._restore_following(message)
                         self.on_event(message)
         except (OSError, EOFError, ValueError, IPCError):
             pass
@@ -156,6 +187,7 @@ class DesktopIPC:
                     disconnected = True
                     self.socket = None
                     self.client_id = None
+                    self.following.clear()
                     for future in self.pending.values():
                         if not future.done():
                             future.set_exception(IPCError("桌面连接已断开"))

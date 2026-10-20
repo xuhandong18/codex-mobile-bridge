@@ -155,6 +155,33 @@ class IntegrationTests(unittest.TestCase):
         self.assertNotIn('modelProvider', request)
         self.assertTrue(call['params']['turnStart']['context']['inheritThreadSettings'])
 
+    def test_desktop_rebuilds_followers_after_completion(self):
+        self.fixture.state['threadRuntimeStatus'] = {'type': 'active'}
+        self.fixture.state['turns'] = [{'turnId': 'original-turn', 'status': 'inProgress', 'items': []}]
+        self.assertEqual(self.bridge.view(THREAD)['status'], 'active')
+        # The desktop retains its owner and IPC connection, but rebuilds its
+        # follower list after reconnecting the underlying conversation stream.
+        self.fixture.state['threadRuntimeStatus'] = {'type': 'idle'}
+        self.fixture.state['turns'][-1]['status'] = 'completed'
+        self.fixture.revision = 1
+        self.fixture.send({
+            'type': 'broadcast', 'sourceClientId': 'owner',
+            'method': 'thread-stream-following-status-requested', 'version': 1,
+            'params': {'hostId': 'local', 'conversationId': THREAD},
+        })
+        session = self.bridge.session(THREAD, attach=False)
+        with session.condition:
+            session.condition.wait_for(lambda: session.view()['status'] == 'idle', timeout=1)
+        self.assertEqual(self.bridge.view(THREAD)['status'], 'idle',
+                         '已完成的原桌面聊天仍显示运行中，并阻止下一条普通消息')
+        self.assertEqual(session.view()['turns'][-1]['status'], 'completed')
+        self.bridge.send(THREAD, 'next message', str(uuid.uuid4()))
+        calls = [r for r in self.fixture.requests if r['method'] == 'thread-follower-start-turn']
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['targetClientId'], 'owner')
+        self.assertEqual([r['method'] for r in self.fixture.requests if r['method'] != 'initialize'],
+                         ['thread-follower-start-turn'])
+
     def test_external_provider_change_does_not_use_stale_managed_account_to_block_send(self):
         from bridge.features.accounts.accounts import Accounts
         manager = Accounts(self.bridge)
