@@ -4,8 +4,7 @@ import sys
 import threading
 import time
 
-from bridge.clients.codex.desktop_tools import DesktopTools, ToolError
-from bridge.clients.desktop_app import DesktopApp
+from bridge.clients.codex.desktop_tools import DesktopTools
 
 
 class ActivityTools(DesktopTools):
@@ -48,13 +47,7 @@ class DesktopActivity:
             return {sid: dict(self.snapshots[sid][1]) for sid in identifiers if sid in self.snapshots}
 
     def _connect(self):
-        bridge = self.bridge
-        projects = {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'}
-        contexts = bridge.store.list(limit=1, source='desktop')
-        if not projects or not contexts:
-            raise ToolError('No verified desktop profile context')
-        executable = bridge.accounts.index.get('desktopExecutable') or DesktopApp.scan(bridge.catalog_reader.executable, bridge.codex_home)
-        return ActivityTools.connect(executable, contexts[0]['id'], projects)
+        return ActivityTools.connect_profile(self.bridge)
 
     @staticmethod
     def _snapshot(value, identifier):

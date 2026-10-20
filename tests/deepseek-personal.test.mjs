@@ -37,6 +37,26 @@ async function fixture(t){
   return {ctx,folder,add,append,rows,events,calls,workspace,request,restart:async()=>{await disposers.pop()();await start();}};
 }
 
+test('reading completion clears only that native desktop dot and cannot consume a later turn',async t=>{
+  const f=await fixture(t),row=f.add('read-me');f.add('other');
+  f.append('read-me','turn/start',{turn:1});f.append('read-me','turn/end',{turn:1,reason:{kind:'completed'}});
+  const {runInNewContext}=await import('node:vm');let plugin,listener,frame;const subscribers=new Set(),disposers=[];
+  runInNewContext(await readFile(new URL('../bridge/clients/deepseek/client.js',import.meta.url),'utf8'),{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>{throw Error('No native dependencies should be required');});}}}});
+  const ui={running:new Map(),completionUnread:new Set(['read-me','other']),publishStatus:()=>{for(const fn of subscribers)fn();},sessionStatus:{subscribe:fn=>{subscribers.add(fn);return ()=>subscribers.delete(fn);}}};
+  const client={uiSession:ui,sessions:{list:{getSnapshot:()=>({byId:{'read-me':row}}),subscribe:fn=>{subscribers.add(fn);return ()=>subscribers.delete(fn);}}},remote:{$on:(name,fn)=>{assert.equal(name,'codex-mobile/read-state');listener=fn;return ()=>listener=null;}},effect:setup=>disposers.push(setup())};
+  plugin.apply(client);t.after(()=>disposers.forEach(dispose=>dispose()));
+  const services={clientModules:{clientPath:()=>'/fixture/client.js'},typertGateway:{broadcastRemoteEvent:value=>{frame=value;listener(value.args[0]);}}};f.ctx.get=name=>services[name];
+  await f.request('detail','read-me');await f.request('list');assert.equal(ui.completionUnread.has('read-me'),true);
+  const request={id:randomUUID(),turnId:'1',turnStatus:'completed'};
+  assert.equal((await f.request('read-state','read-me',request)).status,'accepted');
+  assert.equal(frame.resources.session(frame.args[0]),'read-me');assert.equal(ui.completionUnread.has('read-me'),false);assert.equal(ui.completionUnread.has('other'),true);assert.equal(f.calls.length,0);
+  const delayed=frame.args[0];row.updatedAt++;f.append('read-me','turn/start',{turn:2});f.append('read-me','turn/end',{turn:2,reason:{kind:'completed'}});ui.completionUnread.add('read-me');
+  assert.equal((await f.request('read-state','read-me',request)).status,'stale');listener(delayed);ui.publishStatus();assert.equal(ui.completionUnread.has('read-me'),true);
+  row.running=true;assert.equal((await f.request('read-state','read-me',{...request,turnId:'2'})).status,'stale');
+  row.running=false;assert.equal((await f.request('read-state','read-me',{...request,turnId:'2'})).status,'accepted');assert.equal(ui.completionUnread.has('read-me'),false);
+  delete services.clientModules;assert.equal((await f.request('read-state','read-me',{...request,turnId:'2'})).status,'unsupported');
+});
+
 test('work modes use native plan and goal services without changing the original session or passive reads',async t=>{
   const f=await fixture(t),row=f.add('modes'),v=row.projections.values,agents=new Map();
   v.plan={active:false,pending:false};v.goal=null;

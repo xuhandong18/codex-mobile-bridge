@@ -3182,7 +3182,10 @@ const en={
 "无法核验当前聊天的目录权限":"Could not verify folder permissions for the current chat.",
 "文件夹不存在或无法访问":"The folder does not exist or cannot be accessed.",
 "子文件夹过多，请输入更具体的路径":"Too many subfolders. Enter a more specific path.",
-"没有权限浏览此文件夹":"You do not have permission to browse this folder."
+"没有权限浏览此文件夹":"You do not have permission to browse this folder.",
+"桌面已读状态尚未同步":"Desktop read state has not been synchronized.",
+"当前系统尚未提供 Codex 桌面已读同步通路":"Codex desktop read synchronization is unavailable on this system.",
+"Harness 已读同步需要更新接入并重新打开桌面页面":"Update the Harness connector and reopen the desktop page to sync read state."
 };
 let lang='zh';
 try{lang=localStorage.getItem('bridge-language')==='en'?'en':'zh';}catch{}

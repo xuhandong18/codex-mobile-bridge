@@ -10,7 +10,7 @@ async function createDeepSeekBrowserFixture(){
   const request=async(url,body)=>{
     calls.push({url,body});const parsed=new URL(url,location.href),sid=parsed.searchParams.get('sessionId'),slot=parsed.searchParams.get('slot')||'',key=JSON.stringify([sid,slot]),action=parsed.pathname.split('/').at(-1);let result;
     if(action==='list')result={sessions:rows,projects,sidebar,capabilities:caps};
-    else if(action==='detail')result={session:rows.find(r=>r.id===sid)||{id:sid,title:'新会话',cwd:'/fixture',status:'idle',model:'fixture/chat'},capabilities:caps,connected:true,messages:[{id:'m1',role:'assistant',text:'解释共享聊天的行为',model:'fixture/chat'}]};
+    else if(action==='detail')result={session:rows.find(r=>r.id===sid)||{id:sid,title:'新会话',cwd:'/fixture',status:'idle',model:'fixture/chat'},turns:rows.find(r=>r.id===sid)?.testTurns||[],capabilities:caps,connected:true,messages:[{id:'m1',role:'assistant',text:'解释共享聊天的行为',model:'fixture/chat'}]};
     else if(action==='projects')result={projects,sidebar,canCreateProjectless:true};
     else if(action==='account')result={models:catalog.models};
     else if(action==='catalog')result={...catalog,skills:[{id:'review',name:'review',description:'审查'}],capabilities:caps};
@@ -56,6 +56,13 @@ async function runDeepSeekPersonalBrowserTests(){
   view.collapseGroups();check([...view.rowsRoot.querySelectorAll('details')].every(d=>!d.open),'collapse all includes sections and projects');
   view.listStamp='';view.renderList();check([...view.rowsRoot.querySelectorAll('details')].every(d=>!d.open),'collapsed preferences survive repaint');
   await view.open('chat-0');check(view.workbench.current.access.canUseSideChat,'fresh Harness capability enables native forks');
+  const readCalls=()=>calls.filter(call=>call.url.includes('/read-state')),readRow=rows.find(row=>row.id==='chat-0');
+  readRow.status='active';readRow.testTurns=[{turnId:'read-one',status:'inProgress'}];await view.detail(view.generation);check(readCalls().length===0,'running chat never sends a desktop read acknowledgement');
+  readRow.status='idle';readRow.testTurns=[{turnId:'read-one',status:'completed'}];await view.detail(view.generation);await wait(()=>readCalls().length===1);check(readCalls()[0].body.sessionId==='chat-0'&&readCalls()[0].body.turnId==='read-one','completion while reading synchronizes the exact native chat and turn');
+  await view.detail(view.generation);check(readCalls().length===1,'repeated detail polling does not replay desktop read writes');
+  view.workbench.files();readRow.testTurns=[{turnId:'read-two',status:'completed'}];await view.detail(view.generation);check(readCalls().length===1,'file browsing does not consume a new chat completion');
+  view.workbench.select('chat');await view.detail(view.generation);await wait(()=>readCalls().length===2);check(readCalls()[1].body.turnId==='read-two','returning to the conversation acknowledges the newly viewed completion');
+  delete readRow.testTurns;
   const workMode=view.form.querySelector('select[aria-label="工作模式"]');
   check(!!workMode&&['default','plan','goal'].every(value=>workMode.querySelector('option[value="'+value+'"]')),'Harness composer exposes normal, plan and goal work modes');
   check(workMode.getBoundingClientRect().width>0&&!workMode.disabled&&[...workMode.options].every(option=>!option.disabled),'all native work modes are visible and selectable');

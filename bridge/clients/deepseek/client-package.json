@@ -1,0 +1,8 @@
+{
+  "name": "codex-mobile-desktop",
+  "private": true,
+  "type": "module",
+  "main": "mobile-host.mjs",
+  "exports": {".": "./mobile-host.mjs", "./client": "./client.js"},
+  "dsh": {"client": {"platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-session", "@deepseek-ai/dsh-api-remotes"]}}
+}

@@ -14,7 +14,7 @@ READ = {'', 'catalog', 'poll', 'timeline', 'detail', 'changes', 'notifications',
         'workspace/download', 'workspace/info', 'workspace/git-status', 'workspace/git-diff',
         'workspace/git-history', 'workspace/git-commit', 'workspace/git-history-diff',
         'workspace/git-branches'}
-WRITE = {'send', 'stop', 'history', 'respond', 'reconnect', 'queue', 'settings',
+WRITE = {'send', 'stop', 'history', 'respond', 'reconnect', 'queue', 'settings', 'read-state',
          'permissions', 'uploads', 'message-action', 'rename', 'notifications', 'auto-title',
          'goal/cancel', 'goal/edit', 'goal/status', 'side-chat', 'terminal',
          'workspace/upload', 'workspace/git-action'}
@@ -70,7 +70,7 @@ def validate(method, path, size=0):
     if desktop:
         if p.path.startswith('/api/desktop-sessions/deepseek/') and desktop[1] in (
                 {'side-chat', 'subagents', 'project-directories', 'project-directory-operations'} if method == 'GET'
-                else {'side-chat', 'manage', 'project-directories'}):
+                else {'side-chat', 'manage', 'project-directories', 'read-state'}):
             return
         if desktop[1] in (DESKTOP_READ if method == 'GET' else DESKTOP_WRITE):
             return

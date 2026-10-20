@@ -4,6 +4,29 @@ const {SessionActivity}=require('../web/features/chat/activity.js');
 const storage=()=>{const values=new Map();return {getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};};
 const status=(id,host,state,turn='one',result=state==='active'?'inProgress':'completed')=>({id,host,connected:true,status:state,turnId:turn,turnStatus:result});
 
+test('reading a completed chat propagates its host and observed turn to the desktop',()=>{
+ const reads=[],activity=new SessionActivity({storage:storage(),onRead:(key,row)=>reads.push([key,row.turnId,row.turnStatus])});
+ activity.update([status('a','local','active')]);
+ activity.update([status('a','local','idle')]);
+ activity.read('local|a',{explicit:true});
+ assert.equal(activity.indicator('local|a'),null);
+ assert.deepEqual(reads,[['local|a','one','completed']]);
+});
+
+test('visible completion syncs once per turn; background, unknown and manual unread never sync',()=>{
+ const reads=[],activity=new SessionActivity({storage:storage(),onRead:(key,row)=>{reads.push([key,row.turnId]);throw Error('lost acknowledgement');}});
+ activity.update([status('a','deepseek','active')],'deepseek|a');assert.equal(reads.length,0);
+ activity.update([status('a','deepseek','idle')]);assert.equal(reads.length,0);
+ activity.update([status('a','deepseek','idle')],'deepseek|a',{sync:false});assert.equal(reads.length,0);
+ activity.update([status('a','deepseek','idle')],'deepseek|a');
+ activity.read('deepseek|a');activity.update([status('a','deepseek','idle')],'deepseek|a');
+ assert.deepEqual(reads,[['deepseek|a','one']]);
+ activity.update([status('a','deepseek','idle','two')],'deepseek|a');assert.equal(reads.length,2);
+ activity.markUnread('deepseek|a');activity.update([status('a','deepseek','idle','three')],'deepseek|a');assert.equal(reads.length,2);
+ activity.update([{...status('a','deepseek','idle','three'),connected:false}],'deepseek|a');activity.read('deepseek|a',{explicit:true});assert.equal(reads.length,2);
+ activity.update([status('a','deepseek','idle','three')],'deepseek|a');assert.equal(reads.length,3);
+});
+
 test('manual unread persists through polling and passive reads until explicitly opened',()=>{
  const saved=storage(),activity=new SessionActivity({storage:saved});
  activity.markUnread('local|a');

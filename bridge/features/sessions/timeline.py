@@ -87,6 +87,8 @@ class Timeline:
         self.rows, self.details = rows, details
         self.positions = {row['key']: i for i, row in enumerate(rows)}
         self.meta = {k: v for k, v in view.items() if k != 'turns'}
+        last = view['turns'][-1] if view['turns'] else {}
+        self.meta.update(turnId=last.get('id'), turnStatus=last.get('status'))
         self.meta['latestUserTurnId'] = next((t['id'] for t in reversed(view['turns'])
                                               if any(m['role'] == 'user'
                                                      and not m.get('isUserContext')

@@ -2,7 +2,7 @@
 // Desktop providers use the same conversation, composer and workspace presentation as Codex.
 class DesktopSessionsView {
   constructor({root,select,request,notify,onSelect,csrf,onUnauthorized,drafts=new Map()}) {
-    Object.assign(this,{root,select,request,notify,onSelect,csrf,onUnauthorized});this.provider='codex';this.generation=0;this.detailRevision=0;this.drafts=drafts;this.accountDrafts=new Map();this.pending=new Map();this.sendChoices=new Map();this.rows=[];this.messageNodes=new Map();this.providerViews=new Map();this.detailCache=new Map();this.activity=new SessionActivity({key:'bridge-desktop-session-activity'});try{this.collapsedGroups=new Set(JSON.parse(localStorage.getItem('bridge-desktop-session-groups')||'[]'));}catch{this.collapsedGroups=new Set();}
+    Object.assign(this,{root,select,request,notify,onSelect,csrf,onUnauthorized});this.provider='codex';this.generation=0;this.detailRevision=0;this.drafts=drafts;this.accountDrafts=new Map();this.pending=new Map();this.sendChoices=new Map();this.rows=[];this.messageNodes=new Map();this.providerViews=new Map();this.detailCache=new Map();this.activity=new SessionActivity({key:'bridge-desktop-session-activity',onRead:(key,row)=>this.syncDesktopRead(key,row)});try{this.collapsedGroups=new Set(JSON.parse(localStorage.getItem('bridge-desktop-session-groups')||'[]'));}catch{this.collapsedGroups=new Set();}
     this.readTasks=new Map();this.readEpoch=0;this.providerReadEpochs=new Map();this.accountEpochs=new Map();this.listPrefetchAt=new Map();this.detailCacheSizes=new Map();this.detailCacheBytes=0;
     this.container=this.node('section','desktop-sessions');root.append(this.container);this.container.hidden=true;
     this.list=this.node('aside','ds-list');this.main=this.node('main','ds-main');this.container.append(this.list,this.main);
@@ -162,8 +162,12 @@ class DesktopSessionsView {
       finally{if(this.listRead===reading)this.listRead=null;}
     })();return reading.promise;
   }
-  visibleActivity(){return this.isChatOpen&&!document.hidden&&!this.workbench.isFileVisible?this.provider+'|'+this.sid:null;}
-  updateActivity(rows,connected=true){this.activity.update(rows.map(row=>({id:row.id,host:this.provider,connected,status:row.status,runningSubagents:row.childActive||0,turnId:row.turnId,turnStatus:row.turnStatus})),this.visibleActivity());}
+  visibleActivity(){return this.isChatOpen&&!this.root.hidden&&!this.container.hidden&&!document.hidden&&!this.workbench.isFileVisible?this.provider+'|'+this.sid:null;}
+  async syncDesktopRead(key,row){
+    const split=key.indexOf('|'),provider=key.slice(0,split),sessionId=key.slice(split+1);if(provider!=='deepseek')return;
+    try{const value=await this.request(this.path('read-state',sessionId,provider),{id:this.requestId(),sessionId,turnId:row.turnId,turnStatus:row.turnStatus});if(['unknown','unsupported'].includes(value.status))this.notify(BridgeI18n.t(value.message||'桌面已读状态尚未同步'));}catch(error){this.notify(BridgeI18n.t(error.message));}
+  }
+  updateActivity(rows,connected=true,sync=false){this.activity.update(rows.map(row=>({id:row.id,host:this.provider,connected,status:row.status,runningSubagents:row.childActive||0,turnId:row.turnId,turnStatus:row.turnStatus})),this.visibleActivity(),{sync});}
   renderIndicators(){
     const rows=new Map(this.rows.map(row=>[row.id,row]));for(const button of this.rowsRoot.querySelectorAll('.session')){button.querySelector('.session-indicator')?.remove();const row=this.freshDetail&&button.dataset.id===this.sid?this.state:rows.get(button.dataset.id),indicator=row?.requests?.length?(this.activity.rows[this.provider+'|'+button.dataset.id]?.offline?{kind:'unknown',label:'运行状态暂不可用'}:{kind:'awaiting',label:'等待回应'}):this.activity.indicator(this.provider+'|'+button.dataset.id);if(indicator){const dot=this.node('span','session-indicator '+indicator.kind);dot.title=BridgeI18n.t(indicator.label);dot.setAttribute('aria-label',BridgeI18n.t(indicator.label));button.querySelector('strong')?.prepend(dot);}}
   }
@@ -182,7 +186,7 @@ class DesktopSessionsView {
   prepareChat(sid){
     this.referencePicker.close();
     this.workModes.open(JSON.stringify([this.provider,sid]));
-    this.saveDraft();this.sid=sid;this.state=null;this.freshDetail=false;this.detailRevision++;const row=this.rows.find(r=>r.id===sid);this.title.textContent=row?.title||BridgeI18n.t('正在读取聊天…');this.status.textContent=BridgeI18n.t('正在连接…');this.input.value=this.drafts.get(this.provider+':'+sid)||'';this.requestStamp='';this.error.textContent='';this.notice.hidden=true;this.messages.replaceChildren(this.translated('p','正在读取聊天…','muted'));this.messageNodes.clear();this.lastMessages=[];this.requests.replaceChildren();this.showSelection(true);this.attachments.open(JSON.stringify([this.provider,sid]));this.workbench.open(sid,'local');const cached=this.detailCache.get(JSON.stringify([this.provider,sid]));if(cached){this.applyDetail(cached,true);this.messages.scrollTop=this.workbench.current.scroll||0;}this.activity.read(this.provider+'|'+sid,{explicit:true});this.updateComposer();this.renderList();this.resizeInput();this.rememberView();
+    this.saveDraft();this.sid=sid;this.state=null;this.freshDetail=false;this.detailRevision++;const row=this.rows.find(r=>r.id===sid);this.title.textContent=row?.title||BridgeI18n.t('正在读取聊天…');this.status.textContent=BridgeI18n.t('正在连接…');this.input.value=this.drafts.get(this.provider+':'+sid)||'';this.requestStamp='';this.error.textContent='';this.notice.hidden=true;this.messages.replaceChildren(this.translated('p','正在读取聊天…','muted'));this.messageNodes.clear();this.lastMessages=[];this.requests.replaceChildren();this.showSelection(true);this.attachments.open(JSON.stringify([this.provider,sid]));this.workbench.open(sid,'local');const cached=this.detailCache.get(JSON.stringify([this.provider,sid]));if(cached){this.applyDetail(cached,true);this.messages.scrollTop=this.workbench.current.scroll||0;}this.activity.read(this.provider+'|'+sid,{explicit:true,sync:false});this.updateComposer();this.renderList();this.resizeInput();this.rememberView();
   }
   async open(sid){
     const generation=this.generation;this.prepareChat(sid);
@@ -200,7 +204,7 @@ class DesktopSessionsView {
     const workspace=this.workbench.current;if(workspace?.id===this.sid&&workspace.provider===this.provider){const before=workspace.access?.canUseSideChat;workspace.cwd=value.session.cwd||'';workspace.access={canUseSideChat:!cached&&value.capabilities?.sideChat===true};if(!cached&&workspace.access.canUseSideChat&&!before)this.workbench.refreshSideChats();}
     this.freshDetail=!cached&&value.connected!==false;this.state={...value.session,capabilities:value.capabilities||value.session.capabilities||{},maxRequestBytes:value.maxRequestBytes||value.session.maxRequestBytes||0};this.title.textContent=this.state.title;this.status.textContent=BridgeI18n.t(cached?'正在连接…':!this.canMutate()?(this.state.backend==='cli'?'历史记录':'尚未连接'):this.state.requests?.length?'等待回应':this.state.status==='active'?'运行中':'已连接');this.updateComposer();this.sessionFiles=value.files||[];this.renderMessages(value.messages||[]);
     const requests=this.canMutate()?this.state.requests||[]:[],stamp=JSON.stringify([requests,BridgeI18n.language()]);if(stamp!==this.requestStamp){this.renderRequests(requests);this.requestStamp=stamp;}
-    this.detailNotice=value.notice||'';this.renderNotice();if(!cached)this.updateActivity([this.state]);this.renderIndicators();
+    this.detailNotice=value.notice||'';this.renderNotice();if(!cached){const last=value.turns?.at(-1);this.updateActivity([{...this.state,...last?{turnId:last.turnId,turnStatus:last.status}:{}}],value.connected!==false,true);}this.renderIndicators();
   }
   renderNotice(){const resumable=this.canResume();this.notice.textContent=BridgeI18n.t(this.detailNotice||(resumable?'可先阅读聊天历史；继续时将恢复原 Claude Code 会话。':''));this.notice.hidden=!this.detailNotice&&!resumable;if(resumable)this.notice.append(this.resumeButton);}
   updateComposer(){

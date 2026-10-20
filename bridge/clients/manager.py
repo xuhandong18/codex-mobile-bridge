@@ -16,12 +16,14 @@ from concurrent.futures import Future
 from bridge.clients.claude.adapter import Claude
 from bridge.clients.claude.cli_session import ResumePreflightBlocked
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
+from bridge.clients.codex.read_state import NativeReadState
+from bridge.features.sessions.read_state import validate_read_state
 from bridge.clients.errors import BridgeUnavailable
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
 READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access', 'side-read', 'subagents'}
-WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume', 'manage', 'side-write'}
+WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume', 'manage', 'side-write', 'read-state'}
 
 
 class TaskStateUnavailable(ValueError):
@@ -227,16 +229,20 @@ class DesktopSessions:
         threading.Thread(target=refresh, daemon=True, name='desktop-activity-'+provider).start()
 
     def call(self, provider, action, sid=None, body=None):
-        if provider not in self.adapters or action not in READS | WRITES:
+        codex_read = provider == 'codex' and action == 'read-state'
+        if (provider not in self.adapters and not codex_read) or action not in READS | WRITES:
             raise ValueError('不支持的桌面操作')
-        if action in ('manage', 'side-read', 'side-write', 'subagents') and provider != 'deepseek':
+        if (action in ('manage', 'side-read', 'side-write', 'subagents') and provider != 'deepseek'
+                or action == 'read-state' and provider not in ('codex', 'deepseek')):
             raise ValueError('当前客户端尚未提供此能力')
         if provider == 'deepseek' and self.deepseek_restore_error:
             raise BridgeUnavailable(self.deepseek_restore_error)
         if action not in ('list', 'projects', 'create', 'account', 'manage') and (not isinstance(sid, str) or not sid or len(sid) > 512):
             raise ValueError('会话标识无效')
         body = body or {}
-        adapter = self.adapters[provider]
+        adapter = NativeReadState(self.bridge) if codex_read else self.adapters[provider]
+        if action == 'read-state':
+            validate_read_state(body, codex=codex_read)
         if action in READS and not (action == 'access' and 'mode' in body):
             return self._read(provider, action, sid, body)
         rid = str(uuid.UUID(body.get('id', '')))

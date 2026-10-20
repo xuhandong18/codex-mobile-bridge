@@ -10,13 +10,13 @@ from pathlib import Path
 from bridge.features.accounts.models import NoRedirect
 from bridge.app.lifecycle import private_json
 from bridge.clients.errors import BridgeUnavailable
-from bridge.clients.deepseek.setup import MARKER, insertion, verified_directory, legacy_account_configured
+from bridge.clients.deepseek.setup import MARKER, insertion, verified_directory, legacy_account_configured, install_client_assets
 
 PLUGIN_ID = re.compile(r'''["']?id["']?\s*:\s*["']?codex-mobile-desktop(?:["'\s,}]|$)''')
-BRIDGE_REVISION = 6
-# Revisions 3–5 share the complete native-agent lifecycle schema. Older verified
+BRIDGE_REVISION = 7
+# Revisions 3–6 share the complete native-agent lifecycle schema. Older verified
 # hosts can prove a safe restart before the feature protocol is upgraded.
-LIFECYCLE_REVISIONS = (3, 4, 5, BRIDGE_REVISION)
+LIFECYCLE_REVISIONS = (3, 4, 5, 6, BRIDGE_REVISION)
 UPDATE_REASON = 'Harness 接入需要更新，请结束任务后点击“重启并接入”'
 
 
@@ -90,6 +90,7 @@ class DeepSeek:
         target = self.directory/'mobile-host.mjs'
         content = Path(__file__).with_name('host.mjs').read_bytes()
         changed = target.read_bytes() != content
+        install_client_assets(self.directory)
         if changed:
             temp = target.with_suffix('.tmp')
             temp.write_bytes(content)
@@ -127,6 +128,7 @@ class DeepSeek:
         content = source.read_bytes()
         source_changed = not target.is_file() or target.read_bytes() != content
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        install_client_assets(self.directory)
         config = self.directory/'connection.json'
         config_changed = not config.exists()
         if not config.exists():
@@ -173,6 +175,8 @@ class DeepSeek:
         return {'installed': False, 'restartRequired': True}
 
     def call(self, action, sid=None, body=None):
+        if action == 'read-state' and self.legacy_protocol:
+            return {'status': 'unsupported', 'message': UPDATE_REASON}
         try:
             config = json.loads((self.directory/'connection.json').read_text())
             endpoint = json.loads((self.directory/'endpoint.json').read_text())

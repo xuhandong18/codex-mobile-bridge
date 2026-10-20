@@ -44,7 +44,7 @@ from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 LOG = logging.getLogger(__name__)
 from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
-THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|message-index|notifications|uploads|message-action|rename|auto-title|record-path|archive|unarchive|delete))?$")
+THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|message-index|notifications|uploads|message-action|rename|auto-title|record-path|archive|unarchive|delete|read-state))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
 UPLOAD_THUMB_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/thumb$")
 DESKTOP_IMAGE_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/desktop-images/([0-9a-f]{64})$")
@@ -976,7 +976,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.stream(bridge, thread_id)
                 return self.output(404, {"error": "接口不存在"})
             body = self.read_json()
-            if action == "message-action":
+            if action == 'read-state':
+                if side is not None or set(body) != {'id', 'turnId', 'turnStatus'}:
+                    raise ValueError('聊天已读参数无效')
+                if self.server.desktop_sessions is None:
+                    return self.output(503, {'error': '桌面已读同步暂不可用'})
+                result = self.server.desktop_sessions.call('codex', 'read-state', thread_id, {**body, 'host': bridge.host})
+            elif action == "message-action":
                 result = bridge.message_action(thread_id, body)
             elif action == "send":
                 result = bridge.send(thread_id, body.get("text"), body.get("id", ""), body.get("mode", "send"),

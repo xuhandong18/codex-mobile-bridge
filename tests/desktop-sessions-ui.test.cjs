@@ -33,6 +33,20 @@ function fixture(){
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
 
+test('DeepSeek only syncs fresh completed detail while the chat is visible, including completion during reading',async()=>{
+ const ui=fixture(),view=ui.view;await view.choose('deepseek');view.prepareChat('a');
+ const detail={connected:true,session:{id:'a',title:'Chat',status:'idle'},messages:[],turns:[{turnId:'1',status:'completed'}]};
+ const reads=()=>ui.calls.filter(call=>call.url.includes('/read-state'));
+ view.updateActivity([{...detail.session,turnId:'1',turnStatus:'completed'}]);assert.equal(reads().length,0);
+ view.applyDetail(detail,true);assert.equal(reads().length,0);
+ view.applyDetail(detail);await Promise.resolve();assert.equal(reads().length,1);assert.equal(reads()[0].body.sessionId,'a');assert.equal(reads()[0].body.turnId,'1');
+ view.applyDetail(detail);assert.equal(reads().length,1);
+ view.applyDetail({...detail,session:{...detail.session,status:'active'},turns:[{turnId:'2',status:'inProgress'}]});assert.equal(reads().length,1);
+ ui.document.hidden=true;view.applyDetail({...detail,turns:[{turnId:'2',status:'completed'}]});assert.equal(reads().length,1);
+ ui.document.hidden=false;view.applyDetail({...detail,turns:[{turnId:'2',status:'completed'}]});assert.equal(reads().length,2);
+ view.provider='claude';view.applyDetail({...detail,turns:[{turnId:'3',status:'completed'}]});assert.equal(reads().length,2);
+});
+
 test('client composers send quote-only drafts as text and preserve unconfirmed excerpt tags',async()=>{
  const ui=await opened(),view=ui.view,quotes=view.workbench.fileQuotes;quotes.add({name:'file.py',path:'/project/file.py',text:'selected code'});
  ui.setHandler(async(_url,body)=>body?{status:'unknown'}:{sessions:[]});await view.submit();

@@ -353,7 +353,7 @@ export async function apply(ctx,config){
       quitting=true;
       return {status:'accepted',pid:process.pid,generation};
     }
-    if(action==='status')return {connected:true,bridgeRevision:6,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
+    if(action==='status')return {connected:true,bridgeRevision:7,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
     if(action==='account')return account(sid);
     if(action==='list'){
       const rows=await list(),sides=new Set(Object.values(personal.sides).map(e=>e.id));
@@ -386,6 +386,17 @@ export async function apply(ctx,config){
     if(action==='archive'){if(body.confirmed!==true)throw Error('请确认归档');await ctx.workspaceRegistry.archiveSession(sid,{stopActivity:true});return {status:'accepted'};}
     if(action==='open')return {ok:true};
     if(action==='detail')return nativeDetail(row);
+    if(action==='read-state'){
+      if(Object.keys(body).some(key=>!['id','turnId','turnStatus'].includes(key))||typeof body.turnId!=='string'||!['completed','failed','interrupted'].includes(body.turnStatus))throw Error('聊天已读参数无效');
+      const native=ctx.get?.('typertGateway'),modules=ctx.get?.('clientModules');
+      if(typeof native?.broadcastRemoteEvent!=='function'||!modules?.clientPath?.('codex-mobile-desktop'))return {status:'unsupported',message:'Harness 已读同步需要更新接入并重新打开桌面页面'};
+      const boundaries=(await records(row)).filter(r=>['turn/start','turn/end'].includes(r.event.type)),last=boundaries.at(-1)?.event;
+      const ending=last?.data?.reason?.kind,result=ending==='completed'?'completed':['aborted','interrupted'].includes(ending)?'interrupted':['blocked','error','max-tokens','forked'].includes(ending)?'failed':null;
+      const latest=await find(sid);
+      if(activity(latest,await list()).status!=='idle'||last?.type!=='turn/end'||String(last.data.turn)!==body.turnId||result!==body.turnStatus||latest.updatedAt!==row.updatedAt)return {status:'stale'};
+      native.broadcastRemoteEvent({event:'codex-mobile/read-state',args:[{sessionId:sid,updatedAt:latest.updatedAt,turnId:body.turnId,turnStatus:body.turnStatus}],resources:{session:value=>value.sessionId}});
+      return {status:'accepted'};
+    }
     if(action==='catalog')return catalog(sid,body.section||'all');
     if(action==='settings'&&body.goalAction)return changeGoal(row,body);
     if(action==='access'){const presets=ctx.permissionPresets.catalog(),options=presets.options;if(body.mode){if(!options.some(o=>o.value===body.mode))throw Error('权限选项无效');await ctx.sessionController.create({sessionId:sid,cwd:row.cwd});const agent=ctx.agents.get(sid);if(!agent)throw Error('当前会话没有活动智能体');ctx.permissionPresets.set(agent.session,body.mode);}return {status:'accepted',mode:body.mode||values(row).permissions?.currentValue||presets.defaultPreset,modes:options.map(o=>o.value),options:permissionOptions()};}
@@ -413,7 +424,7 @@ export async function apply(ctx,config){
     const credential=String(req.headers.authorization||'').replace(/^Bearer /,'');const a=Buffer.from(credential),b=Buffer.from(token);
     if(req.method!=='POST'||req.url!=='/mobile'||req.headers.origin||a.length!==b.length||!timingSafeEqual(a,b)){res.writeHead(403);res.end();return;}
     let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxRequestBytes)throw Error('请求过大');chunks.push(chunk);}const {action,sid,body={}}=JSON.parse(Buffer.concat(chunks));
-    const mutating=['create','rename','archive','stop','send','respond','settings','manage','side-write'].includes(action)||(action==='access'&&Boolean(body?.mode));
+    const mutating=['create','rename','archive','stop','send','respond','settings','manage','side-write','read-state'].includes(action)||(action==='access'&&Boolean(body?.mode));
     if(mutating&&quitting)throw Error('Harness 正在退出，请稍后重试');
     let result;
     if(mutating)activeMutations++;

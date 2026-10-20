@@ -37,6 +37,28 @@ PREVIOUS_PERSONAL_SOURCES = ('7ff9ce99e26c3b1b9e54ade4db4a634976096f3a429b6f4d81
 PREVIOUS_MODE_SOURCES = ('35963e66d411a8193d53700776e0eab7fdaa1ed4fff936ea8c61d8933402bbbc',
                          '7ecbcfad33bfe97b900e8ff21b7b7256a3f48928646659a316d370e38b955293')
 
+# Revision 6 before native completion-read synchronization, LF and CRLF.
+PREVIOUS_READ_STATE_SOURCES = ('0796b25a30de7b51b0e3ffbeb36dcc0e01ddfa96647ed9dc81ca7cf8dbaddbbf',
+                               'e10e29e4bc015d85732547fff01c4f3a6527d3f2b077be8351bd5a85889e86bc')
+
+
+def client_assets():
+    base = Path(__file__).parent
+    return {'package.json': (base/'client-package.json').read_bytes(), 'client.js': (base/'client.js').read_bytes()}
+
+
+def install_client_assets(directory):
+    assets = client_assets()
+    for name, content in assets.items():
+        target = directory/name
+        if target.exists() and (target.is_symlink() or target.read_bytes().replace(b'\r\n', b'\n') != content.replace(b'\r\n', b'\n')):
+            raise ValueError('Harness 接入的桌面已读组件无法验证，尚未覆盖文件')
+    for name, content in assets.items():
+        target = directory/name
+        if not target.exists():
+            target.write_bytes(content)
+            target.chmod(0o600)
+
 
 def insertion(text):
     """Read only our JSON flow insertion, including Harness's line wrapping.
@@ -144,8 +166,16 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES):
             return None
+        if digest in current_sources:
+            for name, content in client_assets().items():
+                asset = directory/name
+                if asset.is_symlink():
+                    return None
+                _owned_file(asset, False)
+                if asset.read_bytes().replace(b'\r\n', b'\n') != content.replace(b'\r\n', b'\n'):
+                    return None
         return directory, digest not in current_sources
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return None

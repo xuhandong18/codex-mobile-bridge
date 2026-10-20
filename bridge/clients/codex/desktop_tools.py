@@ -94,6 +94,16 @@ class DesktopTools:
         self.reader.join(timeout=2)
 
     @classmethod
+    def connect_profile(cls, bridge):
+        from bridge.clients.desktop_app import DesktopApp
+        projects = {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'}
+        contexts = bridge.store.list(limit=1, source='desktop')
+        if not projects or not contexts:
+            raise ToolError('No verified desktop profile context')
+        executable = bridge.accounts.index.get('desktopExecutable') or DesktopApp.scan(bridge.catalog_reader.executable, bridge.codex_home)
+        return cls.connect(executable, contexts[0]['id'], projects)
+
+    @classmethod
     def connect(cls, executable, context_id, project_ids):
         from bridge.platforms.windows.tool_pipe import endpoints, verify_server
         for endpoint in endpoints():
