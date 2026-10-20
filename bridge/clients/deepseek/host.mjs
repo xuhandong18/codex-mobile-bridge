@@ -59,6 +59,59 @@ export async function apply(ctx,config){
   const list=async()=> (await ctx.sessionController.list({},signal())).items;
   const find=async id=>{const row=(await list()).find(r=>r.sessionId===id);if(!row)throw Error('DeepSeek 会话不存在');return row;};
   const values=row=>row.projections?.values||{};
+  const service=(agent,name)=>agent?.ctx?.get?.(name)||ctx.get?.(name);
+  const modeCapabilities=row=>{
+    const v=values(row),agent=row&&ctx.agents.get(row.sessionId),plan=service(agent,'planMode'),goals=service(agent,'goals');
+    return {workModes:!!(typeof plan?.set==='function'||Object.hasOwn(v,'plan')),goal:!!(typeof goals?.create==='function'&&Object.hasOwn(v,'goal'))};
+  };
+  const modeState=row=>{
+    const v=values(row),agent=ctx.agents.get(row.sessionId),plan=service(agent,'planMode'),goals=service(agent,'goals');
+    const livePlan=agent&&typeof plan?.get==='function'?plan.get(agent):null;
+    const active=livePlan?(livePlan.pending??livePlan.active):(v.plan?.pending?!v.plan.active:v.plan?.active);
+    const goal=agent&&typeof goals?.get==='function'?goals.get(agent):v.goal;
+    return {collaborationMode:active?'plan':'default',goal:goal?{goalId:goal.id,revision:goal.revision,objective:goal.objective,status:goal.phase,createdAt:goal.createdAt,roundsStarted:goal.roundsStarted,maxGoalRounds:goal.maxGoalRounds,activation:goal.activation||'disarmed'}:null};
+  };
+  const modeAgent=async row=>{
+    let agent=ctx.agents.get(row.sessionId);
+    if(!agent){await ctx.sessionController.create({sessionId:row.sessionId,cwd:row.cwd});agent=ctx.agents.get(row.sessionId);}
+    if(!agent)throw Error('当前会话没有活动智能体');return agent;
+  };
+  const setWorkMode=async(row,body)=>{
+    const mode=body.workMode;if(mode==null)return null;
+    if(!['default','plan','goal'].includes(mode))throw Error('工作模式无效');
+    if(body.mode==='steer')throw Error('补充内容沿用当前任务模式');
+    const caps=modeCapabilities(row),current=modeState(row);
+    if(mode==='plan'&&!caps.workModes)throw Error('当前 Harness 会话不支持计划模式，请更新接入或检查智能体配置');
+    if(mode==='goal'&&!caps.goal)throw Error('当前 Harness 会话不支持目标模式，请更新接入或检查智能体配置');
+    if(row.running!==false&&(mode==='goal'||mode!==current.collaborationMode))throw Error('请等待当前任务结束后再切换工作模式');
+    if(mode==='goal'){
+      if(!body.text?.trim()||body.text.trim().length>4000)throw Error('目标内容需为 1–4000 字');
+      if(body.resolvedImages?.length)throw Error('目标模式暂不接受附件');
+      if(current.goal&&current.goal.status!=='complete')throw Error('已有未完成目标，请先处理当前目标');
+    }
+    if(mode!=='goal'&&mode===current.collaborationMode)return null;
+    const agent=await modeAgent(row),plan=service(agent,'planMode'),goals=service(agent,'goals');
+    if(mode==='plan'&&typeof plan?.set!=='function')throw Error('当前 Harness 会话不支持计划模式');
+    if(mode==='goal'&&typeof goals?.create!=='function')throw Error('当前 Harness 会话不支持目标模式');
+    if(mode==='goal'){
+      const live=goals.get(agent);if(live&&live.phase!=='complete')throw Error('已有未完成目标，请先处理当前目标');
+      if(typeof plan?.set==='function')plan.set(agent,false);
+      goals.create(agent,{objective:body.text.trim()});return {status:'accepted',...modeState(await find(row.sessionId))};
+    }
+    if(typeof plan?.set!=='function')throw Error('当前 Harness 会话不支持工作模式切换');
+    plan.set(agent,mode==='plan');return null;
+  };
+  const changeGoal=async(row,body)=>{
+    if(!['paused','active','clear','edit'].includes(body.goalAction))throw Error('目标操作无效');
+    const current=modeState(row).goal,expected=body.expected;
+    if(!current||!expected||expected.goalId!==current.goalId||expected.revision!==current.revision)throw Error('目标已变化，请刷新后重试');
+    const agent=await modeAgent(row),goals=service(agent,'goals'),goal=goals?.get(agent);
+    if(!goal||goal.id!==expected.goalId||goal.revision!==expected.revision)throw Error('目标已变化，请刷新后重试');
+    const ref={id:goal.id,revision:goal.revision};
+    if(body.goalAction==='edit'){if(goal.phase!=='paused'||typeof body.objective!=='string'||!body.objective.trim()||body.objective.trim().length>4000)throw Error('请先暂停目标，并输入 1–4000 字的目标内容');goals.edit(agent,ref,{objective:body.objective.trim()});}
+    else goals[{paused:'pause',active:'resume',clear:'clear'}[body.goalAction]](agent,ref);
+    return {status:'accepted',...modeState(await find(row.sessionId))};
+  };
   const capabilities=()=>({models:typeof ctx.sessionController.selectModel==='function',effort:typeof ctx.sessionController.selectModel==='function',permissions:typeof ctx.permissionPresets?.set==='function',attachments:typeof ctx.sessionController.prompt==='function',skills:typeof ctx.sessionSkillCatalog?.list==='function',queue:typeof ctx.sessionController.prompt==='function',steer:typeof ctx.sessionController.prompt==='function',sideChat:typeof ctx.sessionController.fork==='function',subagents:true,sidebar:true,projects:typeof ctx.workspaceRegistry.create==='function'});
   const contextUsage=row=>{
     const pressure=values(row).contextPressure||{},used=pressure.projectedTokens??pressure.pressureTokens,limit=pressure.contextWindow;
@@ -106,12 +159,12 @@ export async function apply(ctx,config){
       if(['user/message','assistant/message','tool/call','tool/result','todo/write','turn/start','turn/end'].includes(type))result.push({...item,presentation:metadata});
     }return result;
   };
-  const nativeDetail=async row=>({session:activity(row,await list()),capabilities:capabilities(),records:publicRecords(await records(row)),historyComplete:history.get(row.sessionId)?.complete===true,steps:values(row).todos||[],connected:true});
+  const nativeDetail=async row=>({session:{...activity(row,await list()),...modeState(row)},capabilities:{...capabilities(),...modeCapabilities(row)},records:publicRecords(await records(row)),historyComplete:history.get(row.sessionId)?.complete===true,steps:values(row).todos||[],connected:true});
   const sideView=async entry=>{
     const row=await find(entry.id),detail=await nativeDetail(row),nativeTitle=detail.session.title;
     const current=entry.manual?nativeTitle:nativeTitle!==entry.inheritedTitle&&nativeTitle!=='新会话'?nativeTitle:entry.title||'';
     const inbox=values(row).inbox?.['next-turn'],submissions=(entry.submissions||[]).map(s=>({...s,...Array.isArray(inbox)&&s.status==='queued'?{status:inbox.some(m=>m.source?.rpcId===s.id)?'queued':'accepted'}:{}}));
-    return {...detail,id:entry.id,title:current,titleRevision:(entry.revision||0)+(entry.nativeRevision||0),titleSource:entry.manual?'manual':'native',cwd:row.cwd,status:detail.session.status,model:detail.session.model,effort:detail.session.effort,permissionMode:detail.session.permissionMode,contextUsage:detail.session.contextUsage,requests:detail.session.requests,submissions};
+    return {...detail,id:entry.id,title:current,titleRevision:(entry.revision||0)+(entry.nativeRevision||0),titleSource:entry.manual?'manual':'native',cwd:row.cwd,status:detail.session.status,model:detail.session.model,effort:detail.session.effort,permissionMode:detail.session.permissionMode,contextUsage:detail.session.contextUsage,...modeState(row),requests:detail.session.requests,submissions};
   };
   const side=async(sid,body,write=false)=>{
     await find(sid);
@@ -277,7 +330,7 @@ export async function apply(ctx,config){
       if(!Array.isArray(agents))return {connected:true,bridgeRevision:4,complete:false,sessions:[]};
       const sessions=agents.map(agent=>({id:agent.id,status:agent.status==='running'?'active':agent.status==='idle'?'idle':'unknown',runtimeKnown:['idle','running'].includes(agent.status),requests:[...questions.values()].filter(q=>q.sid===agent.id).map(q=>q.public)}));
       for(const question of questions.values())if(!sessions.some(s=>s.id===question.sid))sessions.push({id:question.sid,status:'waiting',runtimeKnown:true,requests:[question.public]});
-      return {connected:true,bridgeRevision:5,complete:sessions.every(s=>typeof s.id==='string'&&s.id.length>0),sessions};
+      return {connected:true,bridgeRevision:6,complete:sessions.every(s=>typeof s.id==='string'&&s.id.length>0),sessions};
   }
   const idle=runtime=>runtime.complete&&runtime.sessions.every(s=>s.runtimeKnown&&s.status==='idle'&&!s.requests.length);
   const quitFailed=error=>{quitting=false;ctx.logger?.error?.('Harness native quit failed: '+String(error.message||error));};
@@ -300,7 +353,7 @@ export async function apply(ctx,config){
       quitting=true;
       return {status:'accepted',pid:process.pid,generation};
     }
-    if(action==='status')return {connected:true,bridgeRevision:5,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
+    if(action==='status')return {connected:true,bridgeRevision:6,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
     if(action==='account')return account(sid);
     if(action==='list'){
       const rows=await list(),sides=new Set(Object.values(personal.sides).map(e=>e.id));
@@ -334,6 +387,7 @@ export async function apply(ctx,config){
     if(action==='open')return {ok:true};
     if(action==='detail')return nativeDetail(row);
     if(action==='catalog')return catalog(sid,body.section||'all');
+    if(action==='settings'&&body.goalAction)return changeGoal(row,body);
     if(action==='access'){const presets=ctx.permissionPresets.catalog(),options=presets.options;if(body.mode){if(!options.some(o=>o.value===body.mode))throw Error('权限选项无效');await ctx.sessionController.create({sessionId:sid,cwd:row.cwd});const agent=ctx.agents.get(sid);if(!agent)throw Error('当前会话没有活动智能体');ctx.permissionPresets.set(agent.session,body.mode);}return {status:'accepted',mode:body.mode||values(row).permissions?.currentValue||presets.defaultPreset,modes:options.map(o=>o.value),options:permissionOptions()};}
     if(action==='settings'){const c=await catalog(sid,'models'),selected=body.model||c.currentModel,m=c.models.find(m=>m.id===selected);if(!m)throw Error('请选择可用模型');const effort=body.effort??(selected===c.currentModel?c.currentEffort:m.defaultEffort);if(effort&&!m.efforts.includes(effort))throw Error('该模型不支持所选思考强度');const slash=selected.indexOf('/'),result=await ctx.sessionController.selectModel({sessionId:sid,provider:selected.slice(0,slash),model:selected.slice(slash+1),reasoningEffort:effort||undefined}),actual=result.selected;return {status:'accepted',model:actual.provider+'/'+actual.model,effort:actual.reasoningEffort||''};}
     if(action==='stop'){await ctx.sessionController.cancel({sessionId:sid});return {status:'accepted'};}
@@ -346,6 +400,7 @@ export async function apply(ctx,config){
       const content=text?[{type:'text',text}]:[];
       for(const image of body.resolvedImages||[]){const match=/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(image.url);if(!match)throw Error('图片格式无效');content.push({type:'image',mediaType:match[1],data:match[2],...(image.name?{name:image.name}:{})});}
       if(!content.length)throw Error('请输入内容');
+      const workResult=await setWorkMode(row,body);if(workResult)return workResult;
       const mode=body.mode==='steer'&&row.running?'steer':'queue',result=await ctx.sessionController.prompt({sessionId:sid,requestId:body.id,mode,content},signal());
       if(result?.accepted!==true)throw Error('Harness 未确认接收消息，请在桌面核对');
       if(first)try{await scheduleTitle(sid,body.text,row,sideEntry);}catch{} // Optional naming cannot invalidate an accepted prompt.

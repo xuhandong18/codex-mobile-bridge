@@ -78,6 +78,12 @@ test('paused and active goals expose resume and pause actions',async()=>{
  assert.match(ui.text(),/Goal active|目标进行中/);
 });
 
+test('a persisted Harness goal stays disarmed until the user explicitly resumes it',()=>{
+ const ui=fixture();
+ ui.panel.render({...idle,goal:{goalId:'native',revision:2,objective:'继续原目标',status:'active',activation:'disarmed',roundsStarted:3,maxGoalRounds:256}},'send',false);
+ assert.match(ui.text(),/目标等待恢复/);assert.match(ui.text(),/恢复目标/);assert.match(ui.text(),/3 \/ 256/);assert.doesNotMatch(ui.text(),/暂停目标/);
+});
+
 test('limited goals can pause and complete goals can be cleared',()=>{
  const ui=fixture();
  ui.panel.render({status:'idle',connected:true,host:'local',goal:{objective:'Work',status:'usageLimited'}},'send',false);

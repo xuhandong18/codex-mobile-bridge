@@ -16,6 +16,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PersonalStateTests(unittest.TestCase):
+    def test_work_mode_is_forwarded_and_part_of_unknown_write_identity(self):
+        with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as directory:
+            manager = DesktopSessions(directory)
+            adapter = Mock(); adapter.call.side_effect = TimeoutError('accepted but disconnected')
+            manager.adapters['deepseek'] = adapter
+            try:
+                for action in ('send', 'side-write'):
+                    payload = {'id': str(uuid.uuid4()), 'text': '先制定计划', 'workMode': 'plan'}
+                    if action == 'side-write':
+                        payload.update(operation='send', childId='child', slot=str(uuid.uuid4()))
+                    result = manager.call('deepseek', action, 'parent', payload)
+                    self.assertEqual(result['status'], 'unknown')
+                    adapter.call.assert_called_with(action, 'parent', payload)
+                    calls = adapter.call.call_count
+                    self.assertEqual(manager.call('deepseek', action, 'parent', payload), result)
+                    self.assertEqual(adapter.call.call_count, calls)
+                    with self.assertRaises(ValueError):
+                        manager.call('deepseek', action, 'parent', {**payload, 'workMode': 'default'})
+            finally:
+                manager.close()
+
     def test_invalid_side_send_is_refused_before_native_dispatch(self):
         with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as directory:
             manager = DesktopSessions(directory)
@@ -100,6 +121,19 @@ class PersonalHttpTests(unittest.TestCase):
     tearDown = test_bridge.HttpTests.tearDown
     request = test_bridge.HttpTests.request
     login = test_bridge.HttpTests.login
+
+    def test_mode_selection_and_goal_controls_keep_auth_csrf_and_native_identity(self):
+        manager = self.server.desktop_sessions = Mock()
+        manager.call.return_value = {'status': 'accepted'}
+        headers = self.login()
+        for action, fields in (('send', {'text': '制定计划', 'workMode': 'plan'}),
+                               ('settings', {'goalAction': 'paused', 'expected': {'goalId': 'native-goal', 'revision': 2}})):
+            body = {'id': str(uuid.uuid4()), 'sessionId': 'native-session', **fields}
+            route = '/api/desktop-sessions/deepseek/'+action
+            self.assertEqual(self.request('POST', route, body)[0], 401)
+            self.assertEqual(self.request('POST', route, body, {'Cookie': headers['Cookie']})[0], 403)
+            self.assertEqual(self.request('POST', route, body, headers)[0], 200)
+            manager.call.assert_called_with('deepseek', action, 'native-session', {key: value for key, value in body.items() if key != 'sessionId'})
 
     def test_side_routes_require_auth_csrf_and_preserve_parent_child_slot_and_receipt(self):
         manager = self.server.desktop_sessions = Mock()

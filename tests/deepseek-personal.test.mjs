@@ -37,6 +37,46 @@ async function fixture(t){
   return {ctx,folder,add,append,rows,events,calls,workspace,request,restart:async()=>{await disposers.pop()();await start();}};
 }
 
+test('work modes use native plan and goal services without changing the original session or passive reads',async t=>{
+  const f=await fixture(t),row=f.add('modes'),v=row.projections.values,agents=new Map();
+  v.plan={active:false,pending:false};v.goal=null;
+  const plan={get:()=>({active:v.plan.active}),set:(agent,active)=>{assert.equal(agent,agents.get('modes'));f.calls.push(['plan',active]);v.plan.active=active;}};
+  const goals={get:()=>v.goal,create:(agent,{objective})=>{assert.equal(agent,agents.get('modes'));f.calls.push(['goal',objective]);return v.goal={id:'native-goal',revision:1,objective,phase:'active',createdAt:100,roundsStarted:0,maxGoalRounds:256,activation:'armed'};},pause:(agent,ref)=>{assert.deepEqual(ref,{id:v.goal.id,revision:v.goal.revision});v.goal={...v.goal,revision:2,phase:'paused'};return v.goal;}};
+  for(const name of ['resume','edit','clear'])goals[name]=(agent,ref,fields)=>{assert.equal(agent,agents.get('modes'));assert.deepEqual(ref,{id:v.goal.id,revision:v.goal.revision});v.goal=name==='clear'?null:{...v.goal,...fields,revision:v.goal.revision+1,...name==='resume'?{phase:'active',activation:'armed'}:{}};return v.goal;};
+  agents.set('modes',{session:{id:'modes'},ctx:{get:name=>({planMode:plan,goals}[name])}});f.ctx.agents.get=id=>agents.get(id);
+  let detail=await f.request('detail','modes');assert.equal(detail.capabilities.workModes,true);assert.equal(detail.capabilities.goal,true);assert.equal(detail.session.collaborationMode,'default');assert.equal(f.calls.length,0);
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'先规划',workMode:'plan'})).status,'accepted');assert.equal(f.calls.at(-2)[0],'plan');assert.equal(f.calls.at(-1)[0],'prompt');
+  detail=await f.request('detail','modes');assert.equal(detail.session.collaborationMode,'plan');
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'直接执行',workMode:'default'})).status,'accepted');assert.equal(v.plan.active,false);
+  const prompts=f.calls.filter(c=>c[0]==='prompt').length;
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'完成改造',workMode:'goal'})).status,'accepted');assert.equal(v.goal.objective,'完成改造');assert.equal(f.calls.filter(c=>c[0]==='prompt').length,prompts,'native goal driver owns execution');
+  detail=await f.request('detail','modes');assert.equal(detail.session.goal.status,'active');assert.equal(detail.session.goal.goalId,'native-goal');
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'另一个目标',workMode:'goal'})).code,400);
+  assert.equal((await f.request('settings','modes',{goalAction:'paused',expected:{goalId:'native-goal',revision:0}})).code,400);
+  assert.equal((await f.request('settings','modes',{goalAction:'paused',expected:{goalId:'native-goal',revision:1}})).status,'accepted');assert.equal(v.goal.phase,'paused');
+  assert.equal((await f.request('settings','modes',{goalAction:'edit',objective:'改进目标',expected:{goalId:'native-goal',revision:2}})).status,'accepted');assert.equal(v.goal.objective,'改进目标');
+  assert.equal((await f.request('settings','modes',{goalAction:'active',expected:{goalId:'native-goal',revision:3}})).status,'accepted');assert.equal(v.goal.phase,'active');
+  v.goal.activation='disarmed';assert.equal((await f.request('settings','modes',{goalAction:'active',expected:{goalId:'native-goal',revision:4}})).status,'accepted');assert.equal(v.goal.activation,'armed');
+  assert.equal((await f.request('settings','modes',{goalAction:'clear',expected:{goalId:'native-goal',revision:5}})).status,'accepted');assert.equal(v.goal,null);
+  const before=f.calls.length;row.running=true;
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'排队',mode:'queue',workMode:'plan'})).code,400);
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'补充',mode:'steer',workMode:'plan'})).code,400);
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'非法',workMode:'invented'})).code,400);assert.equal(f.calls.length,before);
+  agents.clear();delete v.plan;delete v.goal;
+  detail=await f.request('detail','modes');assert.equal(detail.capabilities.workModes,false);assert.equal(detail.capabilities.goal,false);
+  assert.equal((await f.request('send','modes',{id:randomUUID(),text:'旧版本',workMode:'plan'})).code,400);
+});
+
+test('cold mode changes resume only the explicitly addressed native session',async t=>{
+  const f=await fixture(t),row=f.add('cold'),agents=new Map();row.projections.values.plan={active:false,pending:false};
+  f.ctx.agents.get=id=>agents.get(id);const create=f.ctx.sessionController.create;
+  const plan={get:()=>({active:row.projections.values.plan.active}),set:(agent,active)=>{assert.equal(agent,agents.get('cold'));row.projections.values.plan.active=active;}};
+  f.ctx.sessionController.create=async request=>{const result=await create(request);agents.set(request.sessionId,{session:{id:request.sessionId},ctx:{get:name=>name==='planMode'?plan:undefined}});return result;};
+  assert.equal((await f.request('detail','cold')).capabilities.workModes,true);assert.equal(agents.size,0);assert.equal(f.calls.length,0);
+  assert.equal((await f.request('send','cold',{id:randomUUID(),text:'先规划',workMode:'plan'})).status,'accepted');
+  assert.deepEqual(f.calls[0],['create',{sessionId:'cold',cwd:row.cwd}]);assert.equal(f.rows.length,1);assert.equal(row.projections.values.modelSelection.next.provider,'fixture');
+});
+
 test('native projects, manual order, shared sections, pins, archive and projectless creation survive reconnect',async t=>{
   const f=await fixture(t),{request:r}=f;const first=f.add('one'),second=f.add('two');const a=f.workspace(f.folder,'甲'),other=join(f.folder,'other');await mkdir(other);const b=f.workspace(other,'乙');a.sessionIds=['one','two'];
   assert.equal((await r('list')).sessions.length,2);assert.equal(f.calls.length,0,'passive reads must not create or activate anything');

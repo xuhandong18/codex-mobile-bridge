@@ -22,7 +22,7 @@ class WorkModes {
     if(this.busy())return;
     const key=this.key,storageKey='goal-action:'+key;
     const goal=this.view?.goal;
-    const expected=goal?Object.fromEntries(['objective','status','createdAt','createdAtMs','goalId'].filter(k=>goal[k]!=null).map(k=>[k,goal[k]])):{};
+    const expected=goal?Object.fromEntries(['objective','status','createdAt','createdAtMs','goalId','revision'].filter(k=>goal[k]!=null).map(k=>[k,goal[k]])):{};
     const fingerprint=JSON.stringify({kind,fields,expected});
     let pending;try{pending=JSON.parse(this.storage.getItem(storageKey));}catch{}
     if(!pending||pending.fingerprint!==fingerprint)pending={fingerprint,payload:{id:this.newId(),...fields,expected,uiLocale:BridgeI18n.locale()}};
@@ -42,10 +42,10 @@ class WorkModes {
     const t=BridgeI18n.t,goalSupported=!!view&&(view.host==='local'
       ?view.goalRuntimeAvailable!==false&&view.access?.canUseGoal!==false
       :view.goalRuntimeAvailable===true&&view.access?.canUseGoal===true);
-    const goalUnavailableReason=view?.host!=='local'&&view?.access?.runtime==='desktop'?'目标模式暂不支持 SSH 主机':view?.access?.source==='cli'?'当前 Codex 会话暂不支持目标模式':view?.host!=='local'?'目标模式暂不支持 SSH 主机':'未找到桌面 App 的 Codex 运行时';
-    this.select.value=this.selection||(view?.collaborationMode==='plan'?'plan':'default');
+    const goalUnavailableReason=view?.goalUnavailableReason||(view?.host!=='local'&&view?.access?.runtime==='desktop'?'目标模式暂不支持 SSH 主机':view?.access?.source==='cli'?'当前 Codex 会话暂不支持目标模式':view?.host!=='local'?'目标模式暂不支持 SSH 主机':'未找到桌面 App 的 Codex 运行时');
+    this.select.value=(!view?.workModesLocked&&this.selection)||(view?.collaborationMode==='plan'?'plan':'default');
     if(!goalSupported&&this.select.value==='goal')this.select.value='default';
-    this.select.disabled=!view||view.loadingHistory||view.activating||busy||sendMode==='steer';
+    this.select.disabled=!view||view.loadingHistory||view.activating||view.workModesLocked||busy||sendMode==='steer';
     const goalOption=this.select.querySelector('[value=goal]');
     goalOption.disabled=!goalSupported||!!(view?.status==='active'||(view?.goal&&view.goal.status!=='complete')||['pending','unknown'].includes(view?.goalSubmission?.status));
     goalOption.title=t(goalSupported?'':goalUnavailableReason);
@@ -63,8 +63,9 @@ class WorkModes {
     if(goal){
       const labels={active:'目标进行中',paused:'目标已暂停',blocked:'目标等待处理',usageLimited:'目标已达到用量限制',budgetLimited:'目标已达到预算限制',complete:'目标已完成'};
       const details=document.createElement('details');details.open=expanded;
-      details.append(node('summary',t(labels[goal.status]||'目标状态')));
+      details.append(node('summary',t(goal.status==='active'&&goal.activation==='disarmed'?'目标等待恢复':labels[goal.status]||'目标状态')));
       details.append(node('p',goal.objective));
+      if(Number.isFinite(goal.roundsStarted)&&Number.isFinite(goal.maxGoalRounds))details.append(node('p',t('目标轮次')+'：'+goal.roundsStarted+' / '+goal.maxGoalRounds,'muted'));
       if(Number.isFinite(goal.tokensUsed))details.append(node('p',t('已用 Token：')+goal.tokensUsed.toLocaleString()+(Number.isFinite(goal.tokenBudget)?' / '+goal.tokenBudget.toLocaleString():''),'muted'));
       this.goalRoot.append(details);
     }
@@ -76,10 +77,10 @@ class WorkModes {
     if(goal&&goalSupported){
       const actions=node('div','','goal-actions');
       this.goalRoot.append(actions);
-      if(['active','blocked','usageLimited','budgetLimited'].includes(goal.status)){
+      if(['active','blocked','usageLimited','budgetLimited'].includes(goal.status)&&goal.activation!=='disarmed'){
         actions.append(button(this.statusBusy==='paused'?t('正在暂停目标…'):t('暂停目标'),'goal-status secondary',()=>this.setStatus('paused'),this.busy()));
       }
-      if(goal.status==='paused'){
+      if(goal.status==='paused'||['active','blocked'].includes(goal.status)&&goal.activation==='disarmed'){
         actions.append(button(this.statusBusy==='active'?t('正在恢复目标…'):t('恢复目标'),'goal-status primary',()=>this.setStatus('active'),this.busy()));
       }
       if(goal.status==='paused')actions.append(button(t('修改目标'),'goal-edit secondary',()=>{this.editing=true;this.editText=goal.objective;this.render();this.goalRoot.querySelector('.goal-editor')?.focus();},this.busy()));

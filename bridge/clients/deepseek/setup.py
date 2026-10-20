@@ -33,6 +33,10 @@ PREVIOUS_CONTEXT_SOURCES = ('c60b404ff5efcadc4329b125ff8524293bc4e4c2e29224393ea
 PREVIOUS_PERSONAL_SOURCES = ('7ff9ce99e26c3b1b9e54ade4db4a634976096f3a429b6f4d81e7401d3e067f8f',
                              '2bd8e0711db16fe5c2d2a39f473f8e0f747e5f9067dae64572129c56ff0e7136')
 
+# Revision 5 before native plan/goal controls; retain both newline forms.
+PREVIOUS_MODE_SOURCES = ('35963e66d411a8193d53700776e0eab7fdaa1ed4fff936ea8c61d8933402bbbc',
+                         '7ecbcfad33bfe97b900e8ff21b7b7256a3f48928646659a316d370e38b955293')
+
 
 def insertion(text):
     """Read only our JSON flow insertion, including Harness's line wrapping.
@@ -140,7 +144,7 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES):
             return None
         return directory, digest not in current_sources
     except (OSError, ValueError, KeyError, TypeError, IndexError):

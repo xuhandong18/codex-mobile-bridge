@@ -98,6 +98,23 @@ class DeepSeekMigrationTests(unittest.TestCase):
         self.assertEqual(self.new.directory, self.old.directory)
         self.assertEqual(before, {path: path.read_bytes() for path in before})
 
+    def test_revision_five_mode_predecessors_reuse_connection_without_writes(self):
+        from bridge.clients.deepseek import setup
+        original_sha = hashlib.sha256
+        source = self.old.directory/'mobile-host.mjs'
+        content = b'// verified revision 5 fixture before work modes'
+        source.write_bytes(content)
+        before = {path: path.read_bytes() for path in self.old.directory.iterdir()}
+        for predecessor in setup.PREVIOUS_MODE_SOURCES:
+            with self.subTest(digest=predecessor):
+                def digest(value):
+                    return Mock(hexdigest=lambda: predecessor) if value == content else original_sha(value)
+                with patch.object(setup.hashlib, 'sha256', side_effect=digest):
+                    result = self.new.discover_existing()
+                self.assertTrue(result['reused'])
+                self.assertTrue(result['updateRequired'])
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+
     def test_current_source_lf_and_crlf_are_reused_as_current_without_writes(self):
         source = self.old.directory/'mobile-host.mjs'
         current = Path(__file__).resolve().parents[1]/'bridge/clients/deepseek/host.mjs'

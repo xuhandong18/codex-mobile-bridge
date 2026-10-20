@@ -37,10 +37,16 @@ class SideChatPanel {
     const select=(label,rows)=>{const control=n('select');control.dataset.i18nAriaLabel=label;control.setAttribute('aria-label',BridgeI18n.t(label));for(const [value,text] of rows){const option=n('option','',BridgeI18n.t(text));option.value=value;control.append(option);}return control;};
     this.sendMode=select('发送方式',[['send','发送新消息'],['queue','完成后发送'],['steer','补充当前任务']]);
     this.workMode=select('工作模式',[['default','普通模式'],['plan','计划模式']]);
-    if(session.provider==='deepseek'){this.workMode.hidden=true;this.fileInput.accept='image/png,image/jpeg,image/gif,image/webp';}
+    if(session.provider==='deepseek'){this.workMode.append(new Option(BridgeI18n.t('目标模式'),'goal'));this.fileInput.accept='image/png,image/jpeg,image/gif,image/webp';}
     this.sendMode.onchange=()=>this.controls();this.workMode.onchange=()=>{this.modeSelected=true;this.controls();};
     actions.append(this.stopButton,this.sendButton);bottom.append(this.attachButton,this.fileInput,this.sendMode,this.workMode,actions);
     this.composerBody.append(this.attachmentList,this.input,bottom);this.form.append(tools,this.composerBody);
+    if(session.provider==='deepseek'){
+      this.modeHint=n('span','mode-hint');this.goalRoot=n('div','goal-state');this.goalToggle=b('',()=>{},'目标进度');this.goalToggle.append(document.querySelector('#goal-toggle svg').cloneNode(true),n('span','',BridgeI18n.t('目标进度')));this.goalToggle.className='goal-toggle';actions.prepend(this.goalToggle);this.composerBody.append(this.modeHint);this.form.prepend(this.goalRoot);
+      const goalAction=(goalAction,{id,...payload})=>this.action('settings',{goalAction,...payload,operationId:id},true);
+      this.nativeModes=new WorkModes({select:this.workMode,hint:this.modeHint,goalRoot:this.goalRoot,goalToggle:this.goalToggle,storage:localStorage,newId:uuid,onCancel:payload=>goalAction('clear',payload),onStatus:payload=>goalAction(payload.status,payload),onEdit:payload=>goalAction('edit',payload)});
+      const change=this.workMode.onchange;this.workMode.onchange=()=>{change();this.controls();};
+    }
     this.fileQuotes=new FileQuoteDrafts({input:this.input,onChange:()=>this.controls()});this.fileQuotes.open(session.key+'|'+tab.id);
     this.references=new ChatReferencePicker({button:this.referenceButton,input:this.input,context:()=>this.referenceContext(),
       load:(kind,options)=>this.loadReferences(kind,options),onInsert:()=>this.collapse(false)});
@@ -109,6 +115,8 @@ class SideChatPanel {
     const result=await response.json();if(!response.ok){if(response.status===401)this.workbench.onUnauthorized();const error=Error(result.error||BridgeI18n.t('上传失败'));error.status=response.status;throw error;}return result;
   }
   relabel(){
+    for(const [control,labels] of [[this.sendMode,['发送新消息','完成后发送','补充当前任务']],[this.workMode,['普通模式','计划模式','目标模式']]])[...control.options].forEach((option,i)=>option.textContent=BridgeI18n.t(labels[i]));
+    if(this.goalToggle)this.goalToggle.querySelector('span').textContent=BridgeI18n.t('目标进度');
     this.input.setAttribute('data-i18n-placeholder','继续这条聊天…');this.input.placeholder=BridgeI18n.t('继续这条聊天…');
     this.input.setAttribute("data-i18n-aria-label",'侧边聊天输入');this.input.setAttribute('aria-label',BridgeI18n.t('侧边聊天输入'));
     this.messages.setAttribute("data-i18n-aria-label",'侧边聊天消息');this.messages.setAttribute('aria-label',BridgeI18n.t('侧边聊天消息'));
@@ -130,7 +138,7 @@ class SideChatPanel {
   async request(body){
     if(this.disposed)throw Error('此侧边聊天已关闭或已失效，请刷新标签');
     if(this.session.provider!=='deepseek'||!body||['catalog','skills'].includes(body.action))return this.workbench.request(this.url(),body);
-    const key=JSON.stringify(body);this.mutations??=new Map();if(!this.mutations.has(key))this.mutations.set(key,uuid());
+    const key=JSON.stringify(body);this.mutations??=new Map();if(!this.mutations.has(key))this.mutations.set(key,body.operationId||uuid());
     const value=await this.workbench.request(this.url(),{...body,operationId:this.mutations.get(key)});
     if(value.status==='unknown')throw Error(value.message||'结果待核对，请检查桌面原会话');
     this.mutations.delete(key);return value;
@@ -147,6 +155,11 @@ class SideChatPanel {
     if(!active&&this.sendMode.value==='steer')this.sendMode.value='send';
     this.workMode.disabled=locked||this.sendMode.value==='steer';
     this.workMode.title=BridgeI18n.t(this.sendMode.value==='steer'?'补充内容沿用当前任务模式':this.workMode.value==='plan'?'先讨论并制定计划，确认后执行。':'');
+    if(this.nativeModes){
+      const caps=this.state?.capabilities||{};this.nativeModes.render(this.state?.id?{...this.state,host:'local',loadingHistory:!this.state.connected,workModesLocked:active,goalRuntimeAvailable:this.state.connected&&caps.goal===true,goalUnavailableReason:'当前 Harness 会话不支持目标模式，请更新接入或检查智能体配置'}:null,this.sendMode.value,locked);
+      this.workMode.disabled=this.workMode.disabled||active;this.workMode.querySelector('[value=plan]').disabled=caps.workModes!==true;this.workMode.querySelector('[value=plan]').title=BridgeI18n.t(caps.workModes===true?'':'当前 Harness 会话不支持计划模式，请更新接入或检查智能体配置');
+      if(caps.workModes!==true&&this.workMode.value==='plan')this.workMode.value='default';
+    }
     this.sendButton.disabled=locked||((active||!!this.state?.requests?.length)&&this.sendMode.value==='send')||(!!this.state?.requests?.length&&this.sendMode.value==='steer')||(!this.input.value.trim()&&!this.fileQuotes.rows.length&&!this.attachments?.ids().length)||!this.attachments?.ready();
     this.createButton.disabled=!!this.busy;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
@@ -213,12 +226,13 @@ class SideChatPanel {
   apply(state){
     if(this.disposed)return;
     if(this.state?.id&&this.state.id!==state.id){this.pending=null;this.creationId=uuid();this.input.value='';this.fileQuotes.clear(this.fileQuotes.key,this.fileQuotes.rows.map(row=>row.id));this.attachments.clear(this.attachments.key,this.attachments.ids());this.attachments.reset();this.references.close();this.modeSelected=false;this.workMode.value='default';}
+    if(this.nativeModes&&state.id!==this.state?.id)this.nativeModes.open(JSON.stringify(['deepseek',this.session.id,this.tab.slot,state.id]));
     this.state=state;this.contextUsage.update(state);
     if(this.workbench.setSideChatTitle(this.session,this.tab,state)&&this.workbench.current===this.session)this.workbench.paint();
     this.updateCaption();
     if(state.id&&this.attachments.key!==state.id)this.attachments.open(state.id);
     if(state.id){this.modelButton.textContent=[state.model,state.effort].filter(Boolean).join(' · ')||BridgeI18n.t('模型与思考程度');delete this.modelButton.dataset.i18n;}
-    if(!this.modeSelected)this.workMode.value=state.collaborationMode==='plan'?'plan':'default';
+    if(!this.nativeModes&&!this.modeSelected)this.workMode.value=state.collaborationMode==='plan'?'plan':'default';
     const permission={'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问'}[state.permissionMode]||'权限';this.permissionsButton.textContent=BridgeI18n.t(permission);this.permissionsButton.dataset.i18n=permission;
     this.tab.body.classList.toggle('has-side-chat',!!state.id);
     if(this.pending&&state.submissions?.some(s=>s.id===this.pending.submissionId&&['accepted','queued'].includes(s.status))){
@@ -304,7 +318,7 @@ class SideChatPanel {
     let text;try{text=this.fileQuotes.validate();}catch(error){this.status.textContent=error.message;this.controls();return;}
     this.readRevision=(this.readRevision||0)+1;
     this.pendingDraft={raw:this.input.value,quotes:this.fileQuotes.rows.map(row=>row.id)};
-    this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),mode:this.sendMode.value,workMode:this.sendMode.value==='steer'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.controls();this.status.textContent=BridgeI18n.t('正在发送…');
+    this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),mode:this.sendMode.value,workMode:this.sendMode.value==='steer'||this.nativeModes&&this.state.status==='active'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.controls();this.status.textContent=BridgeI18n.t('正在发送…');
     try{const result=await this.request({action:'send',id:this.state.id,...this.pending});if(this.disposed)return;
       if(['accepted','queued'].includes(result.status)){this.attachments.clear(this.state.id,attachmentIds);this.completeSubmission();this.pending=null;this.references.close();this.resizeInput();await this.load();}
       else this.status.textContent=BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。');
@@ -312,10 +326,11 @@ class SideChatPanel {
     finally{this.busy=false;this.controls();}
   }
   completeSubmission(){
+    if(this.nativeModes)this.nativeModes.submitted(this.nativeModes.key,this.pending.workMode);
     if(this.input.value===(this.pendingDraft?.raw??this.pending.text))this.input.value='';
     this.fileQuotes.clear(this.fileQuotes.key,this.pendingDraft?.quotes||[]);this.pendingDraft=null;
   }
-  async action(action,fields={}){if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);}finally{this.busy=false;this.controls();}}
+  async action(action,fields={},rethrow=false){if(this.busy)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);if(rethrow)throw e;}finally{this.busy=false;this.controls();}}
   async end(){
     if(this.busy)return false;if(!this.state?.id)return true;
     if(!confirm(BridgeI18n.t(this.session.provider==='deepseek'?'结束此侧边聊天？正在运行的回复会停止，Harness 分叉记录会归档。':'结束此侧边聊天？正在运行的回复会停止，临时内容将清除，所有设备都无法继续此聊天。')))return false;

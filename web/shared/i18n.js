@@ -2,6 +2,10 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"目标轮次":"Goal rounds",
+"目标等待恢复":"Goal awaiting resume",
+"当前 Harness 会话不支持目标模式，请更新接入或检查智能体配置":"This Harness session does not support Goal mode. Update the connector or check the agent configuration.",
+"当前 Harness 会话不支持计划模式，请更新接入或检查智能体配置":"This Harness session does not support Plan mode. Update the connector or check the agent configuration.",
 "生成简短名称":"Generate a short name",
 "根据首条消息生成简短名称，会使用当前模型接入的额度。":"Generate a short name from the first message using this chat's model access allowance.",
 "名称生成已排队…":"Name generation queued…",
