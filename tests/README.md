@@ -74,7 +74,7 @@ npm run test:updater
 
 宿主与宽窄布局变更可先运行 `node --test tests/host-environment.test.cjs tests/layouts.test.cjs tests/frontend-assets.test.cjs mobile/tests/resources.test.cjs`。这些检查覆盖宿主识别与晚注入、容器分屏边界、样式顺序和原生资源清单，不启动或编译手机 App。布局的真实渲染和窗口变化后状态保留仍需浏览器夹具验证。
 
-工作台标签滑动运行 `node scripts/test-workbench-swipe-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度检查 Codex/Harness 的输入区及工具页滑动、Git 变更／历史／分支内容区的内部切换与边界、Git 标题栏的外层切换、文件目录和预览、真实 PTY 与命令终端界面、草稿保留、原生输入优先和防误发送，并检查分屏中的 Git 内外层切换。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；终端使用合成 API，不连接真实客户端或启动进程。
+工作台标签滑动运行 `node scripts/test-workbench-swipe-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度检查 Codex/Harness 的聊天整页及工具页滑动、正文和问题卡片选区保护、Git 变更／历史／分支内部切换与边界、Git 标题栏的外层切换、文件目录和预览、真实 PTY 与命令终端界面、草稿及问题答案保留、原生输入优先和防误发送，并检查分屏中的 Git 内外层切换。另通过真实 Animation 对象和标签点击验证全部工作台标签及 Git 内部标签的淡入、完成清理、连续切换取消和减少动态效果设置。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；终端使用合成 API，不连接真实客户端或启动进程。
 
 侧边聊天直接创建运行 `node scripts/test-side-chat-create-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度实际点击“＋ → 侧边聊天”和“选区操作 → 新建侧边聊天”，检查 Codex/Harness 自动创建后可直接发送、选区完整保留且不自动发送、主聊天草稿保留、多标签独立、刷新恢复只读，以及创建失败、显式重试与回执丢失时不自动重发。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不启动真实客户端或模型。`node --test tests/workbench-side-chats.test.cjs tests/selection-targets.test.cjs` 另覆盖初始读取与创建回包的竞态、同一标签防止重复创建，以及取消、失效或超长选区不创建聊天。
 

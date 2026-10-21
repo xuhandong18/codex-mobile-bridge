@@ -47,9 +47,9 @@ window.runWorkbenchSwipeEdgeChecks=()=>{
   const dialog=document.createElement('dialog');document.body.append(dialog);dialog.showModal();swipe(input);
   check('弹窗打开时不切换',session.active==='chat');dialog.close();dialog.remove();
   swipe(wb.mainPane.querySelector('.timeline'));
-  check('主聊天消息区域不切换',session.active==='chat');
+  check('主聊天消息区域左滑切换到侧边聊天',session.active===session.files[0].id);
   const side=session.files.find(tab=>tab.sideChat);wb.select(side.id);swipe(side.sideChat.messages);
-  check('侧边聊天消息区域不切换',session.active===side.id);
+  check('侧边聊天消息区域左滑切换到下一标签',session.active===session.files[session.files.indexOf(side)+1].id);
   reset();start(input);wb.select('git');end(input);
   check('手势期间换标签后不再切换',session.active==='git');
   reset();start(input);const previous=wb.current;wb.current={...session,files:[]};end(input);
@@ -93,4 +93,51 @@ window.runWorkbenchSwipeEdgeChecks=()=>{
   check('切换保留主会话草稿',input.value==='主会话草稿');
   check('切换保留所有侧边草稿',session.files.filter(tab=>tab.sideChat).every(tab=>tab.sideChat.input.value==='保留草稿 '+tab.id));
   scroll.remove();editor.remove();reset();return checks;
+};
+
+window.runWorkbenchChatAreaChecks=()=>{
+  const wb=swipeWorkbench,session=wb.current,checks=[],first=session.files.find(tab=>tab.sideChat),next=session.files[session.files.indexOf(first)+1];
+  const check=(ok,label)=>{if(!ok)throw Error(label);checks.push(label);};
+  const swipe=(target,direction=-1)=>{
+    const point=x=>new Touch({identifier:1,target,clientX:x,clientY:100});
+    target.dispatchEvent(new TouchEvent('touchstart',{bubbles:true,cancelable:true,touches:[point(180)],changedTouches:[point(180)]}));
+    target.dispatchEvent(new TouchEvent('touchmove',{bubbles:true,cancelable:true,touches:[point(180+direction*100)],changedTouches:[point(180+direction*100)]}));
+    target.dispatchEvent(new TouchEvent('touchend',{bubbles:true,cancelable:true,touches:[],changedTouches:[point(180+direction*100)]}));
+  };
+  const card=()=>{const root=wb.node('section','approval'),label=wb.node('label','','可以引用和滑动的问题文字'),input=wb.node('textarea');label.dataset.answerKey='synthetic-question';input.value='保留问题回答';label.append(input);root.append(label);return {root,label,input};};
+  const mainQuestion=card(),sideQuestion=card(),mainMessage=wb.node('div','message-body','主聊天消息正文'),sideMessage=wb.node('div','message-body','侧边聊天消息正文');
+  wb.mainPane.append(mainQuestion.root,mainMessage);first.sideChat.approvals.append(sideQuestion.root);first.sideChat.messages.append(sideMessage);
+  const clear=()=>{getSelection().removeAllRanges();document.activeElement?.blur();};
+  for(const source of [wb.mainPane,wb.chat.querySelector('.chat-head'),mainMessage,mainQuestion.label,mainQuestion.input]){
+    clear();wb.select('chat');swipe(source);check(session.active===first.id,'主聊天正文、问题和空白区域都可左滑切换');
+  }
+  for(const source of [first.body,first.sideChat.head,first.sideChat.messages,sideMessage,sideQuestion.label,sideQuestion.input,first.sideChat.queued]){
+    clear();wb.select(first.id);swipe(source);check(session.active===next.id,'侧边聊天正文、问题、头部和空白区域都可左滑切换');
+    wb.select(first.id);swipe(source,1);check(session.active==='chat','侧边聊天所有区域也可右滑返回主聊天');
+  }
+  for(const [id,root,input] of [['chat',wb.mainPane,mainQuestion.input],[first.id,first.body,sideQuestion.input]]){
+    clear();wb.select(id);input.focus();input.setSelectionRange(0,3);swipe(input);check(session.active===id,'问题回答有选区时保留原生编辑');
+    clear();const code=wb.node('pre','','x'.repeat(400));code.style.cssText='overflow-x:auto;max-width:100%;white-space:pre';root.append(code);swipe(code);
+    check(session.active===id&&code.scrollWidth>code.clientWidth,'聊天中的横向代码滚动仍保留原操作');code.remove();
+  }
+  check(mainQuestion.input.value==='保留问题回答'&&sideQuestion.input.value==='保留问题回答','全区域滑动不改动问题答案');
+  clear();for(const node of [mainQuestion.root,sideQuestion.root,mainMessage,sideMessage])node.remove();wb.select('chat');return checks;
+};
+
+window.runWorkbenchTransitionChecks=async(reduced=false)=>{
+  const wb=swipeWorkbench,session=wb.current,checks=[],check=(ok,label)=>{if(!ok)throw Error(label);checks.push(label);};
+  const animationFor=target=>target.getAnimations().find(animation=>animation.effect.target===target&&animation.effect.getTiming().duration===180);
+  for(const id of [...session.files.map(tab=>tab.id),'chat']){
+    if(session.active===id)continue;
+    wb.select(id);const target=id==='chat'?wb.mainPane:session.files.find(tab=>tab.id===id).body,animation=animationFor(target);
+    check(reduced?!animation:!!animation,(reduced?'减少动态效果时直接切换：':'每种工作台标签切换都有动画：')+id);
+    if(animation){const frames=animation.effect.getKeyframes();check(Number(frames[0].opacity)<1&&Number(frames.at(-1).opacity)===1,'真实淡入动画从半透明过渡到不透明');await animation.finished;check(getComputedStyle(target).opacity==='1','动画完成后没有残留样式');}
+  }
+  if(!reduced){
+    const one=session.files[0],two=session.files[1];wb.select(one.id);const previous=animationFor(one.body);wb.select(two.id);
+    check(previous.playState==='idle'&&session.active===two.id,'快速连续切换取消旧动画并立即进入最后标签');
+  }
+  const git=session.files.find(tab=>tab.id==='git').git;wb.select('git');
+  for(const mode of ['history','branches','changes']){await git.selectMode(mode);const animation=animationFor(git.content);check(reduced?!animation:!!animation,(reduced?'减少动态效果时关闭 Git 动画：':'Git 内部标签也有切换动画：')+mode);if(animation)await animation.finished;}
+  wb.select('chat');return checks;
 };

@@ -52,23 +52,22 @@ class Workbench {
     const eligible=tab=>tab&&(['chat','git','agents','files','terminal'].includes(tab.id)||tab.id.startsWith('file:')||!!tab.sideChat);
     const source=target=>{
       const session=this.current;if(!session||document.querySelector('dialog[open]'))return null;
-      const composer=target.closest('.composer');
-      if(composer&&this.mainPane.contains(composer)&&!this.isFileVisible)return {session,id:'chat',root:composer};
-      const tab=session.files.find(tab=>tab.id===(this.splitMode?session.splitTab:session.active));
-      if(!eligible(tab)||!tab.body.contains(target))return null;
-      if(tab.terminal?.term?.hasSelection())return null;
-      if(tab.sideChat)return composer===tab.sideChat.form?{session,id:tab.id,root:composer}:null;
+      const main=(this.mainPane.contains(target)||this.chat.querySelector('.chat-head')?.contains(target))&&!this.isFileVisible;
+      const tab=main?null:session.files.find(tab=>tab.id===(this.splitMode?session.splitTab:session.active));
+      if(!main&&(!eligible(tab)||!tab.body.contains(target)||tab.terminal?.term?.hasSelection()))return null;
+      const root=main?this.mainPane:tab.body,chat=main||!!tab.sideChat,composer=target.closest('.composer');
       // Tool pages own their content; native editing, resizing and horizontal scrolling keep priority.
-      if(target.closest('input,textarea,select,[contenteditable="true"],.wb-float-grip,.wb-float-resize'))return null;
-      for(let node=target;node&&node!==tab.body;node=node.parentElement){
+      if(target.closest('input[type="range"],[contenteditable="true"],.wb-float-grip,.wb-float-resize')||!chat&&target.closest('input,textarea,select'))return null;
+      for(let node=target;node&&node!==root&&node!==this.chat&&!composer;node=node.parentElement){
         if(node.scrollWidth>node.clientWidth+1&&['auto','scroll'].includes(getComputedStyle(node).overflowX))return null;
       }
+      if(chat)return {session,id:main?'chat':tab.id,root};
       const git=tab.git&&(tab.git.content?.contains(target)||target.closest('.wb-float'))?tab.git:null;
       return {session,id:tab.id,root:tab.body,git,mode:git?.mode};
     };
     const selecting=root=>{
-      const input=root.querySelector('textarea');
-      return !!window.getSelection()?.toString()||!!(input&&document.activeElement===input&&input.selectionStart!==input.selectionEnd);
+      const input=document.activeElement;
+      return !!window.getSelection()?.toString()||!!(root.contains(input)&&input.matches('input,textarea')&&typeof input.selectionStart==='number'&&input.selectionStart!==input.selectionEnd);
     };
     const valid=start=>{
       const current=source(start.target);
@@ -77,13 +76,13 @@ class Workbench {
         start.root.isConnected&&start.session.active===start.active&&start.session.splitTab===start.splitTab&&
         Date.now()-start.time<600&&!selecting(start.root);
     };
-    this.layout.addEventListener('touchstart',event=>{
+    this.chat.addEventListener('touchstart',event=>{
       const origin=source(event.target),touch=event.touches[0];
       gesture=origin&&event.touches.length===1&&!selecting(origin.root)
         ?{...origin,target:event.target,touch:touch.identifier,x:touch.clientX,y:touch.clientY,time:Date.now(),
           active:origin.session.active,splitTab:origin.session.splitTab}:null;
     },{passive:true});
-    this.layout.addEventListener('touchmove',event=>{
+    this.chat.addEventListener('touchmove',event=>{
       if(!gesture)return;
       const touch=[...event.touches].find(touch=>touch.identifier===gesture.touch);
       if(event.touches.length!==1||!touch||!valid(gesture)){gesture=null;return;}
@@ -91,7 +90,7 @@ class Workbench {
       if(Math.abs(dy)>10&&Math.abs(dy)>=Math.abs(dx)){gesture=null;return;}
       if(Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)*1.5&&event.cancelable)event.preventDefault();
     },{passive:false});
-    this.layout.addEventListener('touchend',event=>{
+    this.chat.addEventListener('touchend',event=>{
       const start=gesture;gesture=null;
       if(!start||event.touches.length||!valid(start))return;
       const touch=[...event.changedTouches].find(touch=>touch.identifier===start.touch);if(!touch)return;
@@ -104,8 +103,8 @@ class Workbench {
       const next=tabs[index+(dx<0?1:-1)];
       if(eligible(next))this.select(next.id);
     },{passive:false});
-    this.layout.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
-    this.layout.addEventListener('click',event=>{
+    this.chat.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
+    this.chat.addEventListener('click',event=>{
       if(Date.now()<suppressUntil){event.preventDefault();event.stopImmediatePropagation();}
     },true);
   }
@@ -202,6 +201,7 @@ class Workbench {
     } catch (error) { if (!signal.aborted) icon.dataset.thumbnailFailed = 'true'; }
   }
   open(id, host) {
+    this.tabAnimation?.cancel();
     this.fileSelection?.close();
     this.closeReferences();
     this.rememberScroll();
@@ -218,7 +218,7 @@ class Workbench {
     this.fileSelection?.close();this.fileQuotes.close();
     if (this.previewFullscreen && (!provider || this.previewFullscreen.session.provider === provider)) this.closePreviewFullscreen();
     const visible=!provider||this.current?.provider===provider;
-    if(visible){this.stopThumbnails();this.uploadController?.abort();clearTimeout(this.sideChatTimer);}
+    if(visible){this.tabAnimation?.cancel();this.stopThumbnails();this.uploadController?.abort();clearTimeout(this.sideChatTimer);}
     for(const [key,session] of this.sessions)if(!provider||session.provider===provider){session.sideChatRead?.abort();for(const tab of session.files){tab.controller?.abort();tab.pdf?.dispose();tab.html?.dispose();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
     if(visible){this.current=null;this.chat.classList.remove('workbench-active','wb-split');this.endDrag();this.panel.replaceChildren();this.panel.hidden=true;this.tabs.replaceChildren();}
   }
@@ -233,6 +233,7 @@ class Workbench {
   rememberScroll() { const timeline=this.chat.querySelector('.timeline');if (this.current && !this.chat.classList.contains('workbench-active') && timeline.clientHeight) this.current.scroll = timeline.scrollTop; }
   select(id) {
     if (!this.current) return;
+    const previous=this.current.active;
     this.fileSelection?.close();
     this.closeReferences();
     if (this.previewFullscreen && this.previewFullscreen.tab.id !== id) {
@@ -241,7 +242,16 @@ class Workbench {
       else this.closePreviewFullscreen();
     }
     this.rememberScroll(); this.current.active = id; if(this.current.splitTab&&id!=='chat')this.current.splitTab=id; this.paint();
+    if(previous!==id)this.animateTabSwitch(id==='chat'?this.mainPane:this.current.files.find(tab=>tab.id===id)?.body);
     if (id === 'chat') { const session = this.current; requestAnimationFrame(() => { if (session === this.current && session.active === 'chat') this.chat.querySelector('.timeline').scrollTop = session.scroll; }); }
+  }
+  animateTabSwitch(target){
+    this.tabAnimation?.cancel();this.tabAnimation=null;
+    if(!target?.isConnected||!target.animate||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+    // Opacity keeps fixed message navigation and native editors in place.
+    const animation=this.tabAnimation=target.animate([{opacity:.4},{opacity:1}],{duration:180,easing:'ease-out'});
+    const clear=()=>{if(this.tabAnimation===animation)this.tabAnimation=null;};
+    animation.addEventListener('finish',clear,{once:true});animation.addEventListener('cancel',clear,{once:true});
   }
   paint() {
     const session = this.current; if (!session) return;

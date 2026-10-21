@@ -77,6 +77,13 @@ const server=http.createServer(async(req,res)=>{
         await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
       };
       const main=provider==='codex'?'#composer':'.ds-composer';
+      const timeline=provider==='codex'?'#timeline':'.ds-messages';
+      for(const area of ['.wb-side-messages','.wb-side-head','.wb-side-content>.wb-status']){
+        await select('chat');await swipe(timeline,-100);check(await active()===tabs.first,'主聊天消息区左滑');
+        await swipe(area,100);check(await active()==='chat','侧边聊天 '+area+' 右滑返回');
+      }
+      await swipe(provider==='codex'?'#chat>.chat-head':'.ds-conversation>.chat-head',-100);check(await active()===tabs.first,'主聊天头部左滑同样切换标签');
+      await swipe('.wb-side-head',100);check(await active()==='chat','侧边聊天头部右滑返回主聊天');
       for(const area of ['.composer-tools','textarea','.compose-bottom']){
         await select('chat');await swipe(main+' '+area,-100);check(await active()===tabs.first,'输入区 '+area+' 左滑');
         await swipe('.wb-side-composer textarea',100);check(await active()==='chat','侧边输入框右滑返回');
@@ -110,6 +117,13 @@ const server=http.createServer(async(req,res)=>{
       await select(tabs.fourth);
       await swipe('.wb-side-composer textarea',-100);check(await active()===tabs.fourth,'右边界不循环');
       checks.push(...await page.evaluate(()=>runWorkbenchSwipeEdgeChecks()));
+      checks.push(...await page.evaluate(()=>runWorkbenchChatAreaChecks()));
+      checks.push(...await page.evaluate(()=>runWorkbenchTransitionChecks()));
+      await page.emulateMedia({reducedMotion:'reduce'});
+      checks.push(...await page.evaluate(()=>runWorkbenchTransitionChecks(true)));
+      await page.emulateMedia({reducedMotion:'no-preference'});
+      await page.locator('.wb-tab[data-tab="'+tabs.first+'"] [role=tab]').tap();
+      check(await active()===tabs.first&&await page.evaluate(()=>swipeWorkbench.current.files.find(tab=>tab.id===swipeWorkbench.current.active).body.getAnimations().some(animation=>animation.effect.getTiming().duration===180)),'直接点击标签同样播放切换动画');
       if(await page.evaluate(()=>swipeWorkbench.canSplit())){
         await page.evaluate(tab=>{swipeWorkbench.split(tab);swipeWorkbench.setRatio(.55);},tabs.first);
         await swipe(main+' textarea',-100);check(await active()===tabs.first,'分屏主输入区按自身标签切换');

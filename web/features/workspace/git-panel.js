@@ -8,9 +8,10 @@ class GitPanel {
     this.button = (...args) => workbench.button(...args);
   }
   dispose() { this.floating?.destroy(); this.floating = null; this.tab.controller?.abort(); this.diffController?.abort(); this.historyDiffController?.abort(); }
-  selectMode(mode) {
+  async selectMode(mode) {
     if (this.busy || this.mode === mode) return;
-    this.mode = mode; this.load();
+    this.mode = mode; const loading=this.load(),controller=this.tab.controller;await loading;
+    if(!controller.signal.aborted&&this.mode===mode&&this.workbench.isVisible?.(this.session,this.tab))this.workbench.animateTabSwitch?.(this.content);
   }
   swipeMode(direction) {
     const index = GitPanel.modes.findIndex(([key]) => key === this.mode), next = GitPanel.modes[index + direction];

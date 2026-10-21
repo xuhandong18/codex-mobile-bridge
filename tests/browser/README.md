@@ -1,6 +1,6 @@
 # 浏览器检查
 
-`workbench-swipe.browser.js` 由 `node scripts/test-workbench-swipe-browser.cjs` 执行。使用生产页面、隔离合成 API 和 Chromium 触屏输入，在手机竖屏、横屏、平板和电脑宽度检查主聊天／侧边输入区与 Git／子智能体／文件目录和预览／终端整页的相邻标签切换、首尾不循环、草稿保留和长按；终端实际使用生产 PTY 与命令终端界面组件，服务端完全模拟。另执行 DOM 边界断言，覆盖多指、取消、纵向滚动、文件和终端选字、弹窗、切换期间旧手势、横向滚动和横滑后点击拦截。检查 Codex 与 Harness 两套共享工作台，统计聊天发送、终端输入和 Git 写请求，确保滑动无误操作。需要已有 Playwright/Chromium，可通过 `NODE_PATH` 和 `BROWSER_EXECUTABLE` 指定运行时，不连接真实客户端，也不启动终端进程。
+`workbench-swipe.browser.js` 由 `node scripts/test-workbench-swipe-browser.cjs` 执行。使用生产页面、隔离合成 API 和 Chromium 触屏输入，在手机竖屏、横屏、平板和电脑宽度检查主聊天／侧边聊天的消息区、头部、输入区与 Git／子智能体／文件目录和预览／终端整页的相邻标签切换、首尾不循环、草稿保留和长按；终端实际使用生产 PTY 与命令终端界面组件，服务端完全模拟。另执行 `runWorkbenchChatAreaChecks()`，覆盖正文、问题卡片、问题回答和空白区域的双向滑动、答案保留与选区保护；`runWorkbenchTransitionChecks()` 读取真实 Animation 对象，检查每种工作台标签和 Git 内部标签的淡入、结束样式清理、快速切换及减少动态效果设置，驱动也实际点击标签验证动画。DOM 边界断言继续覆盖多指、取消、纵向滚动、文件和终端选字、弹窗、切换期间旧手势、横向滚动和横滑后点击拦截。检查 Codex 与 Harness 两套共享工作台，统计聊天发送、终端输入和 Git 写请求，确保滑动无误操作。需要已有 Playwright/Chromium，可通过 `NODE_PATH` 和 `BROWSER_EXECUTABLE` 指定运行时，不连接真实客户端，也不启动终端进程。
 
 `message-navigation.browser.js` 由 `node scripts/test-message-navigation-browser.cjs` 执行。使用生产 `ChatTimeline`、CSS 和合成只读 API，在手机、平板与电脑尺寸验证 5000 条完整目录、虚拟滚动、单次触屏定位最早/中间消息、纯附件、双向正文分页、历史阅读与实时更新隔离、连续点击与已加载消息抢占、切换后的旧回包，以及目录/窗口网络失败与重试。驱动还逐一执行本目录原时间线的三个检查函数；不能只加载脚本就报告通过。
 
