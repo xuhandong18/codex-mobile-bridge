@@ -8,7 +8,7 @@ class SideChatPanel {
     if(message.role!=='assistant'||message.phase==='commentary')return document.documentElement.dataset.showProcess!=='false';
     return true;
   }
-  applyVisibility(){for(const {node,message} of this.messageNodes||[])node.hidden=!SideChatPanel.messageVisible(message);}
+  applyVisibility(){for(const {node,message} of this.messageNodes||[])node.hidden=!SideChatPanel.messageVisible(message);this.messageMap?.update();}
   constructor(workbench, session, tab) {
     Object.assign(this, {workbench, session, tab});this.creationId=uuid();
     const n=(...args)=>workbench.node(...args),b=(...args)=>workbench.button(...args);
@@ -28,6 +28,7 @@ class SideChatPanel {
     this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t(session.provider==='deepseek'?'可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。':'可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
     this.status=n('p','wb-status');this.status.setAttribute('role','status');
     this.messages=n('div','wb-side-messages');this.messages.setAttribute('data-i18n-aria-label','侧边聊天消息');this.messages.setAttribute('aria-label',BridgeI18n.t('侧边聊天消息'));
+    this.latestButton=b('返回最新内容 ↓',()=>this.jumpBottom());this.latestButton.className='plain wb-side-latest';this.latestButton.hidden=true;
     this.approvals=n('div','wb-side-approvals');this.queued=n('div','wb-side-queue');
     this.form=n('form','composer wb-side-composer');this.form.hidden=true;
     this.input=n('textarea');this.input.rows=1;this.input.maxLength=20000;this.input.setAttribute('data-i18n-placeholder','继续这条聊天…');this.input.placeholder=BridgeI18n.t('继续这条聊天…');this.input.setAttribute('data-i18n-aria-label','侧边聊天输入');this.input.setAttribute('aria-label',BridgeI18n.t('侧边聊天输入'));
@@ -70,12 +71,27 @@ class SideChatPanel {
     }
     this.form.onsubmit=e=>{e.preventDefault();this.send();};
     this.input.oninput=()=>{this.resizeInput();this.controls();};
-    tab.body.append(this.head,this.landing,this.status,this.messages,this.approvals,this.queued,this.form);
+    tab.body.append(this.head,this.landing,this.status,this.messages,this.latestButton,this.approvals,this.queued,this.form);
+    this.following=true;this.lastMessageTop=0;
+    this.messages.onscroll=()=>{const top=this.messages.scrollTop;if(top===this.lastMessageTop)return;this.following=top>this.lastMessageTop&&this.messages.scrollHeight-this.messages.clientHeight-top<60;this.latestButton.hidden=this.following;this.lastMessageTop=this.messages.scrollTop;};
+    this.messageMap=new ChatMessageMap({viewport:this.messages,directoryRows:()=>this.navigationRows(),navigateMessage:entry=>this.navigateMessage(entry)});
     this.visibilityObserver=new MutationObserver(()=>this.applyVisibility());
     this.visibilityObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-show-reasoning','data-show-process']});
     this.controls();this.load();this.schedule();
   }
   resizeInput(){this.input.style.height='auto';this.input.style.height=Math.min(160,Math.max(48,this.input.scrollHeight))+'px';}
+  navigationRows(){return (this.messageNodes||[]).filter(({message})=>message.role==='user'&&!message.isUserContext).map(({key,message},order)=>({rowKey:key,order,summary:messageSummary(message)}));}
+  readingAnchor(){
+    const top=this.messages.getBoundingClientRect().top,row=this.messageNodes?.find(({node})=>!node.hidden&&node.getBoundingClientRect().bottom>top);
+    return row?{key:row.key,offset:row.node.getBoundingClientRect().top-top}:null;
+  }
+  navigateMessage(entry){
+    if(this.disposed||!this.workbench.isVisible(this.session,this.tab))return;
+    const row=this.messageNodes?.find(({key,message,node})=>key===entry.rowKey&&!node.hidden&&messageSummary(message)===entry.summary);if(!row)return;
+    this.following=false;this.latestButton.hidden=false;this.messages.scrollTop+=row.node.getBoundingClientRect().top-this.messages.getBoundingClientRect().top-12;
+    this.lastMessageTop=this.messages.scrollTop;this.messageMap.close();
+  }
+  jumpBottom(){this.following=true;this.latestButton.hidden=true;this.messages.scrollTop=this.messages.scrollHeight;this.lastMessageTop=this.messages.scrollTop;}
   updateCaption(){this.caption.textContent=this.tab.customTitle?this.tab.name:BridgeI18n.t(this.tab.name);this.caption.title=this.caption.textContent;}
   rename(){
     if(this.disposed||this.busy)return;
@@ -156,6 +172,7 @@ class SideChatPanel {
   controls(){
     const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
     this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created||!!this.busy;this.head.hidden=false;this.messages.hidden=!created;this.queued.hidden=!created;
+    this.latestButton.hidden=!created||this.following!==false;
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.permissionsButton])button.disabled=locked;
     this.referenceButton.disabled=!!this.busy||!!this.pending||created&&!this.state.connected;
@@ -235,7 +252,8 @@ class SideChatPanel {
   }
   apply(state){
     if(this.disposed)return;
-    if(this.state?.id&&this.state.id!==state.id){this.pending=null;this.creationId=uuid();this.input.value='';this.fileQuotes.clear(this.fileQuotes.key,this.fileQuotes.rows.map(row=>row.id));this.attachments.clear(this.attachments.key,this.attachments.ids());this.attachments.reset();this.references.close();this.modeSelected=false;this.workMode.value='default';}
+    const changedChild=!!this.state?.id&&this.state.id!==state.id;
+    if(changedChild){this.pending=null;this.creationId=uuid();this.input.value='';this.fileQuotes.clear(this.fileQuotes.key,this.fileQuotes.rows.map(row=>row.id));this.attachments.clear(this.attachments.key,this.attachments.ids());this.attachments.reset();this.references.close();this.modeSelected=false;this.workMode.value='default';this.following=true;this.messageMap?.close();}
     if(this.nativeModes&&state.id!==this.state?.id)this.nativeModes.open(JSON.stringify(['deepseek',this.session.id,this.tab.slot,state.id]));
     this.state=state;this.contextUsage.update(state);
     if(this.workbench.setSideChatTitle(this.session,this.tab,state)&&this.workbench.current===this.session)this.workbench.paint();
@@ -251,8 +269,8 @@ class SideChatPanel {
     this.status.textContent=state.id&&!state.connected&&state.error?BridgeI18n.t('侧边聊天已断开，已有记录可继续查看；请新建侧边聊天继续。'):state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):BridgeI18n.t('已连接'));
     const stamp=JSON.stringify([state.id,state.connected,state.turns]);
     if(stamp!==this.stamp){
-      this.stamp=stamp;const scroll=this.messages.scrollTop,follow=this.messages.scrollHeight-this.messages.clientHeight-scroll<60;this.messages.replaceChildren();this.messageNodes=[];
-      for(const turn of state.turns||[]){for(const message of turn.messages||[]){
+      this.stamp=stamp;const scroll=this.messages.scrollTop,follow=changedChild||this.following!==false&&this.messages.scrollHeight-this.messages.clientHeight-scroll<60,anchor=follow?null:this.readingAnchor();this.messages.replaceChildren();this.messageNodes=[];
+      for(const [turnIndex,turn] of (state.turns||[]).entries()){for(const [messageIndex,message] of (turn.messages||[]).entries()){
         const card=this.workbench.node('article','wb-side-message '+message.role);
         if(message.role==='user'||message.role==='assistant'){
           card.append(this.workbench.node('small','',message.role==='user'?BridgeI18n.t('你'):this.session.provider==='deepseek'?'DeepSeek':'Codex'));
@@ -264,10 +282,14 @@ class SideChatPanel {
         }else{
           const details=this.workbench.node('details');details.append(this.workbench.node('summary','',message.title||message.kind||BridgeI18n.t('工具活动')),this.workbench.node('pre','',message.output||message.text||''));card.append(details);
         }
-        card.hidden=!SideChatPanel.messageVisible(message);this.messageNodes.push({node:card,message});this.messages.append(card);
+        const key=JSON.stringify([state.id,turn.turnId||turn.id||turnIndex,message.id||messageIndex]);
+        card.hidden=!SideChatPanel.messageVisible(message);this.messageNodes.push({node:card,message,key});this.messages.append(card);
       }if(turn.error)this.messages.append(this.workbench.node('p','error',BridgeI18n.t('本次回复未完成，请检查模型接入。')));}
       if(!this.messages.children.length)this.messages.append(this.workbench.node('p','wb-empty',state.connected?BridgeI18n.t('上下文已准备好，开始单独讨论。'):BridgeI18n.t('新建后即可在这里提问。')));
       this.messages.scrollTop=follow?this.messages.scrollHeight:scroll;
+      const target=anchor&&this.messageNodes.find(row=>row.key===anchor.key);
+      if(target)this.messages.scrollTop+=target.node.getBoundingClientRect().top-this.messages.getBoundingClientRect().top-anchor.offset;
+      this.following=follow;this.lastMessageTop=this.messages.scrollTop;this.messageMap?.update();
     }
     this.renderApprovals(state.requests||[]);this.renderQueue(state.submissions||[]);this.controls();
   }
@@ -350,5 +372,5 @@ class SideChatPanel {
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }
-  dispose(){this.visibilityObserver?.disconnect();this.contextUsage.dispose();this.disposed=true;this.renameDialog?.close();this.selectionAction.dispose();this.selectionMenu.menu?.close();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
+  dispose(){this.visibilityObserver?.disconnect();this.messageMap?.dispose();this.messages.onscroll=null;this.contextUsage.dispose();this.disposed=true;this.renameDialog?.close();this.selectionAction.dispose();this.selectionMenu.menu?.close();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
 }

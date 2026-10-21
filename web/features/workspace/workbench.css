@@ -162,4 +162,5 @@
 .wb-side-model{flex:0 1 auto;min-width:0;max-width:55%!important;color:var(--text)!important}.wb-side-composer .composer-tools{align-items:center;gap:8px}.wb-side-composer .tool-button:not(.wb-side-model){flex-shrink:0}
 .wb-side-queue{flex:none;max-height:25%;overflow:auto;margin:0 14px}.wb-side-queue:empty{display:none}
 .wb-side-landing~.wb-status:empty{display:none}.wb-side-content:not(.has-side-chat)>.wb-status{margin:0 24px 24px;text-align:center}
-.wb-side-messages{overflow-anchor:none}
+.wb-side-messages{overflow-anchor:none;padding-right:40px}
+.wb-side-latest{flex:none;align-self:center;min-height:40px;margin:4px 14px;padding:8px 14px}

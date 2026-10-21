@@ -136,7 +136,11 @@ const server=http.createServer(async(req,res)=>{
       check(await page.evaluate(()=>creationPanel().input.value==='> 选区中的第一行\n> 选区中的第二行\n\n'),'直接创建后完整保留选中的多行文字');
       check(await page.evaluate(()=>creationWorkbench.fileQuotes.input.value==='保留主聊天草稿'),'选区操作保留主聊天草稿');
       check(writes.filter(write=>write.body.action==='send').length===beforeSend,'选区新建不会自动发送文字');
-      results.push({width,height,provider,passed:checks.length});await context.close();
+      results.push({width,height,provider,passed:checks.length});
+      await page.addScriptTag({path:path.join(root,'tests/browser/side-message-navigation.browser.js')});
+      const navigationWrites=writes.length,navigationChecks=await page.evaluate(provider=>runSideMessageNavigationBrowserTests(provider),provider);
+      assert.ok(navigationChecks.length>0);assert.ok(!writes.slice(navigationWrites).some(write=>['create','send','respond'].includes(write.body.action)),'侧边历史导航不创建聊天或发送消息');
+      results.push({width,height,provider,fixture:'side-message-navigation',passed:navigationChecks.length+1});await context.close();
       if(provider==='codex'){
         states.clear();writes.length=0;
         const quoteContext=await browser.newContext({viewport:{width,height}}),quotePage=await quoteContext.newPage();

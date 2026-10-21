@@ -48,6 +48,8 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 
 `selection-targets.browser.js` 的 `runSelectionTargetsBrowserTests()` 由 `node scripts/test-side-chat-create-browser.cjs` 在独立合成网关执行，验证文件、主聊天和侧边聊天选区的目标选择、新侧边聊天直接创建并保留引用草稿、独立槽位与发送隔离；网关夹具须按 `slot` 分开保存侧边状态。不要在真实会话运行该发送夹具。
 
+`side-message-navigation.browser.js` 的 `runSideMessageNavigationBrowserTests(provider)` 由同一驱动在四种尺寸分别验证 Codex/Harness 侧边聊天的缩略导航，实际断言弹窗位置、摘要跳转、阅读锚点、恢复跟随、附件及重复发言、160 条目录虚拟渲染、分屏与多标签隔离、聊天标识替换及关闭清理。导航夹具不发起聊天创建、发送或问题回复请求。
+
 `question-selection.browser.js` 的 `runQuestionSelectionBrowserTests(provider)` 由同一驱动在手机竖横屏、平板和电脑尺寸分别执行，验证 Codex/Harness 真实问题卡片的题目、选项说明和已填写回答片段能够自动启用“选区操作”，引用到主聊天、已有或新建侧边聊天，并检查桌面右键、原生凭证消费、草稿保留、视图隔离、移除或修改后凭证失效。驱动核对没有聊天发送或问题回复请求；原生选区通过 DOM 和输入框偏移模拟，不能代替 Android/iOS 设备上的原生手柄实测。
 
 `selection-popup.browser.js` 的 `runUnifiedSelectionPopupBrowserTests(gesture)` 使用各自隔离的合成侧边会话，检查主消息、侧边消息、文件三处主动引用后直接出现同一个目标框，并比较完整弹框 DOM。电脑通过右键触发，手机/平板通过显式按钮触发，触屏长按保留原生菜单；同时检查提醒设置入口已移至聊天详情。
