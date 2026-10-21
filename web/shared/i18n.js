@@ -60,6 +60,7 @@ const en={
 "标记为未读":"Mark as unread",
 "未读":"Unread",
 "我的消息导航":"My message navigation",
+"其他主聊天":"Other main chat",
 "正在整理消息目录…":"Preparing the message index…",
 "目录加载失败，点击重试":"Message index failed to load. Click to retry",
 "查看后续内容":"View later messages",

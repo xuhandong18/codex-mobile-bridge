@@ -92,6 +92,11 @@ def _context(record, context):
                              'effort': payload.get('effort') or settings.get('reasoning_effort')}
 
 
+def _message_candidate(item):
+    return (item['type'] in ('userMessage', 'steeringUserMessage')
+            or item['type'] == 'function_call_output' and not item.get('call_id') and not item.get('callId'))
+
+
 def _anchor(thread_id, revision, offset, raw):
     return _digest(json.dumps([thread_id, revision, offset, _digest(raw)], separators=(',', ':')).encode())[:40]
 
@@ -126,18 +131,20 @@ def scan_rollout(path, thread_id, previous=None, summarize=None):
             if item is not None:
                 if count % CHECKPOINT_EVERY == 0:
                     points.append({'offset': begin, 'item': count, **context})
-                if item['type'] in ('userMessage', 'steeringUserMessage'):
-                    row = summarize(item) if summarize else {}
+                user_item = item['type'] in ('userMessage', 'steeringUserMessage')
+                row = summarize(item) if summarize and _message_candidate(item) else {}
+                if user_item or row.get('kind') == 'threadMessage':
                     text = row.get('text') or ''
                     content = item.get('content', item.get('input', []))
                     attachments = row.get('attachments') or (content if isinstance(content, list) else [])
                     names = [str(x.get('name') or x.get('path') or x.get('type') or '').replace('\\', '/').rsplit('/', 1)[-1]
                              for x in attachments if isinstance(x, dict)]
                     summary = ' '.join(text.split())[:100] or '、'.join(n for n in names if n)[:100] or '消息'
-                    base = _digest(json.dumps([context['turnId'], item['id'], item['type']], ensure_ascii=False, separators=(',', ':')).encode())[:24]
+                    kind = row.get('kind', item['type'])
+                    base = _digest(json.dumps([context['turnId'], item['id'], kind], ensure_ascii=False, separators=(',', ':')).encode())[:24]
                     entries.append({'id': _anchor(thread_id, revision, begin, raw), 'turnId': context['turnId'],
                                     'rowKey': base+'-0', 'summary': summary, 'requestId': row.get('requestId'),
-                                    'messageId': item['id'], 'kind': item['type'], 'isUserContext': row.get('isUserContext', False),
+                                    'messageId': item['id'], 'kind': kind, 'isUserContext': row.get('isUserContext', False),
                                     'offset': begin, 'digest': _digest(raw), 'item': count})
                     context['user'] += 1
                 context['itemId'] += 1
@@ -175,7 +182,7 @@ def read_window(path, thread_id, point, start, limit):
                     current = {'turnId': context['turnId'], 'status': 'completed', 'actionable': False,
                                'params': context['params'], 'items': []}
                     turns.append(current)
-                if item['type'] in ('userMessage', 'steeringUserMessage'):
+                if _message_candidate(item):
                     item['navigationId'] = _anchor(thread_id, checkpoint['revision'], begin, raw)
                 item['navigationPosition'] = count
                 current['items'].append(item)

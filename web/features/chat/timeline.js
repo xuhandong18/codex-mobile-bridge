@@ -310,6 +310,7 @@ class ChatTimeline {
   }
   rowHeading(row){
     if(row.role==='activity')return (row.title||row.kind)+(row.status==='inProgress'?timelineText(' · 进行中'):'');
+    if(row.kind==='threadMessage')return timelineText('其他主聊天');
     return row.role==='user'?timelineText('你'):row.role==='error'?timelineText('执行错误'):['CODEX',row.model&&[row.model,row.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
   }
   renderRow(row,open){

@@ -78,6 +78,29 @@ const server=http.createServer((req,res)=>{
       check(await page.evaluate(()=>[...document.querySelectorAll('#messages>.timeline-row')].filter(n=>!n.hidden).map(n=>n.dataset.key).join(',')==='q0,answer'),
         '显示设置和文案刷新后仍只显示正常消息 '+width);
       await page.evaluate(()=>{
+        setupCompactMessageNavigationFixture({count:0,contexts:true,mainChats:true});
+        const t=navigationFixture.timeline;
+        t.onAction=()=>{};t.refreshActions();
+        t.messageIndex.set('index:main-chat',{id:'index:main-chat',rowKey:'saved:main-chat',turnId:'turn',summary:'请核对主聊天发来的验收要求。',order:0});
+        t.setVisibility({showReasoning:false,showProcess:false});t.messageMap.update();
+      });
+      check(await page.evaluate(()=>{
+        const t=navigationFixture.timeline,node=t.nodes.get('main-chat').node;
+        return !node.hidden&&node.querySelector('.who').textContent==='其他主聊天'&&node.textContent.includes('请核对主聊天发来的验收要求。')
+          &&!node.querySelector('[data-message-action]')&&t.nodes.get('context2').node.hidden;
+      }),'主聊天来信显示来源标签和正文且不能编辑，子代理通知仍隐藏 '+width);
+      await activate('.chat-message-map-rail button:first-child');
+      check(await page.evaluate(()=>navigationFixture.timeline.messageMap.entries.length===1&&document.querySelector('.chat-message-map-list button').textContent==='1. 请核对主聊天发来的验收要求。'),
+        '导航同时合并保存目录与实时来信，只显示主聊天之间的消息 '+width);
+      await activate('.chat-message-map-list button[data-key="index:main-chat"]');
+      check(await page.evaluate(()=>navigationFixture.requests.length===0&&!navigationFixture.timeline.following),'主聊天来信摘要可以直接定位已加载正文 '+width);
+      await page.evaluate(()=>{const f=navigationFixture;f.timeline.apply({...f.page,rows:f.rows.filter(r=>r.role==='assistant')},true);});
+      await activate('.chat-message-map-rail button:first-child');
+      await activate('.chat-message-map-list button[data-key="index:main-chat"]');
+      await page.waitForFunction(()=>navigationFixture.timeline.navigationMode&&navigationFixture.timeline.nodes.has('main-chat'));
+      check(await page.evaluate(()=>!navigationFixture.timeline.nodes.get('main-chat').node.hidden&&navigationFixture.timeline.nodes.get('context2').node.hidden),
+        '从导航载入历史窗口后主聊天来信可见，子代理通知仍隐藏 '+width);
+      await page.evaluate(()=>{
         setupCompactMessageNavigationFixture({count:2,userSuffix:'\n'});
         const t=navigationFixture.timeline;
         for(let i=0;i<2;i++)t.messageIndex.set('index:q'+i,{id:'index:q'+i,rowKey:'saved:q'+i,turnId:'turn',summary:'Question '+i,order:i});

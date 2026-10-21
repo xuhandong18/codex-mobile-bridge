@@ -1,5 +1,5 @@
 // Synthetic API, production ChatTimeline and real browser layout. No native client.
-function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix='',image=false}={}) {
+function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix='',image=false,mainChats=false}={}) {
   window.navigationFixture?.timeline.dispose();
   document.getElementById('messages').replaceChildren();
   const contextTexts=[
@@ -12,12 +12,14 @@ function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix
     text:text.slice(0,8000),truncated:text.length>8000})):[]),
     ...Array.from({length:count},(_,i)=>({key:'q'+i,role:'user',kind:'userMessage',text:'Question '+i+userSuffix,editable:true,
       ...(image?{attachments:[{type:'image',name:'screen.jpg',desktopId:'a'.repeat(64)}]}:{})})),
+    ...(mainChats?[{key:'main-chat',role:'user',kind:'threadMessage',text:'请核对主聊天发来的验收要求。',editable:false,
+      sourceThreadId:'22222222-2222-4222-8222-222222222222'}]:[]),
     {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Answer'}
   ].map((row,order)=>({...row,order,turnId:'turn',version:'v1'}));
   const page={epoch:'compact',sequence:1,rows,files:[],hasMore:false,before:null,meta:{requests:[],latestUserTurnId:'turn'}};
   const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?host=local',request:async url=>{
     const u=new URL(url,location.origin),action=u.pathname.split('/').pop();requests.push(action);
-    if(action==='timeline'&&u.searchParams.has('around'))return {...page,epoch:'history',sequence:2,navigationWindow:true,targetKey:'q0'};
+    if(action==='timeline'&&u.searchParams.has('around'))return {...page,epoch:'history',sequence:2,navigationWindow:true,targetKey:mainChats?'main-chat':'q0'};
     throw Error('Unexpected fixture request: '+url);
   },renderMeta:()=>{},renderText:(node,text)=>{rendered.push(text);node.textContent=text;},status:()=>{}});
   timeline.apply(page,true);

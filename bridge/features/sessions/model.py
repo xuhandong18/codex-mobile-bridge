@@ -137,11 +137,34 @@ def embedded_image_id(value):
     return None
 
 
+def incoming_thread_message(item):
+    """Recognize the app's incoming main-chat envelope, never a tool's reply."""
+    if (item.get('type') not in ('function_call_output', 'functionCallOutput')
+            or item.get('namespace') != 'codex_app'
+            or item.get('name') not in ('create_thread', 'send_message_to_thread')
+            or item.get('call_id') or item.get('callId')):
+        return None
+    output = item.get('output')
+    if isinstance(output, dict):
+        output = output.get('text')
+    if not isinstance(output, str):
+        return None
+    identifier = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
+    match = re.fullmatch(r'\s*<codex_delegation>\s*<source_thread_id>(' + identifier
+                         + r')</source_thread_id>\s*<input>(.*)</input>\s*</codex_delegation>\s*', output, re.S)
+    if match:
+        return {'kind': 'threadMessage', 'role': 'user', 'text': match[2], 'sourceThreadId': match[1]}
+    return None
+
+
 def normalize_item(item):
     kind = item.get("type", "unknown")
     row = {"id": item.get("id"), "kind": kind, "status": item.get("status")}
     row.update({key: item[key] for key in ('navigationId', 'navigationPosition') if key in item})
-    if kind in ("userMessage", "steeringUserMessage"):
+    incoming = incoming_thread_message(item)
+    if incoming:
+        row.update(incoming)
+    elif kind in ("userMessage", "steeringUserMessage"):
         if kind == "steeringUserMessage":
             item = {**item, "content": item.get("input", [])}
         submission_request_id = request_id(item)

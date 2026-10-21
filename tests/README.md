@@ -37,6 +37,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 ## Node 与浏览器
 
+主聊天之间的来信运行 `python -B scripts/test-backend.py --source-only -p test_cross_thread_messages.py`，检查实时/保存记录、目录定位、增量去重、来源标记、禁止编辑来信、子代理通知过滤和独立 SSH 源码执行。`node scripts/test-message-navigation-browser.cjs` 同时在手机、平板和电脑宽度检查来信正文与导航可见、来源标签、历史跳转以及子代理通知仍然隐藏。
+
 ```sh
 npm run test:desktop
 npm run test:updater
