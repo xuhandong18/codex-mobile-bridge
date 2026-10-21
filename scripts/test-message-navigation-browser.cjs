@@ -34,11 +34,18 @@ const server=http.createServer((req,res)=>{
         await page.evaluate(count=>setupCompactMessageNavigationFixture({count}),count);
         await activate('.chat-message-map-rail button:first-child');
         check(await page.locator('.chat-message-map-panel').isVisible(),'仅 '+count+' 条发言也能一次点击打开导航弹窗 '+width);
+        const panel=await page.locator('.chat-message-map-panel').boundingBox(),area=await page.locator('#timeline').boundingBox();
+        check(Math.abs(panel.y+panel.height/2-area.y-area.height/2)<2,'少量消息弹窗位于聊天区右侧居中 '+count+' 条 '+width);
         check(await page.evaluate(()=>navigationFixture.timeline.following),'打开导航不会直接跳转正文 '+width);
         await activate('.chat-message-map-list button[data-key="loaded:q0"]');
         check(await page.evaluate(()=>!navigationFixture.timeline.following&&!navigationFixture.timeline.messageMap.root.classList.contains('is-open')),'选择摘要才跳转并关闭导航 '+width);
       }
       await activate('.chat-message-map-rail button:first-child');
+      await page.setViewportSize({width,height:360});
+      await page.waitForFunction(()=>{const p=document.querySelector('.chat-message-map-panel').getBoundingClientRect(),v=document.querySelector('#timeline').getBoundingClientRect();return Math.abs(p.top+p.height/2-v.top-v.height/2)<2;});
+      const smallPanel=await page.locator('.chat-message-map-panel').boundingBox(),smallArea=await page.locator('#timeline').boundingBox(),rail=await page.locator('.chat-message-map-rail').boundingBox();
+      check(smallPanel.y>=smallArea.y&&smallPanel.y+smallPanel.height<=smallArea.y+smallArea.height&&smallPanel.x+smallPanel.width<rail.x,'缩小窗口后弹窗仍居中、可滚动且不遮挡横线 '+width);
+      await page.setViewportSize({width,height:760});
       await activate('#composer');
       check(!await page.locator('.chat-message-map-panel').isVisible(),'点击外部收起导航弹窗 '+width);
       await page.locator('.chat-message-map-rail button:first-child').focus();
@@ -70,6 +77,17 @@ const server=http.createServer((req,res)=>{
       await page.evaluate(()=>{const t=navigationFixture.timeline;t.setVisibility({showReasoning:false,showProcess:false});t.setVisibility({showReasoning:true,showProcess:true});t.relabel();});
       check(await page.evaluate(()=>[...document.querySelectorAll('#messages>.timeline-row')].filter(n=>!n.hidden).map(n=>n.dataset.key).join(',')==='q0,answer'),
         '显示设置和文案刷新后仍只显示正常消息 '+width);
+      await page.evaluate(()=>{
+        setupCompactMessageNavigationFixture({count:2,userSuffix:'\n'});
+        const t=navigationFixture.timeline;
+        for(let i=0;i<2;i++)t.messageIndex.set('index:q'+i,{id:'index:q'+i,rowKey:'saved:q'+i,turnId:'turn',summary:'Question '+i,order:i});
+        t.messageMap.update();
+      });
+      check(await page.evaluate(()=>navigationFixture.timeline.messageMap.entries.length===2&&navigationFixture.timeline.messageMap.entries.every((e,i)=>e.loadedKey==='q'+i)),
+        '真实消息末尾换行且历史和实时标识不同时不重复列入目录 '+width);
+      await activate('.chat-message-map-rail button:first-child');
+      await activate('.chat-message-map-list button[data-key="index:q1"]');
+      check(await page.evaluate(()=>navigationFixture.requests.length===0&&!navigationFixture.timeline.following&&!navigationFixture.timeline.messageMap.root.classList.contains('is-open')),'去重后的目录直接定位已加载发言，无需重读历史 '+width);
       const first=await page.evaluate(()=>setupMessageNavigationFixture());
       check(first.firstRows===20&&first.indexBusy&&first.entryVisible,'工具记录首屏保留目录入口和整理状态 '+width);
       await page.waitForFunction(()=>navigationFixture.timeline.messageIndex.size===5000&&!navigationFixture.timeline.indexBusy);
@@ -113,6 +131,8 @@ const server=http.createServer((req,res)=>{
       await page.evaluate(()=>{navigationFixture.timeline.messageMap.root.classList.add('is-open');navigationFixture.timeline.messageMap.paint(navigationFixture.timeline.messageMap.list,44);});
       const bounds=await page.locator('.chat-message-map-panel').boundingBox(),composer=await page.locator('#composer').boundingBox();
       check(bounds.x>=0&&bounds.x+bounds.width<=width+1&&bounds.y+bounds.height<=composer.y+1,'展开目录适配聊天区域和输入框 '+width);
+      const chatArea=await page.locator('#timeline').boundingBox();
+      check(Math.abs(bounds.y+bounds.height/2-chatArea.y-chatArea.height/2)<2,'长目录弹窗也位于聊天区右侧居中 '+width);
       const count=await page.evaluate(()=>navigationFixture.requests.filter(r=>r.params.around).length);
       await page.evaluate(()=>navigationFixture.timeline.navigateMessage(navigationFixture.timeline.directoryRows().find(e=>e.id==='u2500')));
       check(await page.evaluate(()=>navigationFixture.requests.filter(r=>r.params.around).length)===count,'已加载消息直接定位无需再读正文 '+width);

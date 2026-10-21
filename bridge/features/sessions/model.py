@@ -104,7 +104,9 @@ def is_user_context(text):
     if text.startswith('# AGENTS.md instructions for '):
         _, separator, body = text.partition('\n')
         return bool(separator and re.fullmatch(r'\s*<INSTRUCTIONS>.*?</INSTRUCTIONS>(?:\s*' + environment + r')?\s*', body, re.S))
-    envelope = r'(?:<user_instructions>.*?</user_instructions>|<skill>.*?</skill>|<subagent_notification>.*?</subagent_notification>|' + environment + r')'
+    envelope = (r'(?:<user_instructions>.*?</user_instructions>|<skill>.*?</skill>|'
+                r'<subagent_notification>.*?</subagent_notification>|'
+                r'<external_codex_apps_open_page>.*?</external_codex_apps_open_page>|' + environment + r')')
     return bool(re.fullmatch(envelope + r'(?:\s*' + envelope + r')*', text, re.S))
 
 

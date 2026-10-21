@@ -6,8 +6,9 @@
 .chat-message-map button{display:flex;align-items:center;gap:10px;flex:0 0 7px;min-height:7px;width:100%;padding:2px 3px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer;border-radius:5px}
 .chat-message-map i{display:block;width:12px;height:2px;flex:none;border-radius:2px;background:currentColor;opacity:.42}
 .chat-message-map-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
-.chat-message-map-panel{display:none;position:fixed;right:var(--map-right,4px);bottom:var(--map-bottom,8px);width:var(--map-width,280px);padding:8px;border-radius:10px;background:var(--panel,#f7f7f2);box-shadow:0 3px 20px #0002}
-.chat-message-map.is-open .chat-message-map-panel{display:block}
+.chat-message-map-panel{display:none;position:fixed;right:calc(var(--map-right,4px) + 26px);top:var(--map-top,50%);transform:translateY(-50%);width:var(--map-width,280px);max-height:var(--map-panel-height,calc(100vh - 16px));overflow:hidden;padding:8px;border-radius:10px;background:var(--panel,#f7f7f2);box-shadow:0 3px 20px #0002}
+.chat-message-map.is-open .chat-message-map-panel{display:flex;flex-direction:column}
+.chat-message-map-panel .chat-message-map-list{min-height:0}
 .chat-message-map-panel .chat-message-map-list button{flex-basis:44px;min-height:44px;padding:8px}
 .chat-message-map-panel .chat-message-map-earlier{display:block;min-height:44px;justify-content:center;font-size:12px;padding:10px}
 .chat-message-map-panel .chat-message-map-earlier[hidden]{display:none}

@@ -58,6 +58,7 @@ class MessageIndexTests(unittest.TestCase):
             '# AGENTS.md instructions for /work\n<INSTRUCTIONS>Rules</INSTRUCTIONS>',
             '<skill><name>fixture</name><path>/work/SKILL.md</path>Instructions</skill>',
             '<subagent_notification>{"agent_id":"fixture","status":{"completed":"Done"}}</subagent_notification>',
+            '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>',
         ]
         self.write({'type':'event_msg','payload':{'type':'task_started','turn_id':'turn'}})
         for text in contexts + ['Actual request']:
@@ -68,7 +69,7 @@ class MessageIndexTests(unittest.TestCase):
         for entry in directory['items']:
             window = self.nav.window(self.thread, around=entry['id'], limit=20)
             timeline = Timeline();timeline.update({**normalize_state(window['state']), 'sequence': 1})
-            self.assertEqual([row['editable'] for row in timeline.rows], [False, False, False, True])
+            self.assertEqual([row['editable'] for row in timeline.rows], [False] * len(contexts) + [True])
             target = next(row for row in timeline.rows if row.get('navigationId') == entry['id'])
             self.assertEqual(target.get('isUserContext', False), entry.get('isUserContext', False))
         self.write({'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':contexts[-1]}]}})

@@ -1,5 +1,5 @@
 // Synthetic API, production ChatTimeline and real browser layout. No native client.
-function setupCompactMessageNavigationFixture({count=1,contexts=false}={}) {
+function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix=''}={}) {
   window.navigationFixture?.timeline.dispose();
   document.getElementById('messages').replaceChildren();
   const contextTexts=[
@@ -10,7 +10,7 @@ function setupCompactMessageNavigationFixture({count=1,contexts=false}={}) {
   ],requests=[],rendered=[];
   const rows=[...(contexts?contextTexts.map((text,i)=>({key:'context'+i,role:'user',kind:'userMessage',isUserContext:true,
     text:text.slice(0,8000),truncated:text.length>8000})):[]),
-    ...Array.from({length:count},(_,i)=>({key:'q'+i,role:'user',kind:'userMessage',text:'Question '+i,editable:true})),
+    ...Array.from({length:count},(_,i)=>({key:'q'+i,role:'user',kind:'userMessage',text:'Question '+i+userSuffix,editable:true})),
     {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Answer'}
   ].map((row,order)=>({...row,order,turnId:'turn',version:'v1'}));
   const page={epoch:'compact',sequence:1,rows,files:[],hasMore:false,before:null,meta:{requests:[],latestUserTurnId:'turn'}};

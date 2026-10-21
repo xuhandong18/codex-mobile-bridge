@@ -1,6 +1,6 @@
 'use strict';
 const timelineText=source=>typeof BridgeI18n==='undefined'?source:BridgeI18n.t(source);
-const messageSummary=row=>(row.text||row.attachments?.map(item=>(item.name||item.path||item.type||'').replace(/\\/g,'/').split('/').pop()).join('、')||timelineText('消息')).replace(/\s+/g,' ').slice(0,100);
+const messageSummary=row=>(row.text||row.attachments?.map(item=>(item.name||item.path||item.type||'').replace(/\\/g,'/').split('/').pop()).join('、')||timelineText('消息')).replace(/\s+/g,' ').trim().slice(0,100);
 
 // The navigation directory is independent of the bounded body reading window.
 class ChatMessageMap {
@@ -24,8 +24,9 @@ class ChatMessageMap {
       this.root.hidden=!this.entries?.length&&!timeline.indexBusy&&!timeline.indexError&&!timeline.hasMore;
       this.root.style.top=(rect.top+rect.height/2)+'px';this.root.style.right=Math.max(0,window.innerWidth-rect.right+4)+'px';
       this.root.style.setProperty('--map-right',Math.max(0,window.innerWidth-rect.right+4)+'px');
-      this.root.style.setProperty('--map-bottom',Math.max(8,window.innerHeight-rect.bottom+8)+'px');
-      this.root.style.setProperty('--map-width',Math.max(22,Math.min(280,rect.width-24))+'px');
+      this.root.style.setProperty('--map-top',(rect.top+rect.height/2)+'px');
+      this.root.style.setProperty('--map-panel-height',Math.max(44,rect.height-16)+'px');
+      this.root.style.setProperty('--map-width',Math.max(22,Math.min(280,rect.width-46))+'px');
       this.root.style.setProperty('--map-height',Math.max(44,Math.min(320,rect.height-80))+'px');
       if(!rect.width||!rect.height)this.root.hidden=true;
     };

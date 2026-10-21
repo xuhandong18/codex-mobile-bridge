@@ -21,6 +21,7 @@ class TimelineTests(unittest.TestCase):
             '<environment_context><cwd>/work</cwd></environment_context>',
             '<skill>\n<name>fixture</name>\n<path>/work/SKILL.md</path>\nInstructions\n</skill>',
             '<subagent_notification>\n{"agent_id":"fixture","status":{"completed":"Done"}}\n</subagent_notification>',
+            '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>',
         ]
         for context in contexts:
             with self.subTest(context=context):
@@ -31,7 +32,7 @@ class TimelineTests(unittest.TestCase):
                 ]}]}
                 timeline = Timeline();timeline.update({**normalize_state(state), 'sequence': 1})
                 self.assertEqual([r['editable'] for r in timeline.rows], [False, True, False])
-                self.assertTrue(timeline.rows[0].get('isUserContext'), '上下文标记必须传到页面供默认折叠')
+                self.assertTrue(timeline.rows[0].get('isUserContext'), '上下文标记必须传到页面供统一过滤')
                 self.assertEqual(timeline.meta['latestUserTurnId'], 'first')
 
     def test_context_only_tail_does_not_change_the_latest_editable_turn(self):
@@ -50,6 +51,7 @@ class TimelineTests(unittest.TestCase):
             '```xml\n<skill>Instructions</skill>\n```',
             '<skill>Instructions</skill>\nPlease change this skill',
             '<subagent_notification>Done</subagent_notification>\nExplain this result',
+            '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>\nExplain this command',
             '# AGENTS.md instructions for /work\n<INSTRUCTIONS>Rules</INSTRUCTIONS>\nMy question',
         ]
         for text in requests:
