@@ -4,8 +4,10 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'),web=path.join(root,'web'),assets=require('../web/assets.json');
 const id='11111111-1111-4111-8111-111111111111';
-const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',status:'idle',access:{source:'cli',canSend:true,canUseSideChat:true}};
-const states=new Map(),writes=[],errors=[];let mode='success',serial=0,createGate=null;
+const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',status:'idle',access:{source:'cli',canSend:true,canApprove:true,canUseSideChat:true}};
+const states=new Map(),writes=[],errors=[];let mode='success',serial=0,createGate=null,questionFixture=false;
+const questions=[{id:'choice',question:'希望先解释哪个处理方案？',options:[{label:'先解释',description:'说明各个步骤'},{label:'直接处理',description:'执行已确认的方案'}]},{id:'free',question:'需要进一步说明的细节是什么？'}];
+const questionRequests=()=>questionFixture?[{id:'fixture-question',supported:true,method:'item/tool/requestUserInput',params:{questions},needsInput:true,tool:'AskUserQuestion',input:{questions}}]:[];
 const server=http.createServer(async(req,res)=>{
   try{
     const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -31,7 +33,7 @@ const server=http.createServer(async(req,res)=>{
           return json({status:'accepted'});
         }
         const slots=[...states].filter(([k])=>k.startsWith(provider+'|')).map(([k,v])=>({slot:k.slice(provider.length+1),id:v.id}));
-        return json({...state||{id:null,connected:false,turns:[],requests:[]},slots});
+        return json({...state||{id:null,connected:false,turns:[]},requests:questionRequests(),slots});
       }
       if(p==='/api/auth')return json({authenticated:true,csrf:'fixture',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'}});
       if(p==='/api/clients')return json({clients:['codex','deepseek'].map(id=>({id,name:id,enabled:true,connected:true,configured:true,installed:true,running:true}))});
@@ -41,11 +43,11 @@ const server=http.createServer(async(req,res)=>{
       if(p.endsWith('/workspace'))return json({root:'/fixture',entries:[]});
       if(p.endsWith('/timeline')||p.endsWith('/updates')){
         if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,100));
-        return json({epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{...row,connected:true,requests:[],turns:[],queue:[]}});
+        return json({epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{...row,connected:true,requests:questionRequests(),turns:[],queue:[]}});
       }
       if(p.startsWith('/api/desktop-sessions/')){
         if(p.endsWith('/list'))return json({connected:true,sessions:[row]});
-        if(p.endsWith('/detail'))return json({connected:true,session:row,capabilities:{send:true,sideChat:true},messages:[]});
+        if(p.endsWith('/detail'))return json({connected:true,session:{...row,requests:questionRequests()},capabilities:{send:true,sideChat:true},messages:[]});
       }
       return json({});
     }
@@ -145,6 +147,18 @@ const server=http.createServer(async(req,res)=>{
         assert.ok(quoteChecks.length>0);assert.equal(createWrites().length,3,'主聊天和文件选区各自只创建对应的新聊天');
         results.push({width,height,provider,fixture:'selection-targets',passed:quoteChecks.length+1});await quoteContext.close();
       }
+      states.clear();writes.length=0;questionFixture=true;
+      const questionContext=await browser.newContext({viewport:{width,height},hasTouch:width!==1440}),questionPage=await questionContext.newPage();
+      questionPage.on('pageerror',error=>errors.push(error.message));
+      await questionPage.goto('http://127.0.0.1:'+server.address().port+'/#'+id+'~local');await questionPage.waitForFunction(()=>state?.connected);
+      if(provider==='deepseek'){
+        await questionPage.evaluate(hash=>BridgeNavigation.openChat(hash),'#'+id+'~desktop%3Adeepseek');
+        await questionPage.waitForFunction(()=>desktopSessions.provider==='deepseek'&&desktopSessions.freshDetail);
+      }
+      await questionPage.addScriptTag({path:path.join(root,'tests/browser/question-selection.browser.js')});
+      const questionChecks=await questionPage.evaluate(provider=>runQuestionSelectionBrowserTests(provider),provider);
+      assert.ok(questionChecks.length>0);assert.ok(!writes.some(write=>['send','respond'].includes(write.body.action)||/\/(send|respond)$/.test(write.p)),'选区引用不发送消息或提交问题答案');
+      results.push({width,height,provider,fixture:'question-selection',passed:questionChecks.length+1});await questionContext.close();questionFixture=false;
     }
     assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:results.reduce((sum,result)=>sum+result.passed,0),results},null,2));
   }finally{await browser?.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

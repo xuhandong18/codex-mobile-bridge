@@ -94,4 +94,4 @@ Android 通知点击回归为 `python -B scripts/test-android-notification-navig
 
 `scripts/gateway-resources.json` 与源路径测试保证清单一致，但冻结导入、签名、安装和更新必须在获准打包后、目标系统上另外验证。不要根据 macOS 单机测试宣称 Windows/Linux 已实机通过。
 
-交互问题草稿的后端验证为 `python -B scripts/test-backend.py --source-only -p test_answer_drafts.py`，浏览器验证为 `node scripts/test-answer-drafts-browser.cjs`。后者使用独立手机/平板上下文、真实 DOM 和合成草稿服务，检查页面重建、跨设备恢复、并发冲突及断线核对；需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定测试运行时。详见 [答案草稿说明](../docs/answer-drafts.md)。
+交互问题草稿的后端验证为 `python -B scripts/test-backend.py --source-only -p test_answer_drafts.py`，浏览器验证为 `node scripts/test-answer-drafts-browser.cjs`。后者使用独立手机/平板上下文、真实 DOM 和合成草稿服务，检查页面重建、跨设备恢复、并发冲突及断线核对；需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定测试运行时。问题工具选区另由 `node scripts/test-side-chat-create-browser.cjs` 实际执行 `question-selection.browser.js`，覆盖 Codex/Harness 主聊天与侧边聊天中的题目、选项和回答片段引用、自动启用入口、桌面右键、原生选区凭证、卡片移除和答案修改后的失效，以及不提交答案或自动发消息。详见 [答案草稿说明](../docs/answer-drafts.md)。

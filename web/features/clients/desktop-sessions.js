@@ -41,8 +41,8 @@ class DesktopSessionsView {
     this.listMenu=new ChatContextMenu(this.rowsRoot,target=>this.harnessActions(target));
     if(typeof SelectedTextAction==='function'){
       this.selectionButton=this.button('选区操作',()=>{});this.selectionButton.className='tool-button';this.tools.insertBefore(this.selectionButton,this.composerToggle);
-      this.selectionAction=new SelectedTextAction(this.messages,{available:()=>this.isChatOpen,context:()=>this.provider+':'+this.sid,trigger:this.selectionButton,canAdd:()=>this.workbench.selectionTargets.available(),canExplain:()=>false,add:text=>this.workbench.selectionTargets.addText(text),openMenu:snapshot=>this.selectionAction.activate('add',snapshot.token)});
-      this.selectionMenu=new ChatContextMenu(this.messages,()=>[],{touch:false,show:()=>{const snapshot=this.selectionAction.captureMenu();return !!snapshot&&this.selectionAction.activate('add',snapshot.token);}});
+      this.selectionAction=new SelectedTextAction(this.workbench.mainPane,{available:()=>this.isChatOpen&&!this.workbench.isFileVisible,context:()=>this.provider+':'+this.sid,trigger:this.selectionButton,canAdd:()=>this.workbench.selectionTargets.available(),canExplain:()=>false,add:text=>this.workbench.selectionTargets.addText(text),openMenu:snapshot=>this.selectionAction.activate('add',snapshot.token)});
+      this.selectionMenu=new ChatContextMenu(this.workbench.mainPane,()=>[],{touch:false,show:()=>{const snapshot=this.selectionAction.captureMenu();return !!snapshot&&this.selectionAction.activate('add',snapshot.token);}});
     }
     if(typeof bindListActions==='function'){
       // Replace the existing action menu's content through its shared provider callback.

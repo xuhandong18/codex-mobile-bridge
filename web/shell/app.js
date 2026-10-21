@@ -819,7 +819,7 @@ async function manageChat(row,action){
   listRows=listRows.filter(chat=>chat.id!==row.id||chat.host!==row.host);listRenderStamp='';renderList();loadList(true).catch(error=>toast(error.message));
   toast(action==='delete'?'聊天已删除':action==='archive'?'聊天已归档':'聊天已取消归档');
 }
-const selectedTextAction=new SelectedTextAction($('messages'),{available:()=>!!currentId&&!$('chat').hidden,context:()=>chatKey(),trigger:$('selection-button'),openMenu:snapshot=>selectedTextAction.activate('add',snapshot.token),canAdd:()=>workbench.selectionTargets.available(),canExplain:()=>false,add:text=>workbench.selectionTargets.addText(text)});
+const selectedTextAction=new SelectedTextAction(workbench.mainPane,{available:()=>!!currentId&&!$('chat').hidden&&!workbench.isFileVisible,context:()=>chatKey(),trigger:$('selection-button'),openMenu:snapshot=>selectedTextAction.activate('add',snapshot.token),canAdd:()=>workbench.selectionTargets.available(),canExplain:()=>false,add:text=>workbench.selectionTargets.addText(text)});
 let nativeSelectionTarget=null;
 window.BridgeSelection=Object.freeze({
   capture:()=>{
@@ -831,7 +831,7 @@ window.BridgeSelection=Object.freeze({
   run:(action,token)=>{const target=nativeSelectionTarget;if(!target||target.id!==token)return false;const consumed=target.action.activate(action,target.token);if(consumed)nativeSelectionTarget=null;return consumed;},
   release:token=>{const target=nativeSelectionTarget;if(target?.id===token){nativeSelectionTarget=null;target.action.releaseNative(target.token);}}
 });
-const messageSelectionMenu=new ChatContextMenu($('messages'),()=>[],{touch:false,show:()=>{const snapshot=selectedTextAction.captureMenu();return !!snapshot&&selectedTextAction.activate('add',snapshot.token);}});
+const messageSelectionMenu=new ChatContextMenu(workbench.mainPane,()=>[],{touch:false,show:()=>{const snapshot=selectedTextAction.captureMenu();return !!snapshot&&selectedTextAction.activate('add',snapshot.token);}});
 $('fork-source').onclick=()=>{const source=state?.forkedFrom;if(source){$('chat-details-dialog').close();openChat(source.id,source.host).catch(e=>toast(e.message));}};
 function saveDraft(){runningSendChoice?.close();composerReferences.close();if(currentId)composerDrafts.set('codex:'+chatKey(),$('message').value);}
 $('message').oninput=saveDraft;

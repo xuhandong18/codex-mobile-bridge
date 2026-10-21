@@ -104,6 +104,7 @@ class SelectedTextAction {
     const schedule=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),160);};
     this.listeners=[];const listen=(target,name,run,options)=>{if(!target)return;target.addEventListener(name,run,options);this.listeners.push([target,name,run,options]);};
     listen(document,'selectionchange',schedule);listen(document,'scroll',schedule,true);
+    listen(root,'select',schedule,true);listen(root,'input',schedule,true);
     listen(window,'resize',schedule);listen(window.visualViewport,'resize',schedule);listen(window.visualViewport,'scroll',schedule);
     listen(document,'pointerdown',event=>{
       if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;
@@ -113,18 +114,27 @@ class SelectedTextAction {
     },{passive:true,capture:true});
   }
   dispose(){clearTimeout(this.timer);for(const [target,name,run,options] of this.listeners)target.removeEventListener(name,run,options);this.bar.remove();}
-  selected(){
-    const selection=window.getSelection();if(!selection?.rangeCount||selection.isCollapsed)return '';
+  selection(){
+    // Native text controls expose offsets separately from DOM Range selections.
+    const input=document.activeElement;
+    if(this.root.contains(input)&&input.matches('textarea,input')&&input.closest('[data-answer-key]')&&typeof input.selectionStart==='number'){
+      const start=input.selectionStart,end=input.selectionEnd,text=input.value.slice(start,end);
+      return text.trim()?{text,input,start,end,inputValue:input.value}:null;
+    }
+    const selection=window.getSelection();if(!selection?.rangeCount||selection.isCollapsed)return null;
     const range=selection.getRangeAt(0),start=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement,end=range.endContainer.nodeType===1?range.endContainer:range.endContainer.parentElement;
-    const body=start?.closest('.message-body, .activity-body');if(!body||!body.contains(end)||!this.root.contains(body))return '';
-    const text=selection.toString();return text.trim()?text:'';
+    const body=start?.closest('.message-body, .activity-body, [data-answer-key]');if(!body||!body.contains(end)||!this.root.contains(body))return null;
+    const text=selection.toString();return text.trim()?{text,range}:null;
   }
+  selected(){return this.selection()?.text||'';}
   capture(){
-    const text=this.available()?this.selected():'';
-    if(!text){this.snapshot=null;return null;}
-    const range=window.getSelection().getRangeAt(0),context=this.context(),old=this.snapshot;
-    if(old&&old.text===text&&old.context===context&&old.range.startContainer===range.startContainer&&old.range.startOffset===range.startOffset&&old.range.endContainer===range.endContainer&&old.range.endOffset===range.endOffset)return old;
-    return this.snapshot={text,context,range:range.cloneRange(),rangeText:range.toString(),token:String(++this.revision)};
+    const selection=this.available()?this.selection():null;
+    if(!selection){this.snapshot=null;return null;}
+    const {text,input,start,end,range,inputValue}=selection,context=this.context(),old=this.snapshot;
+    const same=input?old?.input===input&&old.start===start&&old.end===end&&old.inputValue===inputValue:
+      old?.range&&old.range.startContainer===range.startContainer&&old.range.startOffset===range.startOffset&&old.range.endContainer===range.endContainer&&old.range.endOffset===range.endOffset;
+    if(old&&old.text===text&&old.context===context&&same)return old;
+    return this.snapshot={...selection,context,...range?{range:range.cloneRange(),rangeText:range.toString()}:{},token:String(++this.revision)};
   }
   captureMenu(){return this.menuSnapshot=this.capture();}
   captureNative(){
@@ -134,22 +144,26 @@ class SelectedTextAction {
     return {token:snapshot.token,add:this.canAdd(),explain:this.canExplain()};
   }
   releaseNative(token){if(this.nativeSnapshot?.token!==token)return;this.nativeSnapshot=null;this.nativeActive=false;this.update();}
-  currentSnapshot(snapshot){return !!snapshot&&this.available()&&snapshot.context===this.context()&&this.root.contains(snapshot.range.startContainer)&&this.root.contains(snapshot.range.endContainer)&&snapshot.range.toString()===snapshot.rangeText;}
+  currentSnapshot(snapshot){
+    if(!snapshot||!this.available()||snapshot.context!==this.context())return false;
+    if(snapshot.input)return this.root.contains(snapshot.input)&&!!snapshot.input.closest('[data-answer-key]')&&snapshot.input.value===snapshot.inputValue;
+    return this.root.contains(snapshot.range.startContainer)&&this.root.contains(snapshot.range.endContainer)&&snapshot.range.toString()===snapshot.rangeText;
+  }
   activate(action,token){
     const snapshot=token?[this.nativeSnapshot,this.menuSnapshot,this.snapshot].find(value=>value?.token===token):this.capture();
     if(!this.currentSnapshot(snapshot))return false;
-    const selected=window.getSelection()?.toString();if(selected?.trim()&&selected!==snapshot.text)return false;
+    const selected=this.selected()||window.getSelection()?.toString();if(selected?.trim()&&selected!==snapshot.text)return false;
     if(action!=='add'&&action!=='explain'||action==='add'&&!this.canAdd()||action==='explain'&&!this.canExplain())return false;
     this.snapshot=null;this.nativeSnapshot=null;this.menuSnapshot=null;this.nativeActive=false;this.bar.hidden=true;
     try{(action==='add'?this.add:this.run)(snapshot.text);window.getSelection()?.removeAllRanges();return true;}
     catch(error){document.dispatchEvent(new CustomEvent('bridge-message-error',{detail:error.message}));return false;}
   }
   update(){
-    if(this.nativeSnapshot&&(this.nativeSnapshot.context!==this.context()||!this.root.contains(this.nativeSnapshot.range.startContainer)||!this.root.contains(this.nativeSnapshot.range.endContainer))){this.nativeSnapshot=null;this.nativeActive=false;}
+    if(this.nativeSnapshot&&!this.currentSnapshot(this.nativeSnapshot)){this.nativeSnapshot=null;this.nativeActive=false;}
     const snapshot=this.capture();this.text=snapshot?.text||'';
     if(this.trigger)this.trigger.disabled=!snapshot||!this.canAdd()&&!this.canExplain();
     this.button.hidden=!this.text||!this.canExplain();this.addButton.hidden=!this.text||!this.canAdd();this.bar.hidden=this.touchSelecting||this.nativeActive||this.button.hidden&&this.addButton.hidden;if(this.bar.hidden)return;
-    const rect=window.getSelection().getRangeAt(0).getBoundingClientRect();this.button.textContent=BridgeI18n.t('在侧边聊天中了解更多');
+    const rect=(snapshot.input||snapshot.range).getBoundingClientRect();this.button.textContent=BridgeI18n.t('在侧边聊天中了解更多');
     this.addButton.textContent=BridgeI18n.t('添加到会话');
     const viewport=window.visualViewport,left=viewport?.offsetLeft||0,top=viewport?.offsetTop||0,width=viewport?.width||innerWidth,height=viewport?.height||innerHeight;
     this.bar.style.left=Math.max(left+8,Math.min(rect.left,left+width-this.bar.offsetWidth-8))+'px';this.bar.style.top=Math.max(top+8,Math.min(rect.bottom+8,top+height-this.bar.offsetHeight-8))+'px';
