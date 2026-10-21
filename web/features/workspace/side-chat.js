@@ -16,8 +16,8 @@ class SideChatPanel {
     this.createButton=b(BridgeI18n.t('创建侧边聊天'),()=>this.create());this.createButton.className='primary';
     this.stopButton=b(BridgeI18n.t('■ 停止'),()=>this.action('stop'));this.stopButton.hidden=true;
     this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(await this.end())this.load();});this.endButton.hidden=true;
-    this.newButton=b(BridgeI18n.t('新建侧边聊天'),()=>workbench.sideChat('',true));
-    this.renameButton=b(BridgeI18n.t('重命名侧边聊天'),()=>this.rename());
+    this.newButton=b(BridgeI18n.t('新建'),()=>workbench.sideChat('',true),'新建侧边聊天');
+    this.renameButton=b(BridgeI18n.t('重命名'),()=>this.rename(),'重命名侧边聊天');
     this.modelButton=b(BridgeI18n.t('模型与思考程度'),()=>this.modelSettings());
     this.referenceButton=b('＋',()=>{},'添加引用');this.referenceButton.className='tool-button reference-button';
     this.permissionsButton=b(BridgeI18n.t('权限'),()=>this.permissions());this.permissionsButton.className='tool-button';this.contextUsage=new ContextUsageControl();
