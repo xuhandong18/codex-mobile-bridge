@@ -1811,6 +1811,9 @@ const en={
   "标准": "Standard",
   "宽松": "Relaxed",
   "更改即时生效，仅保存在当前浏览器。": "Changes apply immediately and are saved in this browser only.",
+  "对话内容在连接同一网关的设备间同步，其他外观设置仅保存在当前浏览器。": "Conversation display settings sync across devices connected to this gateway. Other appearance settings are saved in this browser only.",
+  "对话显示设置尚未读取，请稍后重试。": "Conversation display settings have not loaded yet. Please try again shortly.",
+  "对话显示设置已在其他设备修改，请核对后重试。": "Conversation display settings changed on another device. Check the latest settings and try again.",
   "恢复默认设置": "Reset settings",
 
   "配置 Bark 或 ntfy 后，手机锁屏也可接收提醒。": "Set up Bark or ntfy to receive notifications on your lock screen.",

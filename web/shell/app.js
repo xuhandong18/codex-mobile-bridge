@@ -189,6 +189,8 @@ async function enter(authInfo){
     if(/(?:^|[?&])open=harness(?:&|$)/.test(location.search||'')){history.replaceState(null,'','/');await openHarness();}
     const verified=authInfo?.authenticated?authInfo:await api('/api/auth');
     if(!verified.authenticated)throw Error(t('登录状态暂不可用'));
+    window.BridgeChatDisplaySnapshot=verified.chatDisplay;
+    window.BridgePresentation?.acceptDisplay(verified.chatDisplay);
     sidebarData={sections:[],projects:[]};
     listIdentity=await listAuthIdentity(verified);
     composerDrafts.bind(listIdentity);

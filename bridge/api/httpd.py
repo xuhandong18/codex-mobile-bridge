@@ -34,6 +34,7 @@ from bridge.features.updates.mobile import MobileUpdates
 from bridge.clients.codex.ipc import IPCError
 from bridge.features.sessions.goal import GoalError
 from bridge.features.sessions.answer_drafts import AnswerDrafts
+from bridge.features.sessions.chat_display import ChatDisplaySettings
 from bridge.features.sessions.sidebar_preferences import SidebarPreferences
 from bridge.features.sessions.activity import query_activity
 from bridge.clients.codex.catalog import CatalogError
@@ -68,6 +69,7 @@ class GatewayServer(ThreadingHTTPServer):
         if shared is None:
             self.bridge = bridge
             self.answer_drafts = AnswerDrafts(data_dir)
+            self.chat_display = ChatDisplaySettings(data_dir)
             self.sidebar_preferences = SidebarPreferences(data_dir)
             self.notifications = None
             self.harness = Harness(data_dir) if data_dir else None
@@ -87,6 +89,7 @@ class GatewayServer(ThreadingHTTPServer):
             # mutable tunnel origins, with a single notification manager.
             for name in ('bridge', 'answer_drafts', 'sidebar_preferences', 'harness', 'desktop_sessions', 'desktop_uploads', 'notifications', 'instance_id', 'auth', 'origins', 'pairing', 'hosts', 'secure_hosts', 'web_dir', 'slots', 'ui_language_path'):
                 setattr(self, name, getattr(shared, name))
+            self.chat_display = shared.chat_display
         try:
             super().__init__(address, Handler)
         except OSError:
@@ -333,6 +336,7 @@ class Handler(BaseHTTPRequestHandler):
                                          "instanceId": self.server.instance_id, "cookieName": self.server.auth.cookie_name,
                                          **({'listCacheIdentity': hashlib.sha256((self.server.instance_id + '\0' + session['csrf']).encode()).hexdigest()} if session else {}),
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
+                                         **({'chatDisplay': self.server.chat_display.read()} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
                                          "notifications": self.server.notifications is not None,
                                          "passwordless": self.server.auth.config.get("mode") == "none",
@@ -372,6 +376,11 @@ class Handler(BaseHTTPRequestHandler):
                     status, result = self.server.answer_drafts.save(self.read_json())
                     return self.output(status, result)
                 return self.output(200, self.server.answer_drafts.read(query.get('scope', [''])[0]))
+            if path == '/api/chat-display':
+                if write:
+                    status, result = self.server.chat_display.save(self.read_json())
+                    return self.output(status, result)
+                return self.output(200, self.server.chat_display.read())
             if path == '/api/sidebar-preferences':
                 if write:
                     status, result = self.server.sidebar_preferences.save(self.read_json())

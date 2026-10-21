@@ -1,7 +1,9 @@
 'use strict';
 
 class AgentsPanel {
-  constructor(workbench,session,tab){Object.assign(this,{workbench,session,tab});this.node=(...a)=>workbench.node(...a);this.button=(...a)=>workbench.button(...a);this.windowState={};this.load();}
+  constructor(workbench,session,tab){Object.assign(this,{workbench,session,tab});this.node=(...a)=>workbench.node(...a);this.button=(...a)=>workbench.button(...a);this.windowState={};
+    this.visibilityObserver=new MutationObserver(()=>this.applyVisibility());this.visibilityObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-show-reasoning','data-show-process']});this.load();}
+  applyVisibility(){for(const {node,message} of this.messageNodes||[])node.hidden=!SideChatPanel.messageVisible(message);}
   url(id=''){return this.session.provider==='deepseek'?'/api/desktop-sessions/deepseek/subagents?sessionId='+encodeURIComponent(this.session.id)+(id?'&childId='+encodeURIComponent(id):''):'/api/sessions/'+this.session.id+'/subagents?host='+encodeURIComponent(this.session.host)+(id?'&id='+encodeURIComponent(id):'');}
   async load(){
     this.controller?.abort();const controller=this.controller=new AbortController();
@@ -38,7 +40,7 @@ class AgentsPanel {
     try{
       const result=await this.workbench.request(this.url(agent.id),undefined,controller.signal);if(controller.signal.aborted)return;
       const stamp=JSON.stringify(result);if(stamp===this.detailStamp)return;this.detailStamp=stamp;
-      const scroll=this.detail.scrollTop,follow=this.detail.scrollHeight-this.detail.clientHeight-scroll<60;this.detail.replaceChildren();
+      const scroll=this.detail.scrollTop,follow=this.detail.scrollHeight-this.detail.clientHeight-scroll<60;this.detail.replaceChildren();this.messageNodes=[];
       const latest=result.turns.at(-1),labels={inProgress:BridgeI18n.t('最近记录：运行中（非实时确认）'),completed:BridgeI18n.t('最近记录：已完成'),interrupted:BridgeI18n.t('最近记录：已中断'),failed:BridgeI18n.t('最近记录：失败')};
       this.detail.append(this.node('p','wb-status',labels[latest?.status]||BridgeI18n.t('尚无任务状态记录')));
       if(!result.historyComplete)this.detail.append(this.node('p','wb-status',BridgeI18n.t('仅展示最近 10 轮记录。')));
@@ -49,11 +51,11 @@ class AgentsPanel {
         }else{
           const details=this.node('details');details.append(this.node('summary','',message.name||message.kind||BridgeI18n.t('工具记录')),this.node('pre','',message.output||message.text||''));body.append(details);
         }
-        this.detail.append(body);
+        body.hidden=!SideChatPanel.messageVisible(message);this.messageNodes.push({node:body,message});this.detail.append(body);
       }
       if(!result.turns.length)this.detail.append(this.node('p','wb-empty',BridgeI18n.t('任务尚未写入聊天记录。')));
       this.detail.scrollTop=follow?this.detail.scrollHeight:scroll;
     }catch(e){if(!controller.signal.aborted)this.detail.textContent=BridgeI18n.t(e.message);}
   }
-  dispose(){this.disposed=true;clearTimeout(this.timer);this.controller?.abort();this.detailController?.abort();this.window?.destroy();}
+  dispose(){this.visibilityObserver?.disconnect();this.disposed=true;clearTimeout(this.timer);this.controller?.abort();this.detailController?.abort();this.window?.destroy();}
 }

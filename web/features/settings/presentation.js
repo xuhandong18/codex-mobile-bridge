@@ -1,5 +1,5 @@
 'use strict';
-// Appearance is local to this browser; no desktop or account settings are changed.
+// Conversation content is shared by the gateway; other appearance stays local.
 const ChatAppearance=(()=>{
   const defaults={theme:'system',accent:'#4664ed',fontSize:16,codeSize:13,density:'standard',showReasoning:true,showProcess:true,showActivity:true,showComputer:true,showPushplus:true,showAccounts:true,showFileThumbnails:true};
   function normalize(value={}){
@@ -74,6 +74,25 @@ if(typeof document!=='undefined')(()=>{
     document.querySelectorAll('[data-accent]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.accent===settings.accent.toLowerCase())));
   }
   function change(values){preserveReading(()=>{settings=ChatAppearance.normalize({...settings,...values});apply();save();});}
+  const displaySync=new ChatDisplaySync({request:(...args)=>api(...args),legacy:saved,onChange:values=>{
+    if(Object.entries(values).some(([key,value])=>settings[key]!==value))change(values);
+  }});
+  let displayActive=false,displayTimer;
+  async function refreshDisplay(){
+    clearTimeout(displayTimer);if(!displayActive||document.hidden)return;
+    try{await displaySync.refresh();}catch{/* Keep the last confirmed display when offline or on an older gateway. */}
+    finally{if(displayActive&&!document.hidden)displayTimer=setTimeout(refreshDisplay,5000);}
+  }
+  function acceptDisplay(snapshot){displayActive=true;displaySync.accept(snapshot);refreshDisplay();}
+  async function changeDisplay(values){
+    const controls=[get('appearance-reasoning'),get('appearance-process')];controls.forEach(control=>control.disabled=true);
+    try{if(!displaySync.snapshot)await displaySync.refresh();await displaySync.save(values);}
+    catch(error){apply();toast(error.message);}
+    finally{controls.forEach(control=>control.disabled=false);}
+  }
+  document.addEventListener('bridge-authenticated',()=>acceptDisplay(window.BridgeChatDisplaySnapshot));
+  document.addEventListener('bridge-logged-out',()=>{displayActive=false;clearTimeout(displayTimer);displaySync.reset();});
+  document.addEventListener('visibilitychange',refreshDisplay);
   function relabel(){
     const text=BridgeI18n.t(collapsed?'展开输入区':'收起输入区');
     toggle.setAttribute('aria-label',text);toggle.title=text;
@@ -105,17 +124,18 @@ if(typeof document!=='undefined')(()=>{
   get('appearance-font').oninput=()=>change({fontSize:Number(get('appearance-font').value)});
   get('appearance-code').oninput=()=>change({codeSize:Number(get('appearance-code').value)});
   get('appearance-density').onchange=()=>change({density:get('appearance-density').value});
-  get('appearance-reasoning').onchange=()=>change({showReasoning:get('appearance-reasoning').checked});
+  get('appearance-reasoning').onchange=()=>changeDisplay({showReasoning:get('appearance-reasoning').checked});
   get('appearance-computer').onchange=()=>change({showComputer:get('appearance-computer').checked});
   get('appearance-activity').onchange=()=>change({showActivity:get('appearance-activity').checked});
   get('appearance-file-thumbnails').onchange=()=>change({showFileThumbnails:get('appearance-file-thumbnails').checked});
-  get('appearance-process').onchange=()=>change({showProcess:get('appearance-process').checked});
+  get('appearance-process').onchange=()=>changeDisplay({showProcess:get('appearance-process').checked});
   document.querySelectorAll('[data-accent]').forEach(button=>button.onclick=()=>change({accent:button.dataset.accent}));
   get('appearance-pushplus').onchange=()=>change({showPushplus:get('appearance-pushplus').checked});
   get('appearance-accounts').onchange=()=>change({showAccounts:get('appearance-accounts').checked});
-  get('appearance-reset').onclick=()=>change(ChatAppearance.defaults);
+  get('appearance-reset').onclick=()=>{const {showReasoning,showProcess,...appearance}=ChatAppearance.defaults;change(appearance);changeDisplay({showReasoning,showProcess});};
   system.addEventListener('change',()=>{if(settings.theme==='system')preserveReading(apply);});
-  window.BridgePresentation={resizeMessage,relabel,openChat:()=>{setCollapsed(false);requestAnimationFrame(resizeMessage);},showError:()=>setCollapsed(false)};
+  window.BridgePresentation={resizeMessage,relabel,acceptDisplay,openChat:()=>{setCollapsed(false);requestAnimationFrame(resizeMessage);},showError:()=>setCollapsed(false)};
   apply();relabel();resizeMessage();
+  if(!get('app').hidden)acceptDisplay(window.BridgeChatDisplaySnapshot);
   document.body.classList.toggle('chat-detail',!get('app').hidden&&get('app').classList.contains('chat-open'));
 })();
