@@ -21,13 +21,14 @@ class ChatMessageMap {
     this.rail.addEventListener('scroll',()=>this.paint(this.rail,7),{passive:true,signal});
     this.position=()=>{
       const rect=timeline.viewport.getBoundingClientRect();
+      const railHeight=Math.max(0,rect.height-(timeline.railBottomInset||0));
       this.root.hidden=!this.entries?.length&&!timeline.indexBusy&&!timeline.indexError&&!timeline.hasMore;
-      this.root.style.top=(rect.top+rect.height/2)+'px';this.root.style.right=Math.max(0,window.innerWidth-rect.right+4)+'px';
+      this.root.style.top=(rect.top+railHeight/2)+'px';this.root.style.right=Math.max(0,window.innerWidth-rect.right+4)+'px';
       this.root.style.setProperty('--map-right',Math.max(0,window.innerWidth-rect.right+4)+'px');
       this.root.style.setProperty('--map-top',(rect.top+rect.height/2)+'px');
       this.root.style.setProperty('--map-panel-height',Math.max(44,rect.height-16)+'px');
       this.root.style.setProperty('--map-width',Math.max(22,Math.min(280,rect.width-46))+'px');
-      this.root.style.setProperty('--map-height',Math.max(44,Math.min(320,rect.height-80))+'px');
+      this.root.style.setProperty('--map-height',(timeline.railBottomInset?Math.max(7,Math.min(320,railHeight-16)):Math.max(44,Math.min(320,rect.height-80)))+'px');
       if(!rect.width||!rect.height)this.root.hidden=true;
     };
     this.resize=new ResizeObserver(this.position);this.resize.observe(timeline.viewport);window.addEventListener('resize',this.position,{signal});

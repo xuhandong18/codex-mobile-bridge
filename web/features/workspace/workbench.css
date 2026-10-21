@@ -162,4 +162,6 @@
 .wb-side-queue{flex:none;max-height:25%;overflow:auto;margin:0 14px}.wb-side-queue:empty{display:none}
 .wb-side-landing~.wb-status:empty{display:none}.wb-side-content:not(.has-side-chat)>.wb-status{margin:0 24px 24px;text-align:center}
 .wb-side-messages{overflow-anchor:none;padding-right:40px}
-.wb-side-latest{flex:none;align-self:center;min-height:40px;margin:4px 14px;padding:8px 14px}
+.wb-side-message-area{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+.wb-side-message-area>.chat-message-map{height:0}
+.wb-side-latest{position:absolute;right:6px;bottom:8px;display:grid;place-items:center;width:32px;height:32px;min-height:32px;margin:0;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--surface);color:var(--text);font-size:18px;line-height:1;box-shadow:0 2px 6px #00000012}

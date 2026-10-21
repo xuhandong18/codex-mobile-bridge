@@ -28,7 +28,8 @@ class SideChatPanel {
     this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t(session.provider==='deepseek'?'可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。':'可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
     this.status=n('p','wb-status');this.status.setAttribute('role','status');
     this.messages=n('div','wb-side-messages');this.messages.setAttribute('data-i18n-aria-label','侧边聊天消息');this.messages.setAttribute('aria-label',BridgeI18n.t('侧边聊天消息'));
-    this.latestButton=b('返回最新内容 ↓',()=>this.jumpBottom());this.latestButton.className='plain wb-side-latest';this.latestButton.hidden=true;
+    this.latestButton=b('↓',()=>this.jumpBottom(),'返回最新内容 ↓');this.latestButton.className='plain wb-side-latest';this.latestButton.hidden=true;
+    this.messageArea=n('div','wb-side-message-area');this.messageArea.append(this.messages,this.latestButton);
     this.approvals=n('div','wb-side-approvals');this.queued=n('div','wb-side-queue');
     this.form=n('form','composer wb-side-composer');this.form.hidden=true;
     this.input=n('textarea');this.input.rows=1;this.input.maxLength=20000;this.input.setAttribute('data-i18n-placeholder','继续这条聊天…');this.input.placeholder=BridgeI18n.t('继续这条聊天…');this.input.setAttribute('data-i18n-aria-label','侧边聊天输入');this.input.setAttribute('aria-label',BridgeI18n.t('侧边聊天输入'));
@@ -71,10 +72,10 @@ class SideChatPanel {
     }
     this.form.onsubmit=e=>{e.preventDefault();this.send();};
     this.input.oninput=()=>{this.resizeInput();this.controls();};
-    tab.body.append(this.head,this.landing,this.status,this.messages,this.latestButton,this.approvals,this.queued,this.form);
+    tab.body.append(this.head,this.landing,this.status,this.messageArea,this.approvals,this.queued,this.form);
     this.following=true;this.lastMessageTop=0;
     this.messages.onscroll=()=>{const top=this.messages.scrollTop;if(top===this.lastMessageTop)return;this.following=top>this.lastMessageTop&&this.messages.scrollHeight-this.messages.clientHeight-top<60;this.latestButton.hidden=this.following;this.lastMessageTop=this.messages.scrollTop;};
-    this.messageMap=new ChatMessageMap({viewport:this.messages,directoryRows:()=>this.navigationRows(),navigateMessage:entry=>this.navigateMessage(entry)});
+    this.messageMap=new ChatMessageMap({viewport:this.messages,railBottomInset:40,directoryRows:()=>this.navigationRows(),navigateMessage:entry=>this.navigateMessage(entry)});
     this.visibilityObserver=new MutationObserver(()=>this.applyVisibility());
     this.visibilityObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-show-reasoning','data-show-process']});
     this.controls();this.load();this.schedule();
@@ -171,7 +172,7 @@ class SideChatPanel {
   }
   controls(){
     const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
-    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created||!!this.busy;this.head.hidden=false;this.messages.hidden=!created;this.queued.hidden=!created;
+    this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created||!!this.busy;this.head.hidden=false;this.messageArea.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
     this.latestButton.hidden=!created||this.following!==false;
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.permissionsButton])button.disabled=locked;
@@ -221,8 +222,8 @@ class SideChatPanel {
   async harnessPermissions(){
     const child=this.state.id;
     try{const value=await this.workbench.request('/api/desktop-sessions/deepseek/access?sessionId='+encodeURIComponent(child));if(this.disposed||this.state.id!==child)return;
-      const dialog=this.dialog('权限');for(const option of value.options||[]){const mode=option.value??option.id;dialog.append(this.workbench.button(option.label||option.name||mode,async()=>{try{this.apply(await this.request({action:'permissions',id:child,preset:mode}));dialog.close();}catch(error){this.status.textContent=BridgeI18n.t(error.message);}}));}
-    }catch(error){this.status.textContent=BridgeI18n.t(error.message);}
+      const dialog=this.dialog('权限');for(const option of value.options||[]){const mode=option.value??option.id;dialog.append(this.workbench.button(option.label||option.name||mode,async()=>{try{this.apply(await this.request({action:'permissions',id:child,preset:mode}));dialog.close();}catch(error){this.status.textContent=BridgeI18n.t(error.message);this.controls();}}));}
+    }catch(error){this.status.textContent=BridgeI18n.t(error.message);this.controls();}
   }
   async modelSettings(){
     const child=this.state.id,n=(...args)=>this.workbench.node(...args),b=(...args)=>this.workbench.button(...args);
@@ -241,7 +242,7 @@ class SideChatPanel {
       const save=b(BridgeI18n.t('保存'),async()=>{save.disabled=true;try{const state=await this.request({action:'settings',id:child,model:model.value==='__custom__'?custom.value.trim():model.value,effort:effort.value});this.apply(state);dialog.close();}catch(e){status.textContent=BridgeI18n.t(e.message);}finally{save.disabled=false;}});
       dialog.append(head,n('p','muted',BridgeI18n.t('仅影响此侧边聊天，从下一轮生效。')),modelLabel,effortLabel,status,save);
       document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
-    }catch(e){this.status.textContent=BridgeI18n.t(e.message);}
+    }catch(e){this.status.textContent=BridgeI18n.t(e.message);this.controls();}
   }
   async load(){const revision=this.readRevision=(this.readRevision||0)+1;try{const state=await this.request();if(this.disposed||revision!==this.readRevision)return;this.apply(state);this.workbench.syncSideChats(this.session,state.slots);}catch(e){if(!this.disposed&&revision===this.readRevision){this.status.textContent=BridgeI18n.t(e.message);if(this.state)this.state.connected=false;this.controls();}}}
   async create(){
@@ -266,7 +267,7 @@ class SideChatPanel {
     if(this.pending&&state.submissions?.some(s=>s.id===this.pending.submissionId&&['accepted','queued'].includes(s.status))){
       this.completeSubmission();this.attachments.clear(state.id,this.pending.attachments);this.pending=null;this.references.close();this.resizeInput();
     }
-    this.status.textContent=state.id&&!state.connected&&state.error?BridgeI18n.t('侧边聊天已断开，已有记录可继续查看；请新建侧边聊天继续。'):state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):BridgeI18n.t('已连接'));
+    this.status.textContent=state.id&&!state.connected?BridgeI18n.t('侧边聊天已断开，已有记录可继续查看；请新建侧边聊天继续。'):state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):'');
     const stamp=JSON.stringify([state.id,state.connected,state.turns]);
     if(stamp!==this.stamp){
       this.stamp=stamp;const scroll=this.messages.scrollTop,follow=changedChild||this.following!==false&&this.messages.scrollHeight-this.messages.clientHeight-scroll<60,anchor=follow?null:this.readingAnchor();this.messages.replaceChildren();this.messageNodes=[];
@@ -350,7 +351,7 @@ class SideChatPanel {
     let text;try{text=this.fileQuotes.validate();}catch(error){this.status.textContent=error.message;this.controls();return;}
     this.readRevision=(this.readRevision||0)+1;
     this.pendingDraft={raw:this.input.value,quotes:this.fileQuotes.rows.map(row=>row.id)};
-    this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),mode:this.sendMode.value,workMode:this.sendMode.value==='steer'||this.nativeModes&&this.state.status==='active'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.controls();this.status.textContent=BridgeI18n.t('正在发送…');
+    this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),mode:this.sendMode.value,workMode:this.sendMode.value==='steer'||this.nativeModes&&this.state.status==='active'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.status.textContent=BridgeI18n.t('正在发送…');this.controls();
     try{const result=await this.request({action:'send',id:this.state.id,...this.pending});if(this.disposed)return;
       if(['accepted','queued'].includes(result.status)){this.attachments.clear(this.state.id,attachmentIds);this.completeSubmission();this.pending=null;this.references.close();this.resizeInput();await this.load();}
       else this.status.textContent=BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。');
