@@ -19,6 +19,8 @@ class TimelineTests(unittest.TestCase):
             '# AGENTS.md instructions for /work\r\n\r\n<INSTRUCTIONS>Rules</INSTRUCTIONS>\r\n<environment_context><cwd>/work</cwd></environment_context>',
             '<user_instructions>Rules</user_instructions>\n<environment_context><cwd>/work</cwd></environment_context>',
             '<environment_context><cwd>/work</cwd></environment_context>',
+            '<skill>\n<name>fixture</name>\n<path>/work/SKILL.md</path>\nInstructions\n</skill>',
+            '<subagent_notification>\n{"agent_id":"fixture","status":{"completed":"Done"}}\n</subagent_notification>',
         ]
         for context in contexts:
             with self.subTest(context=context):
@@ -29,6 +31,7 @@ class TimelineTests(unittest.TestCase):
                 ]}]}
                 timeline = Timeline();timeline.update({**normalize_state(state), 'sequence': 1})
                 self.assertEqual([r['editable'] for r in timeline.rows], [False, True, False])
+                self.assertTrue(timeline.rows[0].get('isUserContext'), '上下文标记必须传到页面供默认折叠')
                 self.assertEqual(timeline.meta['latestUserTurnId'], 'first')
 
     def test_context_only_tail_does_not_change_the_latest_editable_turn(self):
@@ -39,6 +42,24 @@ class TimelineTests(unittest.TestCase):
         timeline = Timeline();timeline.update({**normalize_state(state), 'sequence': 1})
         self.assertEqual([r['editable'] for r in timeline.rows], [True, False])
         self.assertEqual(timeline.meta['latestUserTurnId'], 'request')
+
+    def test_context_syntax_in_an_actual_request_is_not_collapsed(self):
+        requests = [
+            'Explain <environment_context> syntax',
+            'Read AGENTS.md and SKILL.md',
+            '```xml\n<skill>Instructions</skill>\n```',
+            '<skill>Instructions</skill>\nPlease change this skill',
+            '<subagent_notification>Done</subagent_notification>\nExplain this result',
+            '# AGENTS.md instructions for /work\n<INSTRUCTIONS>Rules</INSTRUCTIONS>\nMy question',
+        ]
+        for text in requests:
+            with self.subTest(text=text):
+                state = {'turns': [{'turnId': 'turn', 'items': [
+                    {'id':'request','type':'userMessage','content':[{'type':'text','text':text}]},
+                ]}]}
+                timeline = Timeline();timeline.update({**normalize_state(state), 'sequence': 1})
+                self.assertFalse(timeline.rows[0].get('isUserContext'))
+                self.assertTrue(timeline.rows[0]['editable'])
 
     def test_desktop_hydration_cannot_relabel_completed_history_with_current_model(self):
         session=LiveSession('chat')

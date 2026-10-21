@@ -1,4 +1,31 @@
 // Synthetic API, production ChatTimeline and real browser layout. No native client.
+function setupCompactMessageNavigationFixture({count=1,contexts=false,holdDetail=false}={}) {
+  window.navigationFixture?.timeline.dispose();
+  document.getElementById('messages').replaceChildren();
+  const contextTexts=[
+    '# AGENTS.md instructions for /fixture\n<INSTRUCTIONS>'+('Project rules. '.repeat(800))+'</INSTRUCTIONS>',
+    '<skill>\n<name>fixture-skill</name>\n<path>/fixture/SKILL.md</path>\nSkill instructions\n</skill>',
+    '<subagent_notification>\n{"agent_id":"fixture","status":{"completed":"Agent result"}}\n</subagent_notification>',
+    '<environment_context><cwd>/fixture</cwd></environment_context>',
+  ],requests=[],rendered=[];
+  const rows=[...(contexts?contextTexts.map((text,i)=>({key:'context'+i,role:'user',kind:'userMessage',isUserContext:true,
+    text:text.slice(0,8000),truncated:text.length>8000})):[]),
+    ...Array.from({length:count},(_,i)=>({key:'q'+i,role:'user',kind:'userMessage',text:'Question '+i,editable:true})),
+    {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Answer'}
+  ].map((row,order)=>({...row,order,turnId:'turn',version:'v1'}));
+  let releaseDetail;
+  const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?host=local',request:async url=>{
+    const action=new URL(url,location.origin).pathname.split('/').pop();requests.push(action);
+    if(action==='detail'){
+      if(holdDetail)await new Promise(resolve=>releaseDetail=resolve);
+      return {key:'context0',version:'v1',offset:0,text:contextTexts[0],next:null};
+    }
+    throw Error('Unexpected fixture request: '+url);
+  },renderMeta:()=>{},renderText:(node,text)=>{rendered.push(text);node.textContent=text;},status:()=>{}});
+  timeline.apply({epoch:'compact',sequence:1,rows,files:[],hasMore:false,before:null,meta:{requests:[],latestUserTurnId:'turn'}},true);
+  window.navigationFixture={timeline,requests,rendered,contextTexts,rows,releaseDetail:()=>releaseDetail()};
+}
+
 async function setupMessageNavigationFixture({count=5000,failIndex=false}={}) {
   window.navigationFixture?.timeline.dispose();
   document.getElementById('messages').replaceChildren();

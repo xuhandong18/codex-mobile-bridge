@@ -236,11 +236,11 @@ class MessageNavigation:
                 if not since:
                     raise
                 position, reset = 0, True
-            entries = [entry for entry in value['entries'] if not entry.get('isUserContext') and entry.get('requestId') not in excluded]
+            entries = [entry for entry in value['entries'] if entry.get('requestId') not in excluded]
             if position > len(entries):
                 position, reset = 0, True
             end = min(len(entries), position+max(1, min(200, limit)))
-            fields = ('id', 'turnId', 'rowKey', 'summary')
+            fields = ('id', 'turnId', 'rowKey', 'summary', 'isUserContext')
             return {'revision': revision, 'status': 'ready', 'complete': True, 'total': len(entries), 'reset': reset,
                     'items': [{**{k: entry[k] for k in fields}, 'order': i} for i, entry in enumerate(entries[position:end], position)],
                     'nextCursor': self._token(identifier, revision, end, 'index') if end < len(entries) else None,

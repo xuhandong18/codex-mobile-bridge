@@ -29,14 +29,57 @@ const server=http.createServer((req,res)=>{
       const touch=width<1000,context=await browser.newContext({viewport:{width,height:760},hasTouch:touch}),page=await context.newPage();
       page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));
       await page.goto('http://127.0.0.1:'+server.address().port);
+      const activate=async selector=>touch?page.locator(selector).tap():page.locator(selector).click();
+      for(const count of [1,2,5]){
+        await page.evaluate(count=>setupCompactMessageNavigationFixture({count}),count);
+        await activate('.chat-message-map-rail button:first-child');
+        check(await page.locator('.chat-message-map-panel').isVisible(),'仅 '+count+' 条发言也能一次点击打开导航弹窗 '+width);
+        check(await page.evaluate(()=>navigationFixture.timeline.following),'打开导航不会直接跳转正文 '+width);
+        await activate('.chat-message-map-list button[data-key="loaded:q0"]');
+        check(await page.evaluate(()=>!navigationFixture.timeline.following&&!navigationFixture.timeline.messageMap.root.classList.contains('is-open')),'选择摘要才跳转并关闭导航 '+width);
+      }
+      await activate('.chat-message-map-rail button:first-child');
+      await activate('#composer');
+      check(!await page.locator('.chat-message-map-panel').isVisible(),'点击外部收起导航弹窗 '+width);
+      await page.locator('.chat-message-map-rail button:first-child').focus();
+      await page.keyboard.press('Enter');
+      check(await page.locator('.chat-message-map-panel').isVisible(),'键盘可以打开导航弹窗 '+width);
+      await page.keyboard.press('Escape');
+      check(!await page.locator('.chat-message-map-panel').isVisible(),'Escape 收起导航弹窗 '+width);
+      await page.evaluate(()=>setupCompactMessageNavigationFixture({contexts:true}));
+      check(await page.evaluate(()=>[0,1,2,3].every(i=>{const n=navigationFixture.timeline.nodes.get('context'+i).node;return n.tagName==='DETAILS'&&!n.open&&!n.hidden;})),
+        '项目说明、技能、子代理回报和环境信息默认折叠 '+width);
+      check(await page.evaluate(()=>navigationFixture.timeline.nodes.get('q0').node.tagName==='DIV'&&navigationFixture.timeline.nodes.get('answer').node.tagName==='DIV'),'普通提问和回答保持展开 '+width);
+      check(await page.evaluate(()=>navigationFixture.rendered.length===2&&navigationFixture.requests.length===0),'折叠上下文不渲染长正文也不提前读取详情 '+width);
+      await activate('.chat-message-map-rail button:first-child');
+      check(await page.evaluate(()=>navigationFixture.timeline.messageMap.entries.length===5),'折叠内容仍保留在缩略导航目录 '+width);
+      await activate('.chat-message-map-list button[data-key="loaded:context0"]');
+      check(await page.evaluate(()=>!navigationFixture.timeline.nodes.get('context0').node.open),'目录定位保留上下文的折叠状态 '+width);
+      await activate('#messages [data-key="context0"] summary');
+      await page.waitForFunction(()=>navigationFixture.requests.includes('detail')&&!document.querySelector('[data-key="context0"] .detail-more').disabled);
+      check(await page.evaluate(()=>navigationFixture.timeline.nodes.get('context0').node.querySelector('.message-body').textContent===navigationFixture.contextTexts[0]),'主动展开才读取并显示完整上下文 '+width);
+      await page.evaluate(()=>{const f=navigationFixture;f.timeline.apply({epoch:'compact',sequence:2,rows:[{...f.rows[0],version:'v2'}],files:[],meta:{requests:[]}});f.timeline.relabel();});
+      check(await page.evaluate(()=>navigationFixture.timeline.nodes.get('context0').node.open),'更新消息和切换文案保留已展开状态 '+width);
+      await activate('#messages [data-key="context0"] summary');
+      check(await page.evaluate(()=>!navigationFixture.timeline.nodes.get('context0').node.open),'上下文可再次收起 '+width);
+      await page.evaluate(()=>setupCompactMessageNavigationFixture({contexts:true,holdDetail:true}));
+      await activate('#messages [data-key="context0"] summary');
+      await page.waitForFunction(()=>navigationFixture.requests.includes('detail'));
+      await activate('#messages [data-key="context0"] summary');
+      await page.evaluate(()=>navigationFixture.releaseDetail());
+      await page.waitForFunction(()=>navigationFixture.timeline.details.has('context0'));
+      await activate('#messages [data-key="context0"] summary');
+      await page.waitForFunction(()=>navigationFixture.timeline.nodes.get('context0').node.querySelector('.message-body').textContent===navigationFixture.contextTexts[0]);
+      check(await page.evaluate(()=>navigationFixture.requests.length===1),'详情返回前收起再展开也显示完整正文且不重复读取 '+width);
       const first=await page.evaluate(()=>setupMessageNavigationFixture());
       check(first.firstRows===20&&first.indexBusy&&first.entryVisible,'工具记录首屏保留目录入口和整理状态 '+width);
       await page.waitForFunction(()=>navigationFixture.timeline.messageIndex.size===5000&&!navigationFixture.timeline.indexBusy);
       const size=await page.evaluate(()=>({body:navigationFixture.timeline.rows.size,markers:document.querySelectorAll('.chat-message-map button').length,
         requests:navigationFixture.requests.filter(r=>r.action==='timeline').length,index:navigationFixture.requests.filter(r=>r.action==='message-index').length}));
       check(size.body<=100&&size.markers<100&&size.requests<=2&&size.index===25,'自动取得5000条目录，正文和目录DOM保持有界 '+width);
-      const activate=async selector=>touch?page.locator(selector).tap():page.locator(selector).click();
       await activate('.chat-message-map-rail button[data-key="u0"]');
+      check(await page.locator('.chat-message-map-panel').isVisible(),'长目录点击横线打开弹窗 '+width);
+      await activate('.chat-message-map-list button[data-key="u0"]');
       await page.waitForFunction(()=>navigationFixture.timeline.navigationMode&&navigationFixture.timeline.nodes.has('q0'));
       check(await page.evaluate(()=>Math.abs(navigationFixture.timeline.nodes.get('q0').node.getBoundingClientRect().top-document.querySelector('#timeline').getBoundingClientRect().top)<80),'单次点击准确跳最早消息 '+width);
       await activate('#messages [data-key="q0"] [data-message-action="edit"]');
@@ -64,6 +107,8 @@ const server=http.createServer((req,res)=>{
       check(await page.evaluate(()=>navigationFixture.timeline.rows.size<=200),'向上滚动也自动补历史且正文窗口保持有界 '+width);
       await page.evaluate(()=>{const rail=document.querySelector('.chat-message-map-rail');rail.scrollTop=2500*7;rail.dispatchEvent(new Event('scroll'));});
       await activate('.chat-message-map-rail button[data-key="u2500"]');
+      await page.evaluate(()=>{const list=navigationFixture.timeline.messageMap.list;list.scrollTop=2500*44;list.dispatchEvent(new Event('scroll'));});
+      await activate('.chat-message-map-list button[data-key="u2500"]');
       await page.waitForFunction(()=>navigationFixture.timeline.nodes.has('q2500')&&!navigationFixture.timeline.navigationBusy);
       check(await page.evaluate(()=>navigationFixture.timeline.rows.size<=100&&!navigationFixture.timeline.rows.has('q0')),'滚动虚拟目录并直接跳中间消息 '+width);
       await page.evaluate(()=>{navigationFixture.timeline.messageMap.root.classList.add('is-open');navigationFixture.timeline.messageMap.paint(navigationFixture.timeline.messageMap.list,44);});
