@@ -88,6 +88,19 @@ const server=http.createServer((req,res)=>{
       await activate('.chat-message-map-rail button:first-child');
       await activate('.chat-message-map-list button[data-key="index:q1"]');
       check(await page.evaluate(()=>navigationFixture.requests.length===0&&!navigationFixture.timeline.following&&!navigationFixture.timeline.messageMap.root.classList.contains('is-open')),'去重后的目录直接定位已加载发言，无需重读历史 '+width);
+      await page.evaluate(()=>{
+        setupCompactMessageNavigationFixture({image:true});
+        const t=navigationFixture.timeline;
+        t.messageIndex.set('image-index',{id:'image-index',rowKey:'saved-image',turnId:'turn',order:0,summary:'Question 0 <image name=[Image #1] path="/fixture/screen.jpg">'});
+        t.messageMap.update();
+      });
+      await activate('.chat-message-map-rail button:first-child');
+      check(await page.evaluate(()=>navigationFixture.timeline.messageMap.entries.length===1&&document.querySelector('.chat-message-map-list button').textContent==='1. Question 0'),'带图片的发言合并旧目录后只显示一条真实文字摘要 '+width);
+      await activate('.chat-message-map-list button[data-key="image-index"]');
+      await page.waitForFunction(()=>document.querySelector('[data-key="q0"] img')?.naturalWidth>0);
+      check(await page.evaluate(()=>navigationFixture.requests.length===0&&!!document.querySelector('[data-key="q0"] a[data-image-preview]')),'图片发言直接定位且实际图片预览仍可加载 '+width);
+      await page.evaluate(()=>{const t=navigationFixture.timeline;t.messageIndex.get('image-index').summary='Question 0';t.messageMap.update();});
+      check(await page.evaluate(()=>navigationFixture.timeline.messageMap.entries.length===1),'旧目录替换为清理后的新目录也不会重复 '+width);
       const first=await page.evaluate(()=>setupMessageNavigationFixture());
       check(first.firstRows===20&&first.indexBusy&&first.entryVisible,'工具记录首屏保留目录入口和整理状态 '+width);
       await page.waitForFunction(()=>navigationFixture.timeline.messageIndex.size===5000&&!navigationFixture.timeline.indexBusy);

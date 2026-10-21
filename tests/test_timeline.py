@@ -13,6 +13,25 @@ def view(count=320, sequence=1):
 
 
 class TimelineTests(unittest.TestCase):
+    def test_image_transport_envelopes_do_not_become_user_text(self):
+        from bridge.features.sessions.model import normalize_item
+        content=[
+            {'type':'input_text','text':'Explain the screenshot'},
+            {'type':'input_text','text':'<image name=[Image #1] path="/fixture/screen.jpg">'},
+            {'type':'input_image','image_url':'data:image/png;base64,AAAA'},
+            {'type':'input_text','text':'</image>'},
+        ]
+        row=normalize_item({'type':'userMessage','content':content})
+        self.assertEqual(row['text'],'Explain the screenshot')
+        self.assertEqual(len(row['attachments']),1)
+        self.assertIn('desktopId',row['attachments'][0])
+        literal=normalize_item({'type':'userMessage','content':[content[0],content[1],content[3]]})
+        self.assertIn('<image name=',literal['text'])
+        quoted='```xml\n<image name=[Image #1] path="/fixture/screen.jpg">\n</image>\n```'
+        row=normalize_item({'type':'userMessage','content':[{'type':'input_text','text':quoted},content[2]]})
+        self.assertEqual(row['text'],quoted)
+        self.assertIn('path=',content[1]['text'],'Normalization must not mutate the source record')
+
     def test_context_envelopes_do_not_steal_the_user_edit_action(self):
         contexts = [
             '# AGENTS.md instructions for /work\n\n<INSTRUCTIONS>\nRules\n</INSTRUCTIONS>',

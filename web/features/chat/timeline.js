@@ -122,14 +122,22 @@ class ChatTimeline {
   dispose(){this.navigationRequest++;this.messageMap.dispose();this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;this.later.remove();}
   directoryRows(){
     const entries=[...this.messageIndex.values()].filter(entry=>!entry.isUserContext).sort((a,b)=>a.order-b.order).map((entry,order)=>({...entry,order})),matched=new Set();
-    const byId=new Map(entries.map(entry=>[entry.id,entry])),byKey=new Map(entries.map(entry=>[entry.rowKey,entry])),byText=new Map();
-    for(const entry of entries){const key=JSON.stringify([entry.turnId,entry.summary]),list=byText.get(key)||[];list.push(entry);byText.set(key,list);}
+    const byId=new Map(entries.map(entry=>[entry.id,entry])),byKey=new Map(entries.map(entry=>[entry.rowKey,entry])),byText=new Map(),byImageText=new Map();
+    const indexText=(map,entry,summary)=>{const key=JSON.stringify([entry.turnId,summary]),list=map.get(key)||[];list.push(entry);map.set(key,list);};
+    for(const entry of entries){
+      indexText(byText,entry,entry.summary);
+      // Older gateways included a truncated image transport label in summaries.
+      const label=entry.summary.match(/^([\s\S]*?)\s*<image name=\[Image #\d+\] path="/);
+      if(label)indexText(byImageText,entry,label[1].trim());
+    }
     const loaded=[...this.rows.values()].map(value=>value.row).filter(row=>row.role==='user'&&!row.isUserContext).sort((a,b)=>a.order-b.order);
     for(const row of loaded){
-      const summary=messageSummary(row),sameText=byText.get(JSON.stringify([row.turnId,summary]))||[];
+      const summary=messageSummary(row),textKey=JSON.stringify([row.turnId,summary]);
+      const imageText=row.attachments?.some(item=>['image','input_image','localImage'].includes(item.type))?byImageText.get(textKey)||[]:[];
+      const sameText=byText.get(textKey)||imageText;
       const candidate=byId.get(row.navigationId)||byKey.get(row.key)||(sameText.length===1?sameText[0]:null);
-      const match=candidate&&!matched.has(candidate.id)&&candidate.summary===summary?candidate:null;
-      if(match){matched.add(match.id);match.loadedKey=row.key;continue;}
+      const match=candidate&&!matched.has(candidate.id)&&(candidate.summary===summary||imageText.includes(candidate))?candidate:null;
+      if(match){matched.add(match.id);match.loadedKey=row.key;match.summary=summary;continue;}
       entries.push({id:row.navigationId||'loaded:'+row.key,rowKey:row.key,turnId:row.turnId,summary,order:entries.length});
     }
     return entries;

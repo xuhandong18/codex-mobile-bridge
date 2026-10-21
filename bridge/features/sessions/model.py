@@ -68,6 +68,26 @@ def text_content(content):
     return ""
 
 
+def user_text_content(content):
+    """Omit transport labels only when they directly frame an image item."""
+    if not isinstance(content, list):
+        return text_content(content)
+    hidden = set()
+    for index, part in enumerate(content):
+        if not isinstance(part, dict) or part.get('type') not in ('input_image', 'localImage', 'image'):
+            continue
+        if index == 0 or index + 1 == len(content):
+            continue
+        before, after = content[index - 1], content[index + 1]
+        if not all(isinstance(value, dict) and value.get('type') in ('text', 'input_text', 'inputText')
+                   and isinstance(value.get('text'), str) for value in (before, after)):
+            continue
+        if (re.fullmatch(r'<image name=\[Image #\d+\] path="[^"\r\n]+">', before['text'].strip())
+                and after['text'].strip() == '</image>'):
+            hidden.update((index - 1, index + 1))
+    return text_content([part for index, part in enumerate(content) if index not in hidden])
+
+
 def items_array(items):
     if isinstance(items, list):
         return items
@@ -127,7 +147,7 @@ def normalize_item(item):
         submission_request_id = request_id(item)
         if request_id:
             row["requestId"] = str(submission_request_id)
-        text = user_display_text(text_content(item.get("content", [])))
+        text = user_display_text(user_text_content(item.get("content", [])))
         if is_user_context(text):
             row['isUserContext'] = True
         replies = question_replies(text)

@@ -86,6 +86,16 @@ class MessageIndexTests(unittest.TestCase):
         self.assertEqual(first['items'][0]['id'],updated['items'][0]['id'])
         self.assertEqual(len(updated['items']),2)
 
+    def test_image_transport_labels_do_not_change_directory_summary(self):
+        self.write({'type':'event_msg','payload':{'type':'task_started','turn_id':'turn'}})
+        self.write({'type':'response_item','payload':{'type':'message','role':'user','content':[
+            {'type':'input_text','text':'Explain the screenshot'},
+            {'type':'input_text','text':'<image name=[Image #1] path="/fixture/screen.jpg">'},
+            {'type':'input_image','image_url':'data:image/png;base64,AAAA'},
+            {'type':'input_text','text':'</image>'},
+        ]}})
+        self.assertEqual(self.nav.page(self.thread)['items'][0]['summary'],'Explain the screenshot')
+
     def test_window_starting_mid_turn_does_not_make_a_supplementary_message_editable(self):
         from bridge.features.sessions.model import normalize_state
         from bridge.features.sessions.timeline import Timeline
