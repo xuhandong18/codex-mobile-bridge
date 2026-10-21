@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 from bridge.clients.codex.desktop_tools import DesktopTools, ToolError
 from bridge.clients.codex.sidebar import NativeSidebar
 from bridge.features.sessions.sidebar import SidebarManagement, validate
+from bridge.features.sessions.sidebar_preferences import SidebarPreferences
 from bridge.features.notifications.channels import write_json
 
 
@@ -145,6 +146,46 @@ class SidebarOperationTests(unittest.IsolatedAsyncioTestCase):
                 return receipt
             await asyncio.sleep(.005)
         self.fail('sidebar worker did not complete')
+
+    async def test_native_project_move_resets_shared_placement_without_browser_poll(self):
+        preferences = SidebarPreferences(self.bridge.data_dir)
+        self.addCleanup(preferences.close)
+        key = json.dumps(['placement', 'project', 'local', PROJECT_KEY], separators=(',', ':'))
+        preferences.save({'changes': [{'key': key, 'value': {'target': 'section:a'}, 'version': 0}]})
+        manager = SidebarManagement(self.bridge, executor=lambda *_: {})
+        value = command('project', 'move', targetId=PROJECT_KEY, sectionId='b')
+        await manager.submit(value, preferences)
+        self.assertEqual((await self.finish(manager, value))['status'], 'completed')
+        self.assertEqual(preferences.read()['fields'][key], {'value': None, 'version': 2})
+        revision = preferences.read()['revision']
+        await manager.submit(value, preferences)
+        self.assertEqual(preferences.read()['revision'], revision)
+
+    async def test_unknown_native_project_move_does_not_clear_shared_placement(self):
+        preferences = SidebarPreferences(self.bridge.data_dir)
+        self.addCleanup(preferences.close)
+        key = json.dumps(['placement', 'project', 'local', PROJECT_KEY], separators=(',', ':'))
+        preferences.save({'changes': [{'key': key, 'value': {'target': 'section:a'}, 'version': 0}]})
+        def execute(*_):
+            raise ToolError('合成断线', unknown=True)
+        manager = SidebarManagement(self.bridge, executor=execute)
+        value = command('project', 'move', targetId=PROJECT_KEY, sectionId='b')
+        await manager.submit(value, preferences)
+        self.assertEqual((await self.finish(manager, value))['status'], 'unknown')
+        self.assertEqual(preferences.read()['fields'][key]['value'], {'target': 'section:a'})
+
+    async def test_native_completion_preserves_a_newer_explicit_device_placement(self):
+        preferences = SidebarPreferences(self.bridge.data_dir)
+        self.addCleanup(preferences.close)
+        key = json.dumps(['placement', 'project', 'local', PROJECT_KEY], separators=(',', ':'))
+        def execute(*_):
+            preferences.save({'changes': [{'key': key, 'value': {'target': 'section:c'}, 'version': 0}]})
+            return {}
+        manager = SidebarManagement(self.bridge, executor=execute)
+        value = command('project', 'move', targetId=PROJECT_KEY, sectionId='b')
+        await manager.submit(value, preferences)
+        self.assertEqual((await self.finish(manager, value))['status'], 'completed')
+        self.assertEqual(preferences.read()['fields'][key]['value'], {'target': 'section:c'})
 
     async def test_pending_and_completed_duplicates_do_not_replay_and_fingerprint_is_fixed(self):
         started, release = threading.Event(), threading.Event()

@@ -19,9 +19,11 @@ let listComplete=false, listReadFinished=false, listIdentity='', listFilterKey='
 let listHostIds=[],sidebarData={sections:[],projects:[]};
 const createdChats=new Map();
 const projectChatPages=new Map();
-const projectPins=new SidebarProjectPins(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|project-pins');
-const sectionProjectOrder=new SidebarItemOrder(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|section-project-order:');
-const sidebarPlacements=new SidebarPlacements(localStorage,(window.BridgeRelayBase||location.origin||location.host||'gateway')+'|sidebar-placement:');
+const sidebarPreferencePrefix=window.BridgeRelayBase||location.origin||location.host||'gateway';
+const sidebarPreferences=new SidebarPreferences({request:api,prefix:sidebarPreferencePrefix,onChange:()=>{listRenderStamp='';renderList();}});
+const projectPins=new SidebarProjectPins(sidebarPreferences.storage,sidebarPreferencePrefix+'|project-pins');
+const sectionProjectOrder=new SidebarItemOrder(sidebarPreferences.storage,sidebarPreferencePrefix+'|section-project-order:');
+const sidebarPlacements=new SidebarPlacements(sidebarPreferences.storage,sidebarPreferencePrefix+'|sidebar-placement:');
 let sourceFilterStamp='';
 let chatTimeline=null,reconnectFailure=null;
 const dismissedHostFaults=new Map();
@@ -73,6 +75,7 @@ function renderHostErrors(hosts){
   root.hidden=!root.childElementCount;
 }
 function clearListSnapshot(){
+  sidebarPreferences.reset();
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:'))sessionStorage.removeItem(key);}
   createdChats.clear();projectChatPages.clear();
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
@@ -289,22 +292,21 @@ function sortSectionProjects(root,scope){
   const ids=sectionProjectOrder.sort(scope,projects.map(node=>node.dataset.projectKey));let next=0;
   root.replaceChildren(...nodes.map(node=>node.dataset.projectKey?byId.get(ids[next++]):node));
 }
-function shiftSectionProject(item,direction){
+async function shiftSectionProject(item,direction){
   const {scope,ids}=sectionProjectRows(item),index=ids.indexOf(item.id),target=index+direction;
   if(index<0||target<0||target>=ids.length)return;
   try{
-    if(sectionProjectOrder.move(scope,ids,item.id,direction<0?ids[target]:ids[target+1]||null)){listRenderStamp='';renderList();}
-  }catch{toast('无法保存项目顺序，请检查设备存储权限。');}
+    if(await sidebarPreferences.change(()=>sectionProjectOrder.move(scope,ids,item.id,direction<0?ids[target]:ids[target+1]||null))){listRenderStamp='';renderList();}
+  }catch(error){toast(error.message);}
 }
 function projectRows(key){
   return listRows.filter(row=>row.projectKey===key&&($('list-mode').value!=='codex'||sidebarTarget(sidebarEntry('thread',row))==='home'));
 }
 function isProjectPinned(row){return projectPins.read(row.projectKey).has(row.id);}
-function toggleProjectPin(row){
+async function toggleProjectPin(row,pinned=!isProjectPinned(row)){
   const current=listRows.find(chat=>chat.id===row.id&&chat.host===row.host);
   if(!current||current.projectKey!==row.projectKey||!projectRows(row.projectKey).includes(current))throw Error(t('侧栏条目已变化，请刷新后重试。'));
-  try{projectPins.toggle(row.projectKey,row.id);}
-  catch{throw Error(t('无法保存项目内置顶，请检查设备存储权限。'));}
+  await sidebarPreferences.change(()=>{if(projectPins.read(row.projectKey).has(row.id)!==pinned)projectPins.toggle(row.projectKey,row.id);});
   listRenderStamp='';renderList();
 }
 function projectPage(key){
@@ -455,6 +457,7 @@ async function loadList(reset=false){
     const url='/api/sessions?scope=host&host='+encodeURIComponent(host)+'&q='+encodeURIComponent(query)+'&offset='+(targetCount-100)+'&archived='+archived+'&source='+source;
     try{
       const result=await api(url);if(generation!==listGeneration)return null;
+      if(host==='local'&&result.sidebarPreferences){await sidebarPreferences.receive(result.sidebarPreferences);if(generation!==listGeneration)return null;}
       const visible=new Set((result.sessions||[]).map(row=>row.id));
       const missing=[...new Set(projectPins.entries().filter(([project,id])=>project.startsWith(host+'|')&&/^[0-9a-f-]{36}$/.test(id)&&!visible.has(id)).map(([,id])=>id))];
       const pinned=(result.sessions||[]).filter(row=>row.host===host&&isProjectPinned(row));
@@ -570,11 +573,7 @@ const contextUsageControl=new ContextUsageControl();$('permissions-button').afte
 let newChatProjects=[],creatingChat=false,approvalBusy=0;
 const sidebarManagement=typeof SidebarManagementUI==='function'?new SidebarManagementUI({request:api,dialog:title=>desktopSessions.dialog(title),snapshot:()=>sidebarData,
   context:()=>currentId&&currentHost==='local'&&state?.origin==='desktop'?currentId:null,uuid,notify:toast,
-  refresh:async body=>{
-    if(body?.kind==='project'){
-      const project=(sidebarData.projects||[]).find(p=>p.key===body.targetId);
-      if(project)sidebarPlacements.set(sidebarEntry('project',project),'native',(sidebarData.sections||[]).map(s=>s.id));
-    }
+  refresh:async()=>{
     $('list-mode').value='codex';try{localStorage.setItem('list-mode','codex');}catch{}
     await loadList(true);
   }}):null;
@@ -751,7 +750,9 @@ new ChatContextMenu($('sessions'),target=>{
   const items=[{label:'复制会话路径',copy:true,run:copy=>window.BridgeClipboard.copy(()=>'codex://threads/'+encodeURIComponent(row.id),copy)}];
   items.push({label:'标记为未读',run:()=>{sessionActivity.markUnread(chatKey(row.id,row.host));renderActivity();}});
   items.push(...sidebarPlacementActions(sidebarEntry('thread',row)));
-  if(button.closest('.project-group')&&row.projectKey!==row.host+'|independent')items.push({label:isProjectPinned(row)?'取消项目内置顶':'在项目内置顶',run:()=>toggleProjectPin(row)});
+  if(button.closest('.project-group')&&row.projectKey!==row.host+'|independent'){
+    const pinned=isProjectPinned(row);items.push({label:pinned?'取消项目内置顶':'在项目内置顶',run:()=>toggleProjectPin(row,!pinned)});
+  }
   if(sessionAccess(row.access).source==='desktop'){
     items.push({label:row.archived?'取消归档':'归档聊天',run:()=>manageChat(row,row.archived?'unarchive':'archive')});
     items.push({label:'永久删除聊天',run:()=>manageChat(row,'delete')});
@@ -759,7 +760,8 @@ new ChatContextMenu($('sessions'),target=>{
   return items;
 },{label:'侧栏操作'});
 function sidebarPlacementActions(item){
-  const items=[{label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,'toggle-pin')},
+  const pinTarget=sidebarPlacements.pinTarget(item,(sidebarData.sections||[]).map(section=>section.id),item.native);
+  const items=[{label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,pinTarget)},
     {label:'移动到分区…',run:()=>openSidebarPlacement(item)}];
   if(item.kind==='project')items.push(...sidebarProjectOrderActions(item));
   return items;
@@ -779,12 +781,11 @@ function currentSidebarEntry(item){
   if(!row)throw Error(t('侧栏条目已变化，请刷新后重试。'));
   return sidebarEntry(item.kind,row);
 }
-function changeSidebarPlacement(item,destination){
+async function changeSidebarPlacement(item,destination){
   const fresh=currentSidebarEntry(item),sections=(sidebarData.sections||[]).map(section=>section.id);
-  try{
-    if(destination==='toggle-pin')sidebarPlacements.togglePin(fresh,sections,fresh.native);
-    else sidebarPlacements.set(fresh,destination,sections,fresh.native);
-  }catch(error){throw Error(t(error.message==='分区已变化，请重新选择。'?error.message:'无法保存侧栏设置，请检查设备存储权限。'));}
+  await sidebarPreferences.change(()=>{
+    sidebarPlacements.set(fresh,destination,sections,fresh.native);
+  });
   $('list-mode').value='codex';try{localStorage.setItem('list-mode','codex');}catch{}
   listRenderStamp='';renderList();
   const selector=item.kind==='project'?'.project-group':'.session';
@@ -802,8 +803,8 @@ function openSidebarPlacement(item){
   select.value=sidebarPlacements.valid(saved?.target,sections)?saved.target:'native';select.setAttribute('aria-label',t('所属分区'));
   const actions=el('div','actions'),save=el('button','primary',t('保存')),cancel=el('button','secondary',t('取消'));
   save.type='submit';cancel.type='button';cancel.onclick=()=>dialog.close();actions.append(save,cancel);form.append(error,actions);
-  form.onsubmit=event=>{event.preventDefault();try{changeSidebarPlacement(item,select.value);dialog.close();}catch(failure){error.textContent=t(failure.message);}};
-  dialog.append(el('p','muted',t('分区和置顶设置保存在当前设备。')),form);dialog.showModal();
+  form.onsubmit=async event=>{event.preventDefault();if(save.disabled)return;save.disabled=true;try{await changeSidebarPlacement(item,select.value);dialog.close();}catch(failure){error.textContent=t(failure.message);}finally{save.disabled=false;}};
+  dialog.append(el('p','muted',t('分区和置顶设置在连接同一网关的设备间同步。')),form);dialog.showModal();
 }
 async function manageChat(row,action){
   if(action==='delete'&&!confirm(t('永久删除此聊天及其子智能体记录？此操作无法恢复。')+'\n\n'+row.title))return;

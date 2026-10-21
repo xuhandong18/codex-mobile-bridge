@@ -17,6 +17,7 @@
 | 本机 CLI 接入保存、选择与核验 | `bridge/features/accounts/cli_access.py`、`cli_sync.py` | `bridge/clients/claude/cli_session.py`，`web/features/accounts/cli-access.js` |
 | CLI 原生接入与 SSH 发现 | `bridge/clients/codex/app_server.py`、`cli_session.py`、`remote.py` | `features/sessions/store.py`、`app/service.py`；[接入边界](../codex-cli.md) |
 | 会话历史、审批、计划/目标、侧边聊天 | `bridge/features/sessions/` | `bridge/app/service.py`，`web/features/chat/` |
+| 侧栏跨设备置顶、项目顺序与分区归属 | `bridge/features/sessions/sidebar_preferences.py`、`sidebar.py` | `web/features/chat/session-list.js`、`web/shell/app.js`；原生分区管理见 `bridge/clients/codex/sidebar.py` |
 | 首条消息自动摘要标题 | `bridge/features/sessions/auto_titles.py`、`bridge/clients/codex/title_runtime.py` | [自动标题说明](../auto-titles.md)，`sessions/model.py`、`app/service.py` |
 | 文件、图片、上传下载、Git | `bridge/features/workspace/` | `web/features/workspace/`、`web/shared/image-viewer.js` |
 | 源码高亮、PDF/HTML 预览与全屏、目录返回 | `web/features/workspace/` | `bridge/api/html_preview.py`、`httpd.py`、原生手机导航；[模块约定](../../web/README.md#文件阅读模块) |

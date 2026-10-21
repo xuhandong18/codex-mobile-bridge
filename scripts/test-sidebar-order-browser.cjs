@@ -10,20 +10,30 @@ const initialRows=Array.from({length:14},(_,i)=>({id:id(i+1),host:'local',title:
 const sidebar={sections:[{id:'daily',name:'Daily',hostSectionIds:{local:'native-daily'},itemKeys:['codex:thread:'+id(10),'codex:project:fixture-project','codex:thread:'+id(9)]}],
   projects:[{key:project,host:'local',name:'TVPlayer 测试项目',cwd:'/fixture'}],
   threadOrders:{'fixture-project':{threadIds:initialRows.slice(0,8).map(row=>row.id).reverse()}},pinnedThreadIds:[id(12),id(11)]};
-let rows=[];const errors=[],writes=[],selectedReads=[];
+let rows=[],preferences={revision:0,fields:{}};const errors=[],writes=[],selectedReads=[];
 const server=http.createServer(async(req,res)=>{
   const p=new URL(req.url,'http://127.0.0.1').pathname;res.setHeader('Cache-Control','no-store');
   if(p.startsWith('/api/')){
-    if(req.method!=='GET'&&p!=='/api/activity')writes.push(p);
+    if(req.method!=='GET'&&!['/api/activity','/api/sidebar-preferences'].includes(p))writes.push(p);
     let value={};res.setHeader('Content-Type','application/json');
     if(p==='/api/auth')value={authenticated:true,csrf:'synthetic-csrf',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'},uiLanguage:'zh'};
     else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
+    else if(p==='/api/sidebar-preferences'){
+      if(req.method==='POST'){
+        let data='';for await(const part of req)data+=part;
+        const {changes}=JSON.parse(data);
+        if(changes.some(row=>(preferences.fields[row.key]?.version||0)!==row.version)){res.statusCode=409;res.end(JSON.stringify({error:'conflict'}));return;}
+        for(const row of changes)preferences.fields[row.key]={value:row.value,version:row.version+1};
+        preferences.revision++;
+      }
+      value=preferences;
+    }
     else if(p==='/api/sessions'){
       const query=new URL(req.url,'http://127.0.0.1').searchParams,ids=query.get('ids')?.split(',');
       if(ids)selectedReads.push(ids);
       const matching=rows.filter(row=>(!ids||ids.includes(row.id))&&(!query.get('q')||row.title.includes(query.get('q'))));
-      value={sessions:[...matching].sort((a,b)=>b.recency-a.recency).slice(0,ids?50:Number(query.get('offset')||0)+101),remoteHosts:[],sources:['desktop'],complete:true,sidebar};
+      value={sessions:[...matching].sort((a,b)=>b.recency-a.recency).slice(0,ids?50:Number(query.get('offset')||0)+101),remoteHosts:[],sources:['desktop'],complete:true,sidebar,sidebarPreferences:preferences};
     }
     else if(p==='/api/activity')value={sessions:[]};
     res.end(JSON.stringify(value));return;
@@ -42,7 +52,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     for(const width of [390,820,1280])for(const mode of ['codex','project','recent']){
-      rows=initialRows.map(row=>({...row}));
+      rows=initialRows.map(row=>({...row}));preferences={revision:0,fields:{}};
       const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
       await context.addInitScript(({mode,project,order})=>{
@@ -96,7 +106,7 @@ const server=http.createServer(async(req,res)=>{
       await context.close();
     }
     for(const width of [390,820,1280])for(const mode of ['codex','project']){
-      rows=initialRows.map(row=>({...row}));
+      rows=initialRows.map(row=>({...row}));preferences={revision:0,fields:{}};
       const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1000}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
       await context.addInitScript(mode=>{localStorage.setItem('list-mode',mode);localStorage.setItem('navigation:sidebar','open');},mode);
@@ -113,7 +123,7 @@ const server=http.createServer(async(req,res)=>{
           await target.dispatchEvent('pointerup',{pointerType:'touch',isPrimary:true});
         }else await target.click({button:'right'});
       };
-      const pin=async n=>{await menu(n);await page.getByRole('button',{name:'在项目内置顶',exact:true}).click();};
+      const pin=async n=>{await menu(n);await page.getByRole('button',{name:'在项目内置顶',exact:true}).click();await page.waitForFunction(({project,id})=>projectPins.read(project).has(id),{project,id:id(n)});};
       await page.goto('http://127.0.0.1:'+server.address().port+'/');await ready();
       await page.locator(group+' > .project-load-more').click();await pin(8);await pin(7);
       check((await ids()).slice(0,2),[id(7),id(8)],'项目内多个置顶按交互时间排列 '+label);
@@ -141,6 +151,7 @@ const server=http.createServer(async(req,res)=>{
       check(pinBackgrounds,[true,true],'明暗主题通过背景区分置顶且选中状态仍可辨认 '+label);
       if(mode==='codex')await page.screenshot({path:path.resolve(__dirname,'../.tmp/project-pins-'+width+'.png')});
       await menu(8);await page.getByRole('button',{name:'取消项目内置顶',exact:true}).click();
+      await page.waitForFunction(({project,id})=>!projectPins.read(project).has(id),{project,id:id(8)});
       check((await ids()).slice(0,4),[id(7),id(3),id(8),id(1)],'取消后按最近时间回到普通列表 '+label);
       // A pin in the look-ahead row must survive the normal prefix truncation.
       const other=Array.from({length:120},(_,i)=>({id:id(100+i),host:'local',title:'其他项目 '+i,cwd:'/other',projectKey:'local|other',projectName:'其他项目',recency:1000+i,access:{source:'desktop'}}));
@@ -157,7 +168,7 @@ const server=http.createServer(async(req,res)=>{
       await context.close();
     }
     check(selectedReads.some(ids=>ids.includes(id(7))),true,'旧置顶使用定向只读元数据查询');
-    check(writes,[],'排序验证没有打开聊天或发送写入');
+    check(writes,[],'排序验证没有打开聊天或修改原生会话');
     check(errors,[],'浏览器无脚本异常');
     console.log(JSON.stringify({passed:checks.length,checks},null,2));
   }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}

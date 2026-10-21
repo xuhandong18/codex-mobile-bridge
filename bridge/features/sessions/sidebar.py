@@ -1,4 +1,4 @@
-"""Validate sidebar commands and retain receipts; Codex owns every mutation.
+"""Validate sidebar commands and retain receipts; Codex owns native mutations.
 
 ``await SidebarManagement(bridge).submit(body)`` queues one synchronous executor
 call. ``operation(id)`` is a read-only poll. An injected executor implements
@@ -115,12 +115,12 @@ class SidebarManagement:
                 raise ValueError('找不到侧栏操作记录')
             return self._public(self.operations[operation_id])
 
-    async def submit(self, body):
+    async def submit(self, body, preferences=None):
         # Validation and disk IO must not block the API event loop. Once queued,
         # client cancellation does not cancel or replay the native write.
-        return await asyncio.to_thread(self._submit, copy.deepcopy(body))
+        return await asyncio.to_thread(self._submit, copy.deepcopy(body), preferences)
 
-    def _submit(self, body):
+    def _submit(self, body, preferences=None):
         value = validate(body)
         fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         operation_id = value['id']
@@ -142,6 +142,11 @@ class SidebarManagement:
                    'status': 'pending', 'message': '正在连接并核验 Codex 桌面'}
             if 'targetId' in value:
                 row['targetId'] = value['targetId']
+            placement = None
+            if preferences is not None and value['kind'] == 'project':
+                key = json.dumps(['placement', 'project', 'local', value['targetId']], separators=(',', ':'))
+                version = preferences.read()['fields'].get(key, {}).get('version', 0)
+                placement = preferences, key, version
             self.operations[operation_id] = row
             try:
                 write_json(self.path, self.operations)
@@ -150,7 +155,7 @@ class SidebarManagement:
                 raise
             receipt = self._public(row)
             try:
-                threading.Thread(target=self._run, args=(value,), daemon=True).start()
+                threading.Thread(target=self._run, args=(value, placement), daemon=True).start()
             except Exception:
                 row.update(status='failed', message='无法启动侧栏操作，尚未发送到 Codex')
                 write_json(self.path, self.operations)
@@ -172,7 +177,7 @@ class SidebarManagement:
         if destination is not None and destination not in allowed:
             raise ValueError('所选分区已不存在或不可移动，请刷新后重试')
 
-    def _run(self, value):
+    def _run(self, value, placement=None):
         def progress(status, message, details=None):
             if status in TERMINAL:
                 raise ValueError('执行器只能报告进度，完成状态由操作回执保存')
@@ -191,6 +196,11 @@ class SidebarManagement:
             result = execute(request, progress)
             if not isinstance(result, dict):
                 raise ValueError('原生侧栏执行器未返回可核验的结果')
+            if placement is not None:
+                # Finish the shared display update even if the submitting page
+                # closed. A concurrent explicit placement wins over this reset.
+                preferences, key, version = placement
+                preferences.save({'changes': [{'key': key, 'value': None, 'version': version}]})
             update = {k: copy.deepcopy(v) for k, v in result.items()
                       if k not in ('id', 'kind', 'action', 'fingerprint', 'resource', 'status')}
             update.update(status='completed', message=result.get('message') or '侧栏变更已由 Codex 保存并核验')

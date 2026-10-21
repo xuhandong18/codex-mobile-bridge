@@ -26,7 +26,7 @@ function fixture(mode='codex'){
   const selected=[];
   const context={$:id=>nodes[id],el:(...args)=>new Element(...args),localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},t:x=>x,BridgeI18n:{locale:()=> 'zh'},
     currentId:null,currentHost:'local',availableSources:[],listSource:'all',listRenderStamp:'',listComplete:true,listReadFinished:true,listHasMore:false,listLoading:0,listFilterKey:'fixture',projectChatPages:new Map(),
-    renderActivity(){},scheduleActivityRefresh(){},sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),
+    renderActivity(){},scheduleActivityRefresh(){},sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),sidebarPreferences:{change:async edit=>edit()},
     sidebarData:{sections:[{id:'custom',name:'Daily',itemKeys:['codex:project:p'],hostSectionIds:{local:'native'}}],projects:[{key:'local|p',name:'Project',host:'local',cwd:'/work'},{key:'local|empty',name:'Empty',host:'local',cwd:'/empty'}]},
     listRows:[{id:'thread',host:'local',projectKey:'local|p',projectName:'Project',title:'Chat',recency:1},{id:'direct',host:'local',projectKey:'local|p',projectName:'Project',thread_section_id:'native',title:'Direct',recency:2}]};
   vm.createContext(context);vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.projectPins=vm.runInContext('new SidebarProjectPins(localStorage,"project-pins:")',context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
@@ -72,7 +72,7 @@ test('native direct section and pinned chats keep recent order while projects re
   assert.deepEqual(section('pinned').children.slice(1).map(node=>node.dataset.id),['pinned-new','pinned-old']);
 });
 
-for(const mode of ['codex','project'])test('project pins have independent recent order and do not consume ordinary pagination in '+mode+' mode',()=>{
+for(const mode of ['codex','project'])test('project pins have independent recent order and do not consume ordinary pagination in '+mode+' mode',async()=>{
   const {context,nodes}=fixture(mode);
   context.listRows=Array.from({length:20},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
   const original=JSON.stringify(context.listRows);
@@ -83,10 +83,10 @@ for(const mode of ['codex','project'])test('project pins have independent recent
   assert.equal(JSON.stringify(context.listRows),original,'Pinning only changes display preferences');
   context.listRows[19].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
   assert.deepEqual(ids().slice(0,2),['chat-19','chat-18']);
-  context.toggleProjectPin(context.listRows.find(row=>row.id==='chat-18'));
+  await context.toggleProjectPin(context.listRows.find(row=>row.id==='chat-18'));
   assert.deepEqual(ids(),['chat-19','chat-0','chat-1','chat-2','chat-3','chat-4']);
   const stale={...context.listRows[0],projectKey:'local|moved'};
-  assert.throws(()=>context.toggleProjectPin(stale),/侧栏条目已变化/);
+  await assert.rejects(context.toggleProjectPin(stale),/侧栏条目已变化/);
 });
 
 for(const mode of ['codex','project'])test('project chats ignore legacy manual order and keep pins before recent ordinary chats in '+mode+' mode',()=>{
@@ -182,7 +182,7 @@ for(const mode of ['codex','project'])test('project and chat menus do not offer 
   assert.ok(!labels.includes('在项目中上移')&&!labels.includes('在项目中下移'));
 });
 
-for(const mode of ['codex','project'])test('native project management retains sibling ordering in '+mode+' mode',()=>{
+for(const mode of ['codex','project'])test('native project management retains sibling ordering in '+mode+' mode',async()=>{
   const f=fixture(mode),{context,nodes}=f;
   context.sidebarData.projects=context.sidebarData.projects.filter(project=>project.key!=='local|empty');
   context.sidebarData.projects.push({key:'local|b',host:'local',name:'B'},{key:'ssh|r',host:'ssh',name:'Remote'});
@@ -194,13 +194,13 @@ for(const mode of ['codex','project'])test('native project management retains si
   const first=menu('local|p');
   for(const label of ['修改名称','移动到分区…','删除项目','上移','下移'])assert.ok(first.some(row=>row.label===label),'Missing '+label);
   assert.equal(first.find(row=>row.label==='上移').disabled,true);
-  first.find(row=>row.label==='下移').run();
+  await first.find(row=>row.label==='下移').run();
   const scope=mode==='codex'?'custom':'projects';
   assert.deepEqual(Array.from(context.sectionProjectOrder.sort(scope,['local|p','local|b','ssh|r'])),['local|b','local|p','ssh|r']);
   const ordered=keys();assert.ok(ordered.indexOf('local|b')<ordered.indexOf('local|p'));
   const remote=menu('ssh|r');assert.equal(remote.find(row=>row.label==='修改名称').disabled,true);
   assert.equal(remote.find(row=>row.label==='上移').disabled,false);assert.equal(remote.find(row=>row.label==='下移').disabled,true);
-  remote.find(row=>row.label==='上移').run();
+  await remote.find(row=>row.label==='上移').run();
   context.listRows[0].title='Refreshed';context.renderList();
   assert.deepEqual(Array.from(context.sectionProjectOrder.sort(scope,['local|p','local|b','ssh|r'])),['local|b','ssh|r','local|p']);
   assert.deepEqual(Array.from(context.menuItems(group('local|p').children[0].children[1])),[],'The project create button does not open a menu');

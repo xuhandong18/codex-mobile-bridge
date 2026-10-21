@@ -15,7 +15,8 @@ class SidebarHttpTests(unittest.TestCase):
         test_bridge.HttpTests.setUp(self)
         self.calls=[]
         self.identifier=str(uuid.uuid4())
-        async def submit(value):
+        async def submit(value, preferences=None):
+            self.assertIs(preferences, self.server.sidebar_preferences)
             self.calls.append(value)
             return {'id':self.identifier,'status':'pending','message':'Waiting for native confirmation'}
         def operation(identifier):

@@ -34,6 +34,7 @@ from bridge.features.updates.mobile import MobileUpdates
 from bridge.clients.codex.ipc import IPCError
 from bridge.features.sessions.goal import GoalError
 from bridge.features.sessions.answer_drafts import AnswerDrafts
+from bridge.features.sessions.sidebar_preferences import SidebarPreferences
 from bridge.features.sessions.activity import query_activity
 from bridge.clients.codex.catalog import CatalogError
 from bridge.features.sessions.store import StoreUnavailable
@@ -67,6 +68,7 @@ class GatewayServer(ThreadingHTTPServer):
         if shared is None:
             self.bridge = bridge
             self.answer_drafts = AnswerDrafts(data_dir)
+            self.sidebar_preferences = SidebarPreferences(data_dir)
             self.notifications = None
             self.harness = Harness(data_dir) if data_dir else None
             self.desktop_sessions = DesktopSessions(data_dir, bridge, gateway_running=True) if data_dir else None
@@ -83,13 +85,14 @@ class GatewayServer(ThreadingHTTPServer):
         else:
             # Listeners serve one gateway: shared sessions, pairing, limits and
             # mutable tunnel origins, with a single notification manager.
-            for name in ('bridge', 'answer_drafts', 'harness', 'desktop_sessions', 'desktop_uploads', 'notifications', 'instance_id', 'auth', 'origins', 'pairing', 'hosts', 'secure_hosts', 'web_dir', 'slots', 'ui_language_path'):
+            for name in ('bridge', 'answer_drafts', 'sidebar_preferences', 'harness', 'desktop_sessions', 'desktop_uploads', 'notifications', 'instance_id', 'auth', 'origins', 'pairing', 'hosts', 'secure_hosts', 'web_dir', 'slots', 'ui_language_path'):
                 setattr(self, name, getattr(shared, name))
         try:
             super().__init__(address, Handler)
         except OSError:
             if shared is None:
                 self.answer_drafts.close()
+                self.sidebar_preferences.close()
                 if self.harness:
                     self.harness.close()
                 if self.desktop_sessions:
@@ -108,6 +111,7 @@ class GatewayServer(ThreadingHTTPServer):
             self.mobile_updates.close()
         if self.answer_drafts_owner:
             self.answer_drafts.close()
+            self.sidebar_preferences.close()
         super().server_close()
 
     def server_bind(self):
@@ -368,6 +372,11 @@ class Handler(BaseHTTPRequestHandler):
                     status, result = self.server.answer_drafts.save(self.read_json())
                     return self.output(status, result)
                 return self.output(200, self.server.answer_drafts.read(query.get('scope', [''])[0]))
+            if path == '/api/sidebar-preferences':
+                if write:
+                    status, result = self.server.sidebar_preferences.save(self.read_json())
+                    return self.output(status, result)
+                return self.output(200, self.server.sidebar_preferences.read())
             if path == SHELL_PATH:
                 if write or query:
                     return self.output(405, {'error': '请求方式无效'})
@@ -674,6 +683,7 @@ class Handler(BaseHTTPRequestHandler):
                                                   **({'ids': ids} if ids is not None else {}))
                     return self.output(200, {'sessions': rows, 'availableSources': available,
                                              'sidebar': self.server.bridge.hosts.sidebar() if host == 'local' else None,
+                                             'sidebarPreferences': self.server.sidebar_preferences.read() if host == 'local' else None,
                                              'unavailableHosts': target.host_errors,
                                              'remoteHosts': list(host_infos) if host == 'local' else [],
                                              'complete': not target.host_errors,
@@ -695,7 +705,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, self.server.bridge.project_registry.operation(query.get('id', [''])[0]))
             if write and path == '/api/sidebar-management':
                 import asyncio
-                return self.output(202, asyncio.run(self.server.bridge.sidebar_management.submit(self.read_json())))
+                return self.output(202, asyncio.run(self.server.bridge.sidebar_management.submit(self.read_json(), self.server.sidebar_preferences)))
             if not write and path == '/api/sidebar-operations':
                 return self.output(200, self.server.bridge.sidebar_management.operation(query.get('id', [''])[0]))
             if not write and path == '/api/project-directories':
