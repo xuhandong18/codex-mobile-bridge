@@ -20,7 +20,7 @@ test('message map opens from the rail, jumps from a summary without intercepting
   vm.runInContext(fs.readFileSync('web/features/chat/timeline.js','utf8')+'\nthis.MapView=ChatMessageMap;',context);
   const viewport=new Element();viewport.scrollTop=0;new Element().append(viewport);
   const row=(key,order,role='user')=>({row:{key,order,role,text:key}});
-  const timeline={viewport,rows:new Map([['b',row('b',2)],['reply',row('reply',3,'assistant')],['a',row('a',1)]]),nodes:new Map([['a',{node:new Element()}]]),capture:()=>({key:'a',offset:12}),loadOlder(){},following:true};
+  const timeline={viewport,rows:new Map([['context',{row:{key:'context',order:0,role:'user',isUserContext:true,text:'System context'}}],['b',row('b',2)],['reply',row('reply',3,'assistant')],['a',row('a',1)]]),nodes:new Map([['a',{node:new Element()}]]),capture:()=>({key:'a',offset:12}),loadOlder(){},following:true};
   const map=new context.MapView(timeline);
   assert.deepEqual(map.list.children.map(x=>x.dataset.key),['a','b']);
   map.rail.children[0].onclick();assert.equal(map.root.classList.contains('is-open'),true);assert.equal(timeline.following,true);

@@ -236,7 +236,7 @@ class MessageNavigation:
                 if not since:
                     raise
                 position, reset = 0, True
-            entries = [entry for entry in value['entries'] if entry.get('requestId') not in excluded]
+            entries = [entry for entry in value['entries'] if not entry.get('isUserContext') and entry.get('requestId') not in excluded]
             if position > len(entries):
                 position, reset = 0, True
             end = min(len(entries), position+max(1, min(200, limit)))

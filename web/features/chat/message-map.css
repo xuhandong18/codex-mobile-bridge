@@ -15,8 +15,5 @@
 .chat-message-map-status[hidden]{display:none!important}
 .timeline-later{display:block;min-height:44px;margin:12px auto}
 .timeline-later[hidden]{display:none}
-.message.user-context{padding:10px 12px;border:1px solid var(--line,#dee3d9);border-radius:8px}
-.message.user-context>summary.who{display:list-item;margin:0;cursor:pointer;min-height:24px;line-height:24px}
-.message.user-context[open]>summary{margin-bottom:12px}
 .chat-message-map button:is(:hover,:focus-visible,[aria-current]){background:#39745718;outline-offset:-2px}
 .chat-message-map button:is(:hover,:focus-visible,[aria-current]) i{opacity:1;width:16px}

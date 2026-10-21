@@ -51,7 +51,7 @@ class MessageIndexTests(unittest.TestCase):
         self.assertIsNotNone(result['after'])
         self.assertNotIn('large tool body',json.dumps(first))
 
-    def test_context_entries_stay_navigable_without_becoming_edit_targets(self):
+    def test_directory_contains_only_actual_requests_and_preserves_edit_targets(self):
         from bridge.features.sessions.model import normalize_state
         from bridge.features.sessions.timeline import Timeline
         contexts = [
@@ -63,14 +63,18 @@ class MessageIndexTests(unittest.TestCase):
         for text in contexts + ['Actual request']:
             self.write({'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':text}]}})
         directory = self.nav.page(self.thread)
-        self.assertEqual(directory['total'], 4)
-        self.assertEqual([item.get('isUserContext', False) for item in directory['items']], [True, True, True, False])
+        self.assertEqual(directory['total'], 1)
+        self.assertEqual([item['summary'] for item in directory['items']], ['Actual request'])
         for entry in directory['items']:
             window = self.nav.window(self.thread, around=entry['id'], limit=20)
             timeline = Timeline();timeline.update({**normalize_state(window['state']), 'sequence': 1})
             self.assertEqual([row['editable'] for row in timeline.rows], [False, False, False, True])
             target = next(row for row in timeline.rows if row.get('navigationId') == entry['id'])
             self.assertEqual(target.get('isUserContext', False), entry.get('isUserContext', False))
+        self.write({'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':contexts[-1]}]}})
+        delta = self.nav.page(self.thread, since=directory['tailCursor'])
+        self.assertEqual(delta['items'], [])
+        self.assertEqual(delta['total'], 1)
 
     def test_append_reuses_checkpoint_and_preserves_navigation_ids(self):
         self.turn(0)

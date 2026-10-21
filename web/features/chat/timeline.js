@@ -66,7 +66,7 @@ class ChatMessageMap {
   }
   update(){
     const timeline=this.timeline;
-    this.entries=timeline.directoryRows?timeline.directoryRows():[...timeline.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order).map((row,i)=>({rowKey:row.key,order:i,summary:messageSummary(row)}));
+    this.entries=timeline.directoryRows?timeline.directoryRows():[...timeline.rows.values()].map(value=>value.row).filter(row=>row.role==='user'&&!row.isUserContext).sort((a,b)=>a.order-b.order).map((row,i)=>({rowKey:row.key,order:i,summary:messageSummary(row)}));
     this.paint(this.rail,7);this.paint(this.list,44);
     this.directoryStatus.hidden=!timeline.indexBusy&&!timeline.indexError;
     this.directoryStatus.disabled=!!timeline.indexBusy;
@@ -120,10 +120,10 @@ class ChatTimeline {
   }
   dispose(){this.navigationRequest++;this.messageMap.dispose();this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;this.later.remove();}
   directoryRows(){
-    const entries=[...this.messageIndex.values()].sort((a,b)=>a.order-b.order).map(entry=>({...entry})),matched=new Set();
+    const entries=[...this.messageIndex.values()].filter(entry=>!entry.isUserContext).sort((a,b)=>a.order-b.order).map((entry,order)=>({...entry,order})),matched=new Set();
     const byId=new Map(entries.map(entry=>[entry.id,entry])),byKey=new Map(entries.map(entry=>[entry.rowKey,entry])),byText=new Map();
     for(const entry of entries){const key=JSON.stringify([entry.turnId,entry.summary]),list=byText.get(key)||[];list.push(entry);byText.set(key,list);}
-    const loaded=[...this.rows.values()].map(value=>value.row).filter(row=>row.role==='user').sort((a,b)=>a.order-b.order);
+    const loaded=[...this.rows.values()].map(value=>value.row).filter(row=>row.role==='user'&&!row.isUserContext).sort((a,b)=>a.order-b.order);
     for(const row of loaded){
       const summary=messageSummary(row),sameText=byText.get(JSON.stringify([row.turnId,summary]))||[];
       const candidate=byId.get(row.navigationId)||byKey.get(row.key)||(sameText.length===1?sameText[0]:null);
@@ -211,6 +211,7 @@ class ChatTimeline {
   nearTop(){const nodes=[...this.container.children].filter(n=>!n.hidden);return nodes.length>0&&nodes.slice(0,11).some(n=>n.getBoundingClientRect().bottom>=this.viewport.getBoundingClientRect().top);}
   capture(accept=()=>true){if(!this.viewport.clientHeight)return this.anchor;const top=this.viewport.getBoundingClientRect().top;const nodes=[...this.container.children].filter(n=>!n.hidden&&accept(n));const node=nodes.find(n=>n.getBoundingClientRect().bottom>top)||nodes[nodes.length-1];return node?{key:node.dataset.key,offset:node.getBoundingClientRect().top-top}:null;}
   rowVisible(row){
+    if(row.isUserContext)return false;
     if(row.role==='user'||row.role==='error')return true;
     if(row.kind==='reasoning')return this.showReasoning&&!!row.text?.trim();
     if(row.role==='activity'||row.phase==='commentary')return this.showProcess;
@@ -299,29 +300,22 @@ class ChatTimeline {
   }
   rowHeading(row){
     if(row.role==='activity')return (row.title||row.kind)+(row.status==='inProgress'?timelineText(' · 进行中'):'');
-    if(row.role==='user'&&row.isUserContext){
-      const text=(row.text||'').trimStart();
-      return timelineText(text.startsWith('# AGENTS.md instructions for ')?'项目说明':text.startsWith('<skill>')?'技能说明':text.startsWith('<subagent_notification>')?'子代理回报':text.startsWith('<environment_context>')?'环境信息':'系统上下文');
-    }
     return row.role==='user'?timelineText('你'):row.role==='error'?timelineText('执行错误'):['CODEX',row.model&&[row.model,row.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
   }
   renderRow(row,open){
-    const activity=row.role==='activity',context=row.role==='user'&&row.isUserContext,collapsible=activity||context;
-    const node=document.createElement(collapsible?'details':'div');
-    node.className=activity?'activity timeline-row':'message timeline-row '+row.role+(context?' user-context':'');
-    if(collapsible)node.open=!!open;
-    const heading=document.createElement(collapsible?'summary':'span');heading.className=activity?'':'who';
+    const activity=row.role==='activity',node=document.createElement(activity?'details':'div');
+    node.className=activity?'activity timeline-row':'message timeline-row '+row.role;
+    // Retain the row key for history cursors without rendering system context.
+    if(row.isUserContext)return node;
+    const heading=document.createElement(activity?'summary':'span');heading.className=activity?'':'who';
     heading.textContent=this.rowHeading(row);node.append(heading);
     const body=document.createElement(activity?'pre':'div');body.className=activity?'activity-body':'message-body';
     const more=document.createElement('button');more.className='plain detail-more';more.type='button';
     const cached=this.details.get(row.key);
     if(cached&&cached.version!==row.version)this.details.delete(row.key);
-    let painted=false;
     const paint=()=>{
-      if(context&&!node.open){painted=false;return;}
       const detail=this.details.get(row.key),text=detail?.text??row.text;
       body.replaceChildren();if(activity)body.textContent=text;else this.renderText(body,text,[...this.files.values()],()=>this.fullText(row));
-      painted=true;
       if(activity)body.hidden=!text;
       more.hidden=detail?detail.next===null:!row.truncated;
       more.textContent=detail?timelineText('继续加载正文'):timelineText('展开完整内容');
@@ -364,7 +358,7 @@ class ChatTimeline {
       attachment.textContent=timelineText('附件：')+row.attachments.map(a=>a.name||a.type).join('、');
       attachments.append(attachment);node.append(attachments);
     }
-    if(collapsible)node.ontoggle=()=>{if(!node.open)return;if(context&&!painted)paint();if(row.truncated&&!this.details.has(row.key))load();};
+    if(activity){node.open=!!open;node.ontoggle=()=>{if(node.open&&row.truncated&&!this.details.has(row.key))load();};}
     return node;
   }
   rowCursor(row){return (this.rows.get(row.key)?.epoch||this.epoch)+'.'+row.key;}
