@@ -76,7 +76,7 @@ npm run test:updater
 
 工作台标签滑动运行 `node scripts/test-workbench-swipe-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度检查 Codex/Harness 的输入区及工具页滑动、Git 变更／历史／分支内容区的内部切换与边界、Git 标题栏的外层切换、文件目录和预览、真实 PTY 与命令终端界面、草稿保留、原生输入优先和防误发送，并检查分屏中的 Git 内外层切换。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；终端使用合成 API，不连接真实客户端或启动进程。
 
-侧边聊天直接创建运行 `node scripts/test-side-chat-create-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度实际点击“＋ → 侧边聊天”，检查 Codex/Harness 自动创建后可直接发送、多标签独立、刷新恢复只读，以及创建失败、显式重试与回执丢失时不自动重发。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不启动真实客户端或模型。`node --test tests/workbench-side-chats.test.cjs` 另覆盖初始读取与创建回包的竞态及同一标签防止重复创建。
+侧边聊天直接创建运行 `node scripts/test-side-chat-create-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度实际点击“＋ → 侧边聊天”和“选区操作 → 新建侧边聊天”，检查 Codex/Harness 自动创建后可直接发送、选区完整保留且不自动发送、主聊天草稿保留、多标签独立、刷新恢复只读，以及创建失败、显式重试与回执丢失时不自动重发。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不启动真实客户端或模型。`node --test tests/workbench-side-chats.test.cjs tests/selection-targets.test.cjs` 另覆盖初始读取与创建回包的竞态、同一标签防止重复创建，以及取消、失效或超长选区不创建聊天。
 
 [浏览器夹具](browser/README.md) 位于 `tests/browser/*.browser.js`，依赖真实 DOM 或隔离服务，应由相应驱动调用。其中有些文件只定义测试函数，单独加载不会执行断言。本轮将它们与 Node 分开，避免虚增通过计数。
 

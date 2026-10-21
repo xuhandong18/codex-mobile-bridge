@@ -13,12 +13,12 @@ async function runSelectionTargetsBrowserTests(){
   await addMessage('First new side quote','new-sidechat');
   const first=session.files.find(tab=>tab.slot),panel=first.sideChat;
   check(!!first&&session.active===first.id,'New side quoting opens a distinct tab');
-  check(panel.input.value==='> First new side quote\n\n'&&!panel.state?.id,'The new side starts with a quote draft and waits for explicit creation');
-  await panel.create();check(!!panel.state?.id,'Explicit creation creates the first independent side chat');
+  await waitFor(()=>panel.state?.connected&&!panel.busy);
+  check(panel.input.value==='> First new side quote\n\n'&&panel.landing.hidden&&!panel.form.hidden&&!panel.sendButton.disabled,'Choosing a new side creates it directly and preserves the quote as a sendable draft');
   await addMessage('Second new side quote','new-sidechat');
   const second=session.files.find(tab=>tab.slot&&tab!==first),other=second.sideChat;
   check(first.slot!==second.slot&&panel.input.value.includes('First new'),'A second new side has its own slot and preserves the first draft');
-  await other.create();check(panel.state.id!==other.state.id,'The two side tabs connect to different runtime chats');
+  await waitFor(()=>other.state?.connected&&!other.busy);check(panel.state.id!==other.state.id,'The two side tabs connect to different runtime chats');
   await addMessage('Only the first side',first.id);
   check(panel.input.value.includes('Only the first side')&&!other.input.value.includes('Only the first side'),'Choosing an existing side modifies only that draft');
   await wb.preview(session,{name:'demo.js',path:'src/demo.js'});
@@ -27,7 +27,8 @@ async function runSelectionTargetsBrowserTests(){
   check(other.fileQuotes.rows.length===1&&panel.fileQuotes.rows.length===0&&wb.fileQuotes.rows.length===0,'A file excerpt routes to the selected second side as a compact tag');
   wb.select(file.id);select(wb.panel.querySelector('.wb-source-code code'));await wb.fileSelection.add(wb.fileSelection.capture());await choose('new-sidechat');
   const fromFile=session.files.find(tab=>tab.slot&&tab!==first&&tab!==second);
-  check(fromFile.sideChat.fileQuotes.rows.length===1&&fromFile.sideChat.input.value===''&&!fromFile.sideChat.state?.id,'A file selection can also open a new independent side draft without creating a runtime');
+  await waitFor(()=>fromFile.sideChat.state?.connected&&!fromFile.sideChat.busy);
+  check(fromFile.sideChat.fileQuotes.rows.length===1&&fromFile.sideChat.input.value===''&&fromFile.sideChat.landing.hidden,'A file selection also creates a new independent side chat with its compact quote');
   wb.select(second.id);
   const reply=document.createElement('div');reply.className='message-body';reply.textContent='Selected side reply';other.messages.append(reply);select(reply);other.selectionAction.update();
   check(!other.selectionButton.disabled,'A side message has its own explicit selection action');

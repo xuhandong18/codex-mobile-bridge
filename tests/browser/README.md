@@ -46,7 +46,7 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 
 `navigation-preferences.browser.js` 的 `runSelectionActionBrowserTests()` 检查选词后的滚动、当前输入框引用、侧边聊天草稿、活动正文选词，以及原生菜单消费选区凭证时的单次消费和会话隔离；只在合成聊天中执行。
 
-`selection-targets.browser.js` 的 `runSelectionTargetsBrowserTests()` 在独立合成网关执行，验证文件、主聊天和侧边聊天选区的目标选择、新侧边草稿、独立槽位与发送隔离；网关夹具须按 `slot` 分开保存侧边状态。不要在真实会话运行该发送夹具。
+`selection-targets.browser.js` 的 `runSelectionTargetsBrowserTests()` 由 `node scripts/test-side-chat-create-browser.cjs` 在独立合成网关执行，验证文件、主聊天和侧边聊天选区的目标选择、新侧边聊天直接创建并保留引用草稿、独立槽位与发送隔离；网关夹具须按 `slot` 分开保存侧边状态。不要在真实会话运行该发送夹具。
 
 `selection-popup.browser.js` 的 `runUnifiedSelectionPopupBrowserTests(gesture)` 使用各自隔离的合成侧边会话，检查主消息、侧边消息、文件三处主动引用后直接出现同一个目标框，并比较完整弹框 DOM。电脑通过右键触发，手机/平板通过显式按钮触发，触屏长按保留原生菜单；同时检查提醒设置入口已移至聊天详情。
 

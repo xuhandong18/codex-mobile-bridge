@@ -34,14 +34,16 @@ class ChatSelectionTargets {
       if(!isCurrent())return false;
       const latest=this.targets(session).find(row=>row.id===target.id&&row.quotes===target.quotes);
       if(!latest?.available())return false;
+      let newSide;
       if(latest.create){
         // Validate before opening a tab so an oversized quote leaves no empty tab.
         const empty={input:{value:'',maxLength:20000},rows:[],validate:FileQuoteDrafts.prototype.validate,text:FileQuoteDrafts.prototype.text};append(empty,false);
         const tab=wb.createSideChat(session,uuid());if(!tab)return false;
+        newSide=tab.sideChat;
         target=this.targets(session).find(row=>row.id===tab.id);
       }
       if(!append(target.quotes))return false;
-      this.close();window.getSelection()?.removeAllRanges();wb.closePreviewFullscreen();onAdded();target.focus();target.quotes.input.focus();return true;
+      this.close();window.getSelection()?.removeAllRanges();wb.closePreviewFullscreen();onAdded();target.focus();target.quotes.input.focus();newSide?.create();return true;
     };
     const targets=this.targets(session);if(targets.length===1){try{insert(targets[0]);}catch(error){wb.notify(error.message);}return;}
     wb.closePreviewFullscreen();

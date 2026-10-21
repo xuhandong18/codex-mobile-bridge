@@ -37,6 +37,8 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/clients')return json({clients:['codex','deepseek'].map(id=>({id,name:id,enabled:true,connected:true,configured:true,installed:true,running:true}))});
       if(p==='/api/accounts')return json({accounts:[],current:{kind:'api'}});
       if(p==='/api/sessions'||p==='/api/activity')return json({sessions:[row],complete:true});
+      if(p.endsWith('/workspace/preview'))return json({name:'demo.js',kind:'text',size:24,text:'const selected = true;\n'});
+      if(p.endsWith('/workspace'))return json({root:'/fixture',entries:[]});
       if(p.endsWith('/timeline')||p.endsWith('/updates')){
         if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,100));
         return json({epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{...row,connected:true,requests:[],turns:[],queue:[]}});
@@ -113,7 +115,36 @@ const server=http.createServer(async(req,res)=>{
         await page.evaluate(()=>creationPanel().load());await ready();
         check(createWrites().length===count+3,'回执丢失通过读取恢复，不自动重发');
       }
+      mode='success';
+      const beforeQuote=createWrites().length,beforeSend=writes.filter(write=>write.body.action==='send').length;
+      await page.evaluate(()=>{
+        const wb=creationWorkbench;wb.select('chat');wb.fileQuotes.input.value='保留主聊天草稿';
+        const body=document.createElement('div');body.className='message-body';body.style.whiteSpace='pre-wrap';body.textContent='选区中的第一行\n选区中的第二行';
+        const messages=wb===workbench?$('messages'):desktopSessions.messages;messages.append(body);
+        const range=document.createRange();range.selectNodeContents(body);getSelection().removeAllRanges();getSelection().addRange(range);
+        document.dispatchEvent(new Event('selectionchange'));
+        (wb===workbench?selectedTextAction:desktopSessions.selectionAction).update();
+      });
+      await page.getByRole('button',{name:'选区操作',exact:true}).filter({visible:true}).click();
+      await page.locator('.file-quote-target[open] [data-quote-target="new-sidechat"]').click();
+      check(await page.evaluate(()=>creationPanel()?.busy||!!creationPanel()?.state?.id),'选区操作选择新建后立即创建聊天');
+      await ready();
+      check(createWrites().length===beforeQuote+1,'选区操作只创建一次独立侧边聊天');
+      check(await page.evaluate(()=>creationPanel().landing.hidden&&!creationPanel().form.hidden&&!creationPanel().sendButton.disabled),'选区操作直接显示可以发送的输入区');
+      check(await page.evaluate(()=>creationPanel().input.value==='> 选区中的第一行\n> 选区中的第二行\n\n'),'直接创建后完整保留选中的多行文字');
+      check(await page.evaluate(()=>creationWorkbench.fileQuotes.input.value==='保留主聊天草稿'),'选区操作保留主聊天草稿');
+      check(writes.filter(write=>write.body.action==='send').length===beforeSend,'选区新建不会自动发送文字');
       results.push({width,height,provider,passed:checks.length});await context.close();
+      if(provider==='codex'){
+        states.clear();writes.length=0;
+        const quoteContext=await browser.newContext({viewport:{width,height}}),quotePage=await quoteContext.newPage();
+        quotePage.on('pageerror',error=>errors.push(error.message));
+        await quotePage.goto('http://127.0.0.1:'+server.address().port+'/#'+id+'~local');await quotePage.waitForFunction(()=>state?.connected);
+        await quotePage.addScriptTag({path:path.join(root,'tests/browser/selection-targets.browser.js')});
+        const quoteChecks=await quotePage.evaluate(()=>runSelectionTargetsBrowserTests());
+        assert.ok(quoteChecks.length>0);assert.equal(createWrites().length,3,'主聊天和文件选区各自只创建对应的新聊天');
+        results.push({width,height,provider,fixture:'selection-targets',passed:quoteChecks.length+1});await quoteContext.close();
+      }
     }
     assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:results.reduce((sum,result)=>sum+result.passed,0),results},null,2));
   }finally{await browser?.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
