@@ -36,7 +36,7 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 
 `sidebar-collapse.browser.js` 的 `runSidebarCollapseBrowserTests(mode)` 在 `codex` 和 `project` 显示方式下检查工具栏“⋯”菜单的“折叠所有”，覆盖分区及嵌套项目一起收起、刷新保留、单独重新展开，以及当前聊天、草稿和项目分页保留。驱动在电脑、手机和平板宽度分别调用，并检查整页刷新后仍折叠。
 
-`reference-picker.browser.js` 的 `runReferencePickerBrowserTests()` 使用合成技能、嵌套项目文件和分区会话，检查“＋”入口、三个类型标签、技能纯文本、文件完整路径、目录懒展开、搜索保留父目录、隐藏文件，以及会话搜索保留分区/项目结构。驱动需在电脑、手机、平板和手机横屏分别执行，校验发送正文包含三类引用且无独立 `skills` 字段；仅打开原合成聊天，选择会话引用不打开被引用聊天。目录搜索与读取边界由 `test_workspace.py` 验证。
+`reference-picker.browser.js` 的 `runReferencePickerBrowserTests()` 使用合成技能、嵌套项目文件和分区会话，检查“＋”入口、三个类型标签、技能纯文本、引用次数排序及后续分页常用技能前移、搜索顺序与分页不受次数影响、清空搜索恢复排序、文件完整路径、目录懒展开、搜索保留父目录、隐藏文件，以及会话搜索保留分区/项目结构。技能夹具需包含 `review-skill` 和 `skill-0` 至 `skill-219`，初始顺序与每页 200 项保持一致。驱动需在电脑、手机、平板和手机横屏分别执行，校验发送正文包含三类引用且无独立 `skills` 字段；仅打开原合成聊天，选择会话引用不打开被引用聊天。`node --test tests/reference-picker.test.cjs` 另覆盖本地记录恢复、次数相同的稳定顺序、主/侧弹窗共用记录、主机/客户端/中继隔离、存储异常、失败引用不计数及分页取消竞态。目录搜索与读取边界由 `test_workspace.py` 验证。
 
 `project-folder-browser.browser.js` 的 `runProjectFolderBrowserTests()` 使用合成的 `D:\Workspace` 目录和项目表单，检查文件夹弹窗、常用位置、面包屑、地址输入、搜索、空目录和错误状态。驱动提供 `window.projectFolderFixture`，在电脑、手机、平板和横屏尺寸实际调用；新建目录先返回处理中回执再经只读轮询完成，碰撞不覆盖，仅显式确认回填路径，不能调用原生项目创建或聊天写接口。`project-folder-browser.test.cjs` 另外覆盖未知回执、断线和旧请求，不自动重放创建。
 

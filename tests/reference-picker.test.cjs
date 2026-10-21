@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync('web/features/chat/reference-picker.js','utf8');
 const plain=value=>JSON.parse(JSON.stringify(value)),flush=()=>new Promise(setImmediate);
-function fixture(handler=async()=>({items:[],nextOffset:null})){
+function fixture(handler=async()=>({items:[],nextOffset:null}),{storage=new Map(),origin='http://gateway',relayBase=''}={}){
   const timers=new Map(),calls=[],events=[];let timer=0,target={key:'local|one',id:'one',host:'local',canSkills:true};
   class Element{
     constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.attributes={};this.value='';this.disabled=false;this.scrollTop=0;this.listeners={};this._text='';}
@@ -21,11 +21,12 @@ function fixture(handler=async()=>({items:[],nextOffset:null})){
   const document={body:new Element('body'),createElement:tag=>new Element(tag)},button=new Element('button'),input=new Element('textarea');
   input.maxLength=100000;
   const context=vm.createContext({document,BridgeI18n:{t:text=>text},AbortController,Event:class{constructor(type){this.type=type;}},
+    location:{origin},BridgeRelayBase:relayBase,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)},
     setTimeout:run=>{timers.set(++timer,run);return timer;},clearTimeout:id=>timers.delete(id)});
   vm.runInContext(source,context);
   const Picker=context.ChatReferencePicker,picker=new Picker({button,input,context:()=>target,
     load:async(kind,options)=>{calls.push({kind,...options});return handler(kind,options);}});
-  return {Picker,picker,button,input,document,calls,events,timers,setTarget:value=>target=value,
+  return {Picker,picker,button,input,document,calls,events,timers,storage,setTarget:value=>target=value,
     run:(code,globals={})=>{Object.assign(context,globals);return vm.runInContext(code,context);},
     async search(query){picker.search.value=query;picker.search.oninput();const run=[...timers.values()].at(-1);timers.clear();await run();},
     nodes:root=>[root,...root.children.flatMap(function all(node){return [node,...node.children.flatMap(all)];})]};
@@ -38,6 +39,84 @@ test('skill references insert editable text at the caret and leave no selected-s
   assert.equal(ui.input.value,'Before\n$code-review\nAfter');assert.equal(ui.picker.dialog.open,false);
   assert.equal(ui.document.activeElement,ui.input);assert.ok(ui.events.includes('input'));
   assert.equal(ui.picker.selectedSkills,undefined);
+});
+
+const skills=['a','b','c','d'].map(id=>({id,title:'Skill '+id,value:'$'+id}));
+const skillOrder=ui=>ui.picker.list.children.map(node=>node.dataset.referenceId);
+async function chooseSkill(ui,id){
+  await ui.picker.open();ui.nodes(ui.picker.list).find(node=>node.dataset.referenceId===id).onclick();
+}
+
+test('successful skill insertions rank by frequency, keep ties stable and survive a page rebuild',async()=>{
+  const load=async()=>({items:skills,nextOffset:null}),ui=fixture(load);
+  await chooseSkill(ui,'c');await chooseSkill(ui,'b');await chooseSkill(ui,'b');await chooseSkill(ui,'d');await ui.picker.open();
+  assert.deepEqual(skillOrder(ui),['b','c','d','a']);
+  assert.deepEqual(ui.picker.list.children.map(node=>node.children[0].textContent),['Skill b','Skill c','Skill d','Skill a']);
+  assert.deepEqual(plain(ui.picker.active.items.map(item=>item.id)),['a','b','c','d'],'Sorting must not mutate the catalog order');
+  const rebuilt=fixture(load,{storage:ui.storage});await rebuilt.picker.open();
+  assert.deepEqual(skillOrder(rebuilt),['b','c','d','a']);
+});
+
+test('usage never alters skill search filtering, order or pagination and clearing search restores frequency order',async()=>{
+  const ui=fixture(async(_kind,{query,offset})=>({items:query?(offset?[skills[3]]:[skills[0],skills[2]]):skills,nextOffset:query&&!offset?2:null}));
+  await chooseSkill(ui,'c');await chooseSkill(ui,'b');await chooseSkill(ui,'b');await ui.picker.open();
+  await ui.search('match');assert.deepEqual(skillOrder(ui),['a','c']);assert.equal(ui.picker.active.nextOffset,2);
+  assert.equal(ui.calls.filter(call=>call.query==='match').length,1);
+  await ui.picker.more.onclick();assert.deepEqual(skillOrder(ui),['a','c','d']);assert.equal(ui.calls.at(-1).offset,2);
+  await ui.search('');assert.deepEqual(skillOrder(ui),['b','c','a','d']);
+});
+
+test('previously referenced skills beyond page one move to the front without inserting cached catalog rows',async()=>{
+  const storage=new Map(),initial=fixture(async()=>({items:skills,nextOffset:null}),{storage});
+  await chooseSkill(initial,'d');
+  const ui=fixture(async(_kind,{offset})=>({items:offset?skills.slice(2):skills.slice(0,2),nextOffset:offset?null:2}),{storage});
+  await ui.picker.open();assert.deepEqual(skillOrder(ui),['d','a','b','c']);assert.deepEqual(ui.calls.map(call=>call.offset),[0,2]);
+  await ui.picker.refresh.onclick();assert.deepEqual(ui.calls.slice(-2).map(call=>call.refresh),[true,false]);
+  const removed=fixture(async()=>({items:skills.slice(0,2),nextOffset:null}),{storage});await removed.picker.open();
+  assert.deepEqual(skillOrder(removed),['a','b'],'A removed skill must not be restored from usage history');
+});
+
+test('reopening a cached picker finds a later-page skill used by another composer',async()=>{
+  const ui=fixture(async(_kind,{offset})=>({items:offset?skills.slice(2):skills.slice(0,2),nextOffset:offset?null:2}));
+  await ui.picker.open();assert.equal(ui.calls.length,1);ui.picker.close();
+  const peer=fixture(async()=>({items:skills,nextOffset:null}),{storage:ui.storage});await chooseSkill(peer,'d');
+  await ui.picker.open();assert.deepEqual(skillOrder(ui),['d','a','b','c']);assert.equal(ui.calls.at(-1).offset,2);
+});
+
+test('only successful skill references count while blocked, cancelled, stale and oversized selections do not',async()=>{
+  const ui=fixture(async()=>({items:[...skills,{id:'blocked',title:'Blocked',value:'$blocked',disabled:true}],nextOffset:null}));
+  await ui.picker.open();ui.picker.close();await ui.picker.open();
+  ui.picker.insert({id:'blocked',value:'$blocked',disabled:true});ui.input.maxLength=1;ui.picker.insert(skills[0]);
+  ui.input.maxLength=100000;ui.setTarget({key:'ssh|another',host:'ssh'});ui.picker.insert(skills[0]);assert.equal(ui.storage.size,0);
+  await ui.picker.open();await ui.picker.setTab('files');ui.picker.insert(skills[0]);
+  await ui.picker.open();await ui.picker.setTab('sessions');ui.picker.insert(skills[0]);assert.equal(ui.storage.size,0);
+  await ui.picker.open();await ui.picker.setTab('skills');ui.picker.insert(skills[1]);assert.equal(ui.storage.size,1);
+});
+
+test('frequency is shared across chats in one client and host while other hosts, clients and relay gateways stay independent',async()=>{
+  const load=async()=>({items:skills,nextOffset:null}),ui=fixture(load,{relayBase:'/relay/one'});await chooseSkill(ui,'d');
+  ui.setTarget({key:'local|two',host:'local'});await ui.picker.open();assert.deepEqual(skillOrder(ui),['d','a','b','c']);
+  for(const target of [{key:'ssh|one',host:'ssh'},{key:'deepseek|one',provider:'deepseek',host:'local'}]){
+    ui.setTarget(target);await ui.picker.open();assert.deepEqual(skillOrder(ui),['a','b','c','d']);
+  }
+  const otherGateway=fixture(load,{storage:ui.storage,relayBase:'/relay/two'});await otherGateway.picker.open();
+  assert.deepEqual(skillOrder(otherGateway),['a','b','c','d']);
+});
+
+test('unavailable, corrupt or full local storage does not block insertion or in-memory ranking',async()=>{
+  for(const failure of ['unavailable','corrupt','full','stale']){
+    const storage={get(){if(failure==='unavailable')throw Error('Denied');return failure==='corrupt'?'broken JSON':failure==='stale'?'[["a",1]]':null;},set(){throw Error('Storage full');}};
+    const ui=fixture(async()=>({items:skills,nextOffset:null}),{storage});await chooseSkill(ui,'d');await chooseSkill(ui,'d');await ui.picker.open();
+    assert.equal(ui.input.value,'$d\n$d\n');assert.deepEqual(skillOrder(ui),['d','a','b','c']);
+  }
+});
+
+test('a search cancels automatic page reads for previously used skills and rejects their late response',async()=>{
+  const storage=new Map(),initial=fixture(async()=>({items:skills,nextOffset:null}),{storage});await chooseSkill(initial,'d');
+  let release;const ui=fixture(async(_kind,{offset,query})=>query?{items:[skills[1]],nextOffset:null}:offset?new Promise(resolve=>release=resolve):{items:skills.slice(0,2),nextOffset:2},{storage});
+  const opening=ui.picker.open();await flush();assert.ok(release);await ui.search('b');
+  release({items:skills.slice(2),nextOffset:null});await opening;
+  assert.deepEqual(skillOrder(ui),['b']);assert.equal(ui.calls.find(call=>call.offset===2).signal.aborted,true);
 });
 
 test('files preserve a lazy directory tree and insert native Windows absolute paths',async()=>{
@@ -159,8 +238,8 @@ test('selection cannot exceed the composer limit or overwrite text changed durin
   ui.input.maxLength=100;ui.input.value='Edited';ui.picker.list.children[0].onclick();assert.equal(ui.input.value,'Edited\n/long/path\n');
 });
 
-function sideFixture(handler){
-  const ui=fixture(),reads=[];let visible=true;
+function sideFixture(handler,options){
+  const ui=fixture(undefined,options),reads=[];let visible=true;
   const Panel=ui.run(fs.readFileSync('web/features/workspace/side-chat.js','utf8')+'\nSideChatPanel;'),panel=Object.create(Panel.prototype);
   panel.session={id:'parent',host:'local',key:'local|parent',cwd:'D:\\parent'};panel.tab={id:'sidechat:slot',slot:'slot'};
   panel.state={id:'child',connected:true,cwd:'D:\\child'};
@@ -169,6 +248,16 @@ function sideFixture(handler){
   ui.picker.context=()=>panel.referenceContext();ui.picker.load=(kind,options)=>panel.loadReferences(kind,options);
   return {...ui,panel,reads,setVisible:value=>visible=value};
 }
+
+test('the main and actual side composer share skill frequency while keeping their drafts independent',async()=>{
+  const catalog=[{id:'first',name:'first'},{id:'review',name:'review'}];
+  const main=fixture(async()=>main.Picker.skillItems({skills:catalog,total:2}));
+  await chooseSkill(main,'review');await chooseSkill(main,'review');
+  const side=sideFixture(async()=>({skills:catalog,total:2}),{storage:main.storage});await side.picker.open();
+  assert.deepEqual(skillOrder(side),['review','first']);
+  await chooseSkill(side,'first');await chooseSkill(side,'first');await chooseSkill(side,'first');await main.picker.open();
+  assert.deepEqual(skillOrder(main),['first','review']);assert.equal(main.input.value,'$review\n$review\n');assert.equal(side.input.value,'$first\n$first\n$first\n');
+});
 
 test('a side plus picker reads its own child skills and inserts the same editable reference text as main',async()=>{
   const ui=sideFixture(async()=>({skills:[{id:'review',name:'review',displayName:'Review',description:'child skill'}],total:201,cache:{state:'stale'}}));

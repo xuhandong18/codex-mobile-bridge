@@ -14,6 +14,22 @@ async function runReferencePickerBrowserTests(){
   await waitFor(()=>!!row('review-skill'));row('review-skill').click();
   await waitFor(()=>!picker.dialog.open);
   check($('message').value.includes('$code-review'),'A skill inserts its dollar-prefixed name into the draft');
+  await picker.open();
+  const searchSkills=async query=>{
+    picker.search.value=query;picker.search.dispatchEvent(new Event('input',{bubbles:true}));
+    await waitFor(()=>picker.active.query===query&&!picker.loading&&picker.active.loaded);
+  };
+  await searchSkills('skill-219');row('skill-219').click();
+  await picker.open();row('skill-219').click();await picker.open();await searchSkills('');
+  check(all('.reference-item')[0]?.dataset.referenceId==='skill-219','The most frequently inserted skill moves ahead of the first catalog page');
+  check(all('.reference-item')[1]?.dataset.referenceId==='review-skill','A less frequently used skill follows the most used skill');
+  check(all('.reference-item').length===221,'A previously used later-page skill is read from the current catalog');
+  check(all('.reference-item')[0].querySelector('strong').textContent==='技能 219'&&all('.reference-item')[0].querySelector('small').textContent==='Fixture skill 219','The skill row displays no usage count');
+  await searchSkills('skill');
+  check(all('.reference-item').length===200&&all('.reference-item')[0]?.dataset.referenceId==='skill-0'&&!row('skill-219'),'Skill search keeps the original filter, order and first page');
+  await picker.more.onclick();
+  check(all('.reference-item').length===220&&all('.reference-item').at(-1)?.dataset.referenceId==='skill-219','Skill search pagination keeps a frequently used skill in its original position');
+  await searchSkills('');check(all('.reference-item')[0]?.dataset.referenceId==='skill-219','Clearing search restores frequency ordering');
   await picker.open();await picker.setTab('files');
   const folder=path=>picker.list.querySelector('details[data-reference-group="directory:'+path+'"]');
   check(!!folder('src')&&!row('directory:src/deep/index.js'),'The file picker starts with a lazy directory tree');

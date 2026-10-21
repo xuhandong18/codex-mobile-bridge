@@ -3,6 +3,7 @@
 // References are editable draft text. There is no separate selection payload.
 class ChatReferencePicker {
   static sequence=0;
+  static usage=new Map();
   constructor({button,input,context,load,onInsert=()=>{}}){
     Object.assign(this,{button,input,context,load,onInsert});
     this.states=new Map();this.tab='skills';this.revision=0;
@@ -31,6 +32,26 @@ class ChatReferencePicker {
         disabled:entry.kind==='blocked'||entry.kind==='file'&&!root};
     }),nextOffset:result.nextOffset??null,project:root||result.project,error:root?'':'当前会话未提供可访问的项目完整目录',
       notice:result.truncated?'项目较大，搜索结果未全部列出，请缩小搜索范围。':''};
+  }
+  skillUsage(){
+    const key='bridge-skill-reference-usage:'+JSON.stringify([globalThis.BridgeRelayBase||globalThis.location?.origin||'',this.target?.provider||'codex',this.target?.host||'local']);
+    const counts=ChatReferencePicker.usage.get(key)||new Map();
+    try{
+      const stored=localStorage.getItem(key),rows=stored===null?null:JSON.parse(stored);
+      if(Array.isArray(rows))for(const row of rows){
+        if(Array.isArray(row)&&row.length===2&&typeof row[0]==='string'&&Number.isSafeInteger(row[1])&&row[1]>0)counts.set(row[0],Math.max(counts.get(row[0])||0,row[1]));
+      }
+    }catch{}
+    ChatReferencePicker.usage.set(key,counts);return {key,counts};
+  }
+  rememberSkill(item){
+    if(this.tab!=='skills'||typeof item.id!=='string'||!item.id)return;
+    const {key,counts}=this.skillUsage();counts.set(item.id,Math.min(Number.MAX_SAFE_INTEGER,(counts.get(item.id)||0)+1));
+    try{localStorage.setItem(key,JSON.stringify([...counts]));}catch{}
+  }
+  missingSkills(state){
+    const missing=new Set(this.skillUsage().counts.keys());
+    for(const item of state.items)missing.delete(item.id);return missing;
   }
   t(text){return BridgeI18n.t(text);}
   node(tag,className='',text){
@@ -105,7 +126,10 @@ class ChatReferencePicker {
     if(!this.current()||!this.tabButtons.has(kind)||kind==='skills'&&this.target.canSkills===false)return;
     this.cancel();this.tab=kind;this.loading=false;this.search.value=this.active.query;
     this.relabel();this.list.scrollTop=0;
-    if(this.active.loaded){this.render();return;}
+    if(this.active.loaded){
+      if(kind==='skills'&&!this.active.query&&this.active.nextOffset!==null&&this.missingSkills(this.active).size)return this.loadPage({append:true});
+      this.render();return;
+    }
     return this.loadPage();
   }
   relabel(){
@@ -126,14 +150,22 @@ class ChatReferencePicker {
     if(!append){state.loaded=false;state.items=[];state.directories.clear();this.list.scrollTop=0;}
     this.render();
     try{
-      const offset=append?state.nextOffset||0:0;
-      const result=await this.load(kind,{target,query:state.query,offset,path:'',refresh,signal:controller.signal,hidden:!!state.hidden});
-      if(!this.current()||revision!==this.revision)return;
-      if(!Array.isArray(result?.items))throw Error(this.t('引用列表返回无效'));
-      const previous=append?state.items:[],known=new Set(previous.map(item=>item.id));
-      state.items=[...previous,...result.items.filter(item=>!known.has(item.id)&&known.add(item.id))];
-      state.nextOffset=Number.isInteger(result.nextOffset)&&result.nextOffset>offset?result.nextOffset:null;
-      state.project=result.project||'';state.notice=result.notice||'';state.error=result.error||'';state.loaded=true;
+      let offset=append?state.nextOffset||0:0;
+      const wanted=kind==='skills'&&!state.query?this.missingSkills(state):new Set();
+      for(;;){
+        const result=await this.load(kind,{target,query:state.query,offset,path:'',refresh:refresh&&offset===0,signal:controller.signal,hidden:!!state.hidden});
+        if(!this.current()||revision!==this.revision)return;
+        if(!Array.isArray(result?.items))throw Error(this.t('引用列表返回无效'));
+        const previous=state.items,known=new Set(previous.map(item=>item.id));
+        state.items=[...previous,...result.items.filter(item=>!known.has(item.id)&&known.add(item.id))];
+        state.nextOffset=Number.isInteger(result.nextOffset)&&result.nextOffset>offset?result.nextOffset:null;
+        state.project=result.project||'';state.notice=result.notice||'';state.error=result.error||'';state.loaded=true;
+        for(const item of state.items)wanted.delete(item.id);
+        // Locate previously used skills even when they fall outside the first page.
+        // Search keeps the original filtering, ordering and pagination.
+        if(!wanted.size||state.nextOffset===null||state.error||state.items.length===previous.length)break;
+        offset=state.nextOffset;
+      }
     }catch(error){if(this.current()&&revision===this.revision&&error.name!=='AbortError')state.error=error.message;}
     finally{if(this.current()&&revision===this.revision){this.loading=false;this.render();}}
   }
@@ -174,6 +206,9 @@ class ChatReferencePicker {
     this.refresh.disabled=this.loading;this.more.hidden=state.nextOffset===null;this.more.disabled=this.loading;
     this.list.setAttribute('aria-busy',String(this.loading));
     const items=[...state.items,...[...state.directories.values()].flatMap(directory=>directory.items)];
+    if(this.tab==='skills'&&!state.query){
+      const {counts}=this.skillUsage();items.sort((a,b)=>(counts.get(b.id)||0)-(counts.get(a.id)||0));
+    }
     const renderNode=(entry,parent)=>{
       if(entry.item){
         const item=entry.item,button=this.control('',()=>this.insert(item),'reference-item');delete button.dataset.i18n;
@@ -206,7 +241,7 @@ class ChatReferencePicker {
     const end=Math.min(value.length,same&&Number.isInteger(this.selection.end)?this.selection.end:start);
     const before=value.slice(0,start),after=value.slice(end),text=(before&&!/\s$/.test(before)?'\n':'')+item.value+(!after||!/^\s/.test(after)?'\n':'');
     if(this.input.maxLength>0&&before.length+text.length+after.length>this.input.maxLength){this.error.textContent=this.t('引用过长，已超出消息长度限制。');return;}
-    this.input.value=before+text+after;this.close();this.input.focus();this.input.setSelectionRange?.(before.length+text.length,before.length+text.length);
+    this.input.value=before+text+after;this.rememberSkill(item);this.close();this.input.focus();this.input.setSelectionRange?.(before.length+text.length,before.length+text.length);
     this.input.dispatchEvent(new Event('input',{bubbles:true}));this.onInsert();
   }
 }
