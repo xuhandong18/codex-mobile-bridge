@@ -307,7 +307,7 @@ class AppHosts:
                 'pinnedProjectIds': state.get('pinned-project-ids') or [],
                 'projectOrder': state.get('project-order') or []}
 
-    def decorate(self, rows, host, label, *, projectless_thread_ids=()):
+    def decorate(self, rows, host, label, *, projectless_thread_ids=(), created_project_keys=None):
         state = self.state()
         if host == 'local':
             projects = [{'id': p['id'], 'name': p['name'], 'roots': p.get('rootPaths', [])}
@@ -316,7 +316,9 @@ class AppHosts:
             projects = [{'id': p['id'], 'name': p.get('label') or p['remotePath'].rsplit('/', 1)[-1], 'roots': [p['remotePath']]}
                         for p in state.get('remote-projects', []) if p['hostId'] == host]
         assignments = state.get('thread-project-assignments', {})
-        projectless_ids = set(state.get('projectless-thread-ids', [])) | set(projectless_thread_ids)
+        native_projectless_ids = set(state.get('projectless-thread-ids', []))
+        projectless_ids = set(projectless_thread_ids)
+        created_project_keys = created_project_keys or {}
         def normalized(path):
             if host == 'local' and os.name == 'nt':
                 path = path.replace('\\', '/').casefold()
@@ -336,7 +338,15 @@ class AppHosts:
             project = next((p for p in projects if p['id'] == row.get('project_id')), None)
             if project is None:
                 project = next((p for p in projects if p['id'] == assigned.get('projectId') and assigned.get('hostId', host) == host), None)
-            independent = project is None and row['id'] in projectless_ids
+            independent = project is None and row['id'] in native_projectless_ids
+            if project is None and not independent:
+                # Shared roots cannot identify which project the user selected.
+                # Confirmed creation receipts preserve that choice, while later
+                # explicit desktop membership (including projectless) wins.
+                created_key = created_project_keys.get(row['id'])
+                project = next((p for p in projects if host + '|' + p['id'] == created_key), None)
+                independent = project is None and (created_key == host + '|independent'
+                                                    or row['id'] in projectless_ids)
             if project is None and not independent:
                 matches = [(len(normalized(root)), p) for p in projects for root in p['roots'] if cwd == normalized(root) or cwd.startswith(normalized(root) + '/')]
                 project = max(matches, key=lambda v: v[0])[1] if matches else None

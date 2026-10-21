@@ -171,6 +171,57 @@ class CreationTests(unittest.TestCase):
                     saved.assert_not_called()
             created.assert_called_once()
 
+    def test_selected_project_survives_overlapping_roots_and_gateway_restart(self):
+        request = str(uuid.uuid4())
+        saved_state = {'local-projects': {
+            'skills': {'id': 'skills', 'name': 'Skills',
+                       'rootPaths': [str(self.root / 'skills'), str(self.root)]},
+            'p': {'id': 'p', 'name': 'Selected', 'rootPaths': [str(self.root)]},
+        }}
+        self.bridge.hosts.state = lambda: saved_state
+        rows = []
+
+        def create(executable, home, cwd, title):
+            rows.append({'id': self.tid, 'cwd': cwd, 'project_id': None, 'origin': 'desktop'})
+            return self.tid
+
+        with patch('bridge.app.service.create_empty', side_effect=create) as created, \
+             patch('bridge.app.service.open_in_desktop'):
+            result = self.bridge.create_chat('local|p', 'Selected project', request)
+            self.assertEqual(rows[0]['cwd'], str(self.root))
+            for restarted in (False, True):
+                if restarted:
+                    self.bridge.close()
+                    self.bridge = Bridge(self.root, self.root/'data')
+                    self.bridge.hosts.state = lambda: saved_state
+                with self.subTest(restarted=restarted), \
+                     patch.object(self.bridge.store, 'list', side_effect=lambda **kwargs: [dict(row) for row in rows]), \
+                     patch.object(self.bridge, '_save_creations') as saved:
+                    row = next(row for row in self.bridge.list() if row['id'] == result['id'])
+                    self.assertEqual(row['projectKey'], 'local|p')
+                    self.assertEqual(row['projectName'], 'Selected')
+                    self.assertEqual(row['cwd'], str(self.root))
+                    saved.assert_not_called()
+            created.assert_called_once()
+
+    def test_creation_project_display_is_scoped_to_desktop_and_host(self):
+        self.bridge.hosts.state = lambda: {'local-projects': {
+            'other': {'id': 'other', 'name': 'Other', 'rootPaths': [str(self.root)]},
+            'p': {'id': 'p', 'name': 'Selected', 'rootPaths': [str(self.root)]},
+        }}
+        for kind, host, confirmed in (('desktop', 'local', True), ('cli', 'local', True),
+                                      ('desktop', 'remote', True), ('desktop', 'local', False)):
+            entry = {'project': 'local|p', 'kind': kind, 'host': host}
+            if confirmed:
+                entry['id'] = self.tid
+            self.bridge.creations = {'request': entry}
+            with self.subTest(kind=kind, host=host, confirmed=confirmed), \
+                 patch.object(self.bridge.store, 'list', side_effect=lambda **kwargs: [
+                     {'id': self.tid, 'cwd': str(self.root), 'project_id': None, 'origin': 'desktop'}]):
+                row = self.bridge.list()[0]
+                expected = 'local|p' if kind == 'desktop' and host == 'local' and confirmed else 'local|other'
+                self.assertEqual(row['projectKey'], expected)
+
     def test_independent_directory_failure_is_safe_to_retry(self):
         request = str(uuid.uuid4())
         with patch('bridge.features.sessions.create.Path.mkdir', side_effect=PermissionError('read only')):

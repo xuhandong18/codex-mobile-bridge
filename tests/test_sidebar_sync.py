@@ -56,6 +56,47 @@ class SidebarSyncTests(unittest.TestCase):
                                'origin': 'desktop'}], 'local', 'Local')[0]
         self.assertEqual(row['projectKey'], 'local|p')
 
+    def test_creation_choice_resolves_shared_roots_on_the_selected_host(self):
+        for host, cwd in (('local', r'\\?\D:\AI\project'), ('remote', '/project')):
+            state = {'local-projects': {
+                'a': {'id': 'a', 'name': 'Other', 'rootPaths': [r'D:\other', r'D:\AI\project']},
+                'b': {'id': 'b', 'name': 'Selected', 'rootPaths': [r'D:\AI\project']},
+            }, 'remote-projects': [
+                {'id': 'a', 'hostId': 'remote', 'label': 'Other', 'remotePath': '/project'},
+                {'id': 'b', 'hostId': 'remote', 'label': 'Selected', 'remotePath': '/project'},
+            ]}
+            with self.subTest(host=host), patch('bridge.clients.codex.remote.os.name', 'nt'):
+                row = self.hosts(state).decorate(
+                    [{'id': 'thread', 'cwd': cwd, 'project_id': None, 'origin': 'desktop'}], host, host,
+                    created_project_keys={'thread': host + '|b'})[0]
+                self.assertEqual(row['projectKey'], host + '|b')
+                self.assertEqual(row['projectName'], 'Selected')
+                self.assertEqual(row['cwd'], cwd)
+
+    def test_explicit_desktop_changes_override_creation_project_choice(self):
+        for metadata, assignment, projectless, expected in (
+                ({'project_id': 'b'}, {}, [], 'local|b'),
+                ({'project_id': None}, {'thread': {'projectId': 'b'}}, [], 'local|b'),
+                ({'project_id': None}, {}, ['thread'], 'local|independent')):
+            state = {'local-projects': {
+                'a': {'id': 'a', 'name': 'Created', 'rootPaths': ['/a']},
+                'b': {'id': 'b', 'name': 'Moved', 'rootPaths': ['/b']},
+            }, 'thread-project-assignments': assignment, 'projectless-thread-ids': projectless}
+            with self.subTest(expected=expected, metadata=metadata, assignment=assignment):
+                row = self.hosts(state).decorate(
+                    [{'id': 'thread', 'cwd': '/a', 'origin': 'desktop', **metadata}], 'local', 'Local',
+                    created_project_keys={'thread': 'local|a'})[0]
+                self.assertEqual(row['projectKey'], expected)
+
+    def test_unavailable_or_other_host_creation_project_keeps_directory_fallback(self):
+        hosts = self.hosts({'local-projects': {
+            'p': {'id': 'p', 'name': 'Local', 'rootPaths': ['/project']}}})
+        for key in ('local|removed', 'remote|p', 'remote|independent'):
+            with self.subTest(key=key):
+                row = hosts.decorate([{'id': 'thread', 'cwd': '/project', 'origin': 'desktop'}],
+                                     'local', 'Local', created_project_keys={'thread': key})[0]
+                self.assertEqual(row['projectKey'], 'local|p')
+
     def test_explicit_projectless_chat_does_not_rejoin_project_by_directory(self):
         hosts = self.hosts({'local-projects': {
             'p': {'id': 'p', 'name': 'Project', 'rootPaths': ['/project']}},

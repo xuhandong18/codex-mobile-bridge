@@ -1047,14 +1047,14 @@ class Bridge:
                 available = bridge.store.available_sources() if include_sources else []
                 rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source,
                                          **({'ids': ids} if ids is not None else {}))
-                # Gateway data may live inside a saved project. Preserve the
-                # explicit projectless choice before inferring membership by cwd;
-                # native project IDs and assignments still take precedence.
-                projectless_ids = {entry['id'] for entry in self.creations.copy().values()
-                                   if entry.get('id') and entry.get('project') == 'local|independent'
-                                   and entry.get('kind', 'desktop') == 'desktop'
-                                   and entry.get('host') == bridge.host == 'local'}
-                rows = self.hosts.decorate(rows, bridge.host, label, projectless_thread_ids=projectless_ids)
+                # Multiple saved projects can contain the same directory. Keep
+                # the confirmed creation choice ahead of cwd inference, without
+                # overriding subsequent explicit desktop membership changes.
+                created_projects = {entry['id']: entry['project'] for entry in self.creations.copy().values()
+                                    if entry.get('id') and isinstance(entry.get('project'), str)
+                                    and entry.get('kind', 'desktop') == 'desktop'
+                                    and entry.get('host') == bridge.host}
+                rows = self.hosts.decorate(rows, bridge.host, label, created_project_keys=created_projects)
                 with bridge.lock:
                     bridge.listed.update(row['id'] for row in rows)
                     for row in rows:
