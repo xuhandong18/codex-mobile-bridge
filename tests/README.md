@@ -66,6 +66,8 @@ npm run test:updater
 
 原桌面重建状态订阅后的完成同步由 `test_codex_ipc_following.py` 与 `test_bridge.py` 覆盖：经真实长度前缀帧恢复仍有效的订阅，检查聊天/主机/owner、取消与断连边界，并用隔离命名管道复现“桌面空闲、网关仍运行中”后确认状态变为空闲、下一条普通消息只发送一次且沿用原 owner。夹具不连接真实聊天。
 
+历史聊天自动连接运行 `node --test tests/chat-opening-ui.test.cjs tests/cli-access-ui.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p test_bridge.py`，覆盖历史与重连并行、CLI 被动阅读不激活、模型目录不重复等待 owner、正文未加载时沿用已核验的 cwd/provider，以及连接分阶段耗时日志。真实 DOM 驱动为 `node scripts/test-chat-opening-browser.cjs`，使用已有 Playwright/Chromium，在 390、820、1280 像素下实际阻塞合成重连接口，确认历史先显示、连接前不预读模型，以及连接后即使模型查询仍被阻塞也能继续输入且保留草稿；不操作真实客户端。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
+
 宿主与宽窄布局变更可先运行 `node --test tests/host-environment.test.cjs tests/layouts.test.cjs tests/frontend-assets.test.cjs mobile/tests/resources.test.cjs`。这些检查覆盖宿主识别与晚注入、容器分屏边界、样式顺序和原生资源清单，不启动或编译手机 App。布局的真实渲染和窗口变化后状态保留仍需浏览器夹具验证。
 
 工作台标签滑动运行 `node scripts/test-workbench-swipe-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度检查 Codex/Harness 的输入区及工具页滑动、Git 变更／历史／分支内容区的内部切换与边界、Git 标题栏的外层切换、文件目录和预览、真实 PTY 与命令终端界面、草稿保留、原生输入优先和防误发送，并检查分屏中的 Git 内外层切换。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；终端使用合成 API，不连接真实客户端或启动进程。

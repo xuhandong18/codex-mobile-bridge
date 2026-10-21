@@ -358,6 +358,49 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(session.view()['turns'][0]['id'], 'old')
         self.assertTrue(session.connected)
 
+    def test_catalog_does_not_repeat_or_wait_for_pending_owner_probe(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        entered, release = threading.Event(), threading.Event()
+        attempts = []
+        def slow_attach(*args):
+            attempts.append(args)
+            entered.set()
+            release.wait(3)
+        self.bridge.store.history = lambda tid, **kwargs: {**state(), 'cwd': '/workspace'}
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            with patch.object(self.bridge, '_attach', side_effect=slow_attach), \
+                    patch.object(self.bridge.catalog_reader, 'get_kind', return_value={'models': []}) as read:
+                session = self.bridge.session(THREAD, background=True)
+                self.assertTrue(entered.wait(1))
+                result = pool.submit(self.bridge.catalog, THREAD, kind='models')
+                try:
+                    value = result.result(timeout=.5)
+                    self.assertEqual(value['kind'], 'models')
+                    self.assertEqual(len(attempts), 1)
+                    self.assertEqual(read.call_args.args[:2], ('models', '/workspace'))
+                finally:
+                    release.set()
+                    result.result(timeout=3)
+                    with session.condition:
+                        session.condition.wait_for(lambda: not session.connecting, timeout=3)
+        finally:
+            release.set()
+            pool.shutdown(wait=True)
+
+    def test_catalog_before_history_uses_verified_saved_cwd_and_provider(self):
+        from unittest.mock import patch
+        metadata = {**self.bridge.store.get(THREAD), 'model_provider': 'saved-provider'}
+        with patch.object(self.bridge.store, 'get', return_value=metadata), \
+                patch.object(self.bridge, '_attach', side_effect=AssertionError('must not probe owner')), \
+                patch.object(self.bridge.store, 'history', side_effect=AssertionError('must not load history')), \
+                patch.object(self.bridge.catalog_reader, 'get_kind', return_value={'models': []}) as read:
+            result = self.bridge.catalog(THREAD, kind='models')
+        self.assertEqual(result['kind'], 'models')
+        self.assertEqual(read.call_args.args[:2], ('models', '/workspace'))
+        self.assertEqual(read.call_args.kwargs['provider'], 'saved-provider')
+
     def test_cold_read_never_opens_desktop_and_late_snapshot_can_connect(self):
         from unittest.mock import patch
         self.fixture.loaded = False
@@ -379,7 +422,13 @@ class IntegrationTests(unittest.TestCase):
         self.fixture.loaded = False
         self.bridge.store.history = lambda tid, **kwargs: state()
         with patch('bridge.app.service.open_in_desktop', side_effect=lambda *args: setattr(self.fixture, 'loaded', True)) as opened:
-            session = self.bridge.activate(THREAD)
+            with self.assertLogs('bridge.app.service', level='INFO') as logs:
+                session = self.bridge.activate(THREAD)
+            timing = next(line for line in logs.output if 'Codex activation timing' in line)
+            self.assertIn('connected=True', timing)
+            for stage in ('prepare_ms', 'owner_ms', 'open_ms', 'snapshot_ms', 'runtime_ms', 'elapsed_ms'):
+                self.assertRegex(timing, stage + r'=\d+\.\d')
+            self.assertNotIn('custom-api', timing)
             self.assertTrue(session.connected)
             opened.assert_called_once_with(THREAD, 'local')
             self.bridge.activate(THREAD)

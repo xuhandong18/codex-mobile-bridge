@@ -1494,10 +1494,13 @@ class Bridge:
     @operation
     def activate(self, thread_id):
         """Explicit phone operation only; reads and notification watches never navigate."""
+        started = time.monotonic()
         session = self.session(thread_id, background=True)
         with session.activation_lock:
             if session.connected:
                 return session
+            prepare_ms = (time.monotonic() - started) * 1000
+            phase, phase_started, timings = 'owner', time.monotonic(), {}
             with session.condition:
                 session.activating = True
                 session.changed()
@@ -1512,6 +1515,8 @@ class Bridge:
                             lambda: not session.owner_probe_inflight or session.connected or self.closed.is_set())
                 else:
                     self._attach(session)
+                timings['owner'] = (time.monotonic() - phase_started) * 1000
+                phase, phase_started = 'prepare', time.monotonic()
                 if session.connected:
                     return session
                 if session.origin == 'cli' and session.desktop_owner_probe != 'absent':
@@ -1519,6 +1524,7 @@ class Bridge:
                 if self.closed.is_set():
                     raise IPCError('网关正在停止；操作未发送，请稍后重试。')
                 if session.origin == 'cli':
+                    phase, phase_started = 'runtime', time.monotonic()
                     with session.attach_lock:
                         with session.condition:
                             if session.connected:
@@ -1541,10 +1547,13 @@ class Bridge:
                 if session.last_activation is not None and time.monotonic() - session.last_activation < 20:
                     raise IPCError(session.error or '桌面仍在加载此聊天；操作未发送，请稍后重试。')
                 session.last_activation = time.monotonic()
+                phase, phase_started = 'open', time.monotonic()
                 try:
                     open_in_desktop(session.id, self.host)
                 except (OSError, CreationError, subprocess.SubprocessError) as exc:
                     raise IPCError('无法在电脑 Codex 中加载此聊天；操作未发送，请检查 Codex 是否已安装并运行。') from exc
+                timings['open'] = (time.monotonic() - phase_started) * 1000
+                phase, phase_started = 'snapshot', time.monotonic()
                 deadline = time.monotonic() + 20
                 while not session.connected and not self.closed.is_set() and time.monotonic() < deadline:
                     self._attach(session, timeout=.75)
@@ -1558,9 +1567,16 @@ class Bridge:
                     session.error = str(exc)
                 raise
             finally:
+                timings[phase] = (time.monotonic() - phase_started) * 1000
                 with session.condition:
                     session.activating = False
                     session.changed()
+                logging.getLogger(__name__).info(
+                    'Codex activation timing thread=%s host=%s connected=%s prepare_ms=%.1f '
+                    'owner_ms=%.1f open_ms=%.1f snapshot_ms=%.1f runtime_ms=%.1f elapsed_ms=%.1f',
+                    session.id, self.host, session.connected, prepare_ms, timings.get('owner', 0),
+                    timings.get('open', 0), timings.get('snapshot', 0), timings.get('runtime', 0),
+                    (time.monotonic() - started) * 1000)
 
     def _event(self, message):
         if message.get("method") == "client-status-changed":
@@ -2166,18 +2182,22 @@ class Bridge:
         return result
 
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
+        # Use the current snapshot or verified saved metadata. Catalog reads
+        # must not start another owner probe or wait for history hydration.
         session = self.session(thread_id, attach=False, background=True)
-        if session.origin != 'cli':
-            session = self.session(thread_id)
         with session.condition:
             state = session.state or {}
             native = session.origin == 'cli' and session.runtime == 'cli' and session.connected
             if session.origin == 'cli' and not session.connected:
                 raise ValueError('请先继续此会话，再读取模型或 Skill')
-            cwd = state.get("cwd") if session.origin != 'cli' else state.get("cwd") or session.saved_cwd
+            cwd = state.get("cwd")
+            if session.origin == 'cli' or not session.connected:
+                cwd = cwd or session.saved_cwd
             model = state.get("latestModel")
             effort = state.get("latestReasoningEffort") or (state.get("latestThreadSettings") or {}).get("effort")
             provider = session.view().get('provider')
+            if not session.connected:
+                provider = provider or session.saved_provider
         if native:
             if kind in ('models', 'skills'):
                 value = self.cli_sessions.get_kind(thread_id, kind, refresh=refresh, query=query,

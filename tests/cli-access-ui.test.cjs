@@ -101,6 +101,16 @@ test('history-only CLI hides join and write controls but keeps history and copy 
   assert.equal($('reconnect').hidden,true);assert.equal($('send').disabled,true);assert.equal($('message').disabled,true);assert.equal($('stop').hidden,true);assert.equal($('permissions-button').disabled,true);assert.equal($('rename-chat').disabled,true);assert.equal($('work-mode').disabled,true);assert.equal(ctx.approvals.length,0);
   assert.match($('notice-text').textContent,/CLI/);
 });
+test('desktop model prefetch waits for a live owner and runs once after connection',()=>{
+  const {ctx}=fixture();
+  const view={host:'local',title:'Saved chat',connected:false,activating:true,status:'idle',requests:[],submissions:[],historyComplete:true};
+  ctx.renderState(view);
+  ctx.renderState({...view,activating:false,connecting:true});
+  assert.equal(ctx.catalogLoads,0,'保存历史和连接等待不能触发模型目录的重复订阅');
+  ctx.renderState({...view,activating:false,connected:true});
+  ctx.renderState({...view,activating:false,connected:true});
+  assert.equal(ctx.catalogLoads,1);
+});
 test('joinable CLI presents an explicit join without enabling unsupported controls',()=>{
   const {ctx,$}=fixture();const joinable={...cli,canReconnect:true};ctx.renderState({host:'local',title:'CLI thread',cwd:'/work',access:joinable,connected:false,status:'idle',requests:[],submissions:[],historyComplete:true});
   assert.equal($('reconnect').hidden,false);assert.equal($('reconnect').textContent,'Continue chat');assert.equal($('send').disabled,true);

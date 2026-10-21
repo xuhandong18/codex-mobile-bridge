@@ -837,7 +837,6 @@ async function openChat(id,host="local"){if(messageActions.pending&&messageActio
   reconnectFailure=null;
   window.BridgePresentation?.openChat();
   sessionActivity.read(chatKey(id,host),{explicit:true,sync:false});renderActivity();
-  if(currentAccess().source==='desktop'&&currentAccess().canChangeModel){catalogStarted=true;startCatalog();}
   const reading=timeline.start();
   const openingAccess=sessionAccess(listRows.find(row=>row.id===id&&row.host===host)?.access);
   if(openingAccess.source==='desktop'&&openingAccess.canReconnect)api(sessionUrl(id,'reconnect',host),{activate:true},timeline.abort.signal).catch(error=>{if(!timeline.abort.signal.aborted)toast(error.message);});
@@ -948,7 +947,7 @@ function renderState(view){
   $('model-button').disabled=limited&&!access.canChangeModel;
   $('skills-button').disabled=sending||!access.canSend;
   $('rename-chat').disabled=limited&&!access.canConfigure;
-  if(!catalogStarted&&access.canChangeModel){catalogStarted=true;startCatalog();}
+  if(!catalogStarted&&view.connected&&access.canChangeModel){catalogStarted=true;startCatalog();}
   $('send-mode').disabled=limited&&!access.canSend;
   $('send-mode').querySelector('[value=steer]').disabled=view.status!=='active'||!access.canSend;
   if((view.status!=='active'||!access.canSend)&&$('send-mode').value==='steer')$('send-mode').value='send';
