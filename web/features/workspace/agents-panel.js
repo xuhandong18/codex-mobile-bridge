@@ -3,7 +3,12 @@
 class AgentsPanel {
   constructor(workbench,session,tab){Object.assign(this,{workbench,session,tab});this.node=(...a)=>workbench.node(...a);this.button=(...a)=>workbench.button(...a);this.windowState={};
     this.visibilityObserver=new MutationObserver(()=>this.applyVisibility());this.visibilityObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-show-reasoning','data-show-process']});this.load();}
-  applyVisibility(){for(const {node,message} of this.messageNodes||[])node.hidden=!SideChatPanel.messageVisible(message);}
+  applyVisibility(){for(const {node,message} of this.messageNodes||[])node.hidden=!SideChatPanel.messageVisible(message);this.groupMessages();}
+  groupMessages(){
+    if(!this.messageNodes)return;
+    this.messageGroups??=new ChatMessageGroups(this.recordBody,(...args)=>this.node(...args));
+    this.messageGroups.render(this.messageNodes,{showProcess:document.documentElement.dataset.showProcess!=='false'});
+  }
   url(id=''){return this.session.provider==='deepseek'?'/api/desktop-sessions/deepseek/subagents?sessionId='+encodeURIComponent(this.session.id)+(id?'&childId='+encodeURIComponent(id):''):'/api/sessions/'+this.session.id+'/subagents?host='+encodeURIComponent(this.session.host)+(id?'&id='+encodeURIComponent(id):'');}
   async load(){
     this.controller?.abort();const controller=this.controller=new AbortController();
@@ -31,7 +36,7 @@ class AgentsPanel {
   }
   schedule(){clearTimeout(this.timer);if(!this.disposed)this.timer=setTimeout(()=>{if(this.workbench.isVisible(this.session,this.tab)&&!document.hidden)this.load();else this.schedule();},10000);}
   show(agent){
-    this.window?.destroy();this.detailController?.abort();this.selected=agent;this.detailStamp=null;
+    this.window?.destroy();this.detailController?.abort();this.selected=agent;this.detailStamp=null;this.messageGroups=null;
     this.detail=this.node('div','wb-agent-detail');this.detail.textContent=BridgeI18n.t('正在读取任务记录…');
     this.window=new FloatingPanel({host:this.tab.body,content:this.detail,title:agent.nickname||agent.title,state:this.windowState,node:this.node,button:this.button,close:()=>{this.detailController?.abort();this.selected=null;this.window=null;}});this.readDetail();
   }
@@ -40,19 +45,24 @@ class AgentsPanel {
     try{
       const result=await this.workbench.request(this.url(agent.id),undefined,controller.signal);if(controller.signal.aborted)return;
       const stamp=JSON.stringify(result);if(stamp===this.detailStamp)return;this.detailStamp=stamp;
-      const scroll=this.detail.scrollTop,follow=this.detail.scrollHeight-this.detail.clientHeight-scroll<60;this.detail.replaceChildren();this.messageNodes=[];
+      const scroll=this.detail.scrollTop,follow=this.detail.scrollHeight-this.detail.clientHeight-scroll<60;
+      const expanded=new Map((this.messageNodes||[]).map(({key,node})=>[key,node.querySelector('details')?.open]));
+      this.detail.replaceChildren();this.messageNodes=[];
       const latest=result.turns.at(-1),labels={inProgress:BridgeI18n.t('最近记录：运行中（非实时确认）'),completed:BridgeI18n.t('最近记录：已完成'),interrupted:BridgeI18n.t('最近记录：已中断'),failed:BridgeI18n.t('最近记录：失败')};
       this.detail.append(this.node('p','wb-status',labels[latest?.status]||BridgeI18n.t('尚无任务状态记录')));
       if(!result.historyComplete)this.detail.append(this.node('p','wb-status',BridgeI18n.t('仅展示最近 10 轮记录。')));
-      for(const turn of result.turns)for(const message of turn.messages){
+      this.recordBody??=this.node('div','wb-agent-records');this.detail.append(this.recordBody);
+      for(const [turnIndex,turn] of result.turns.entries())for(const [index,message] of turn.messages.entries()){
+        const turnId=turn.turnId||turn.id||String(turnIndex),key=JSON.stringify([agent.id,turnId,message.id||index]);
         const body=this.node('div','wb-agent-message');
-        if(message.role==='assistant'||message.role==='user'){
-          body.append(this.node('small','',message.role==='user'?BridgeI18n.t('任务输入'):BridgeI18n.t('回复')));const text=this.node('div','message-body');renderMarkdown(text,message.text||'',[],()=> '');body.append(text);
+        if(['assistant','user','error'].includes(message.role)){
+          body.append(this.node('small','',message.role==='user'?BridgeI18n.t('任务输入'):message.role==='error'?BridgeI18n.t('执行错误'):BridgeI18n.t('回复')));const text=this.node('div','message-body');renderMarkdown(text,message.text||'',[],()=> '');body.append(text);
         }else{
-          const details=this.node('details');details.append(this.node('summary','',message.name||message.kind||BridgeI18n.t('工具记录')),this.node('pre','',message.output||message.text||''));body.append(details);
+          const details=this.node('details');details.open=!!expanded.get(key);details.append(this.node('summary','',message.title||message.name||message.kind||BridgeI18n.t('工具记录')),this.node('pre','',message.output||message.text||''));body.append(details);
         }
-        body.hidden=!SideChatPanel.messageVisible(message);this.messageNodes.push({node:body,message});this.detail.append(body);
+        body.hidden=!SideChatPanel.messageVisible(message);this.messageNodes.push({node:body,message,key,turnId,turnStatus:turn.status});
       }
+      this.groupMessages();
       if(!result.turns.length)this.detail.append(this.node('p','wb-empty',BridgeI18n.t('任务尚未写入聊天记录。')));
       this.detail.scrollTop=follow?this.detail.scrollHeight:scroll;
     }catch(e){if(!controller.signal.aborted)this.detail.textContent=BridgeI18n.t(e.message);}

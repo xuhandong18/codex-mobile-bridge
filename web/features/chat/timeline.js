@@ -224,21 +224,22 @@ class ChatTimeline {
     if(row.isUserContext)return false;
     if(row.role==='user'||row.role==='error')return true;
     if(row.kind==='reasoning')return this.showReasoning&&!!row.text?.trim();
-    if(row.role==='activity'||row.phase==='commentary')return this.showProcess;
+    if(row.role==='activity')return this.showProcess;
     return true;
   }
   setVisibility({showReasoning,showProcess}){
     if(this.showReasoning===showReasoning&&this.showProcess===showProcess)return;
     this.showReasoning=showReasoning;this.showProcess=showProcess;
-    const anchor=this.capture(node=>this.rowVisible(this.rows.get(node.dataset.key).row)),bottom=this.following;
+    const anchor=this.capture(),bottom=this.following;
     for(const [key,{node}] of this.nodes)node.hidden=!this.rowVisible(this.rows.get(key).row);
+    this.groupRows();
     this.restore(anchor,bottom);this.fillRecent();
   }
   jumpBottom(){this.viewport.scrollTop=this.viewport.scrollHeight;this.following=true;this.newer.hidden=true;}
   restore(anchor,bottom=false){
     if(this.abort.signal.aborted||!this.viewport.clientHeight)return;
     this.suppress=true;
-    const node=anchor&&this.nodes.get(anchor.key)?.node;
+    const node=anchor&&(this.nodes.get(anchor.key)?.node||this.messageGroups?.get(anchor.key));
     if(bottom)this.jumpBottom();
     else if(node&&!node.hidden)this.viewport.scrollTop+=node.getBoundingClientRect().top-this.viewport.getBoundingClientRect().top-anchor.offset;
     this.lastTop=this.viewport.scrollTop;
@@ -300,8 +301,7 @@ class ChatTimeline {
       this.nodes.set(row.key,{node,stamp});
     }
     const ordered=[...this.rows.values()].map(x=>x.row).sort((a,b)=>a.order-b.order);
-    let position=this.container.firstChild;
-    for(const row of ordered){const node=this.nodes.get(row.key).node;if(node===position)position=position.nextSibling;else this.container.insertBefore(node,position);}
+    this.groupRows(ordered);
     if(reset||history){this.before=page.before;this.hasMore=page.hasMore;this.after=page.after||null;this.windowRevision++;}
     this.refreshActions();this.historyStatus();this.restore(anchor,bottom);
     this.messageMap.update();
@@ -312,6 +312,10 @@ class ChatTimeline {
     if(row.role==='activity')return (row.title||row.kind)+(row.status==='inProgress'?timelineText(' · 进行中'):'');
     if(row.kind==='threadMessage')return timelineText('其他主聊天');
     return row.role==='user'?timelineText('你'):row.role==='error'?timelineText('执行错误'):['CODEX',row.model&&[row.model,row.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+  }
+  groupRows(ordered=[...this.rows.values()].map(value=>value.row).sort((a,b)=>a.order-b.order)){
+    this.messageGroups??=new ChatMessageGroups(this.container);
+    this.messageGroups.render(ordered.map(row=>({key:row.key,node:this.nodes.get(row.key).node,message:row,turnId:row.turnId,turnStatus:row.turnStatus})),{showProcess:this.showProcess});
   }
   renderRow(row,open){
     const activity=row.role==='activity',node=document.createElement(activity?'details':'div');

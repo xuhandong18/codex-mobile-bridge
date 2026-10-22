@@ -24,7 +24,7 @@
   "/message-actions.js": "features/chat/message-actions.js",
   "/modes.js": ["features/chat/composer-drafts.js", "features/chat/modes.js"],
   "/permissions.js": "features/chat/permissions.js",
-  "/timeline.js": "features/chat/timeline.js",
+  "/timeline.js": ["features/chat/message-groups.js", "features/chat/timeline.js"],
   "/account.css": "features/accounts/account.css",
   "/account.js": "features/accounts/account.js",
   "/accounts.js": "features/accounts/accounts.js",

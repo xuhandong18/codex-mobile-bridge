@@ -113,7 +113,7 @@ async function runTimelineVisibilityTests() {
   let requested=0,meta;
   const page=(items,sequence=1,hasMore=false)=>({rows:items,sequence,epoch:'visibility',before:'visibility.'+items[0]?.key,hasMore,meta:{requests:[{id:'pending'}]},files:[]});
   const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?host=local',request:async()=>{requested++;return page(rows);},renderMeta:value=>meta=value,renderText:(node,text)=>node.textContent=text,status:()=>{}});
-  const visible=()=>[...timeline.container.children].filter(node=>!node.hidden).map(node=>node.dataset.key);
+  const visible=()=>[...timeline.nodes].filter(([,value])=>!value.node.hidden).map(([key])=>key);
   timeline.setVisibility({showReasoning:true,showProcess:true});
   timeline.apply(page(rows),true);await frame();
   check(visible().length===9,'Default display retains all message categories');
@@ -122,9 +122,9 @@ async function runTimelineVisibilityTests() {
   timeline.setVisibility({showReasoning:false,showProcess:true});
   check(!visible().includes('reasoning')&&visible().includes('command'),'Reasoning can be hidden independently');
   timeline.setVisibility({showReasoning:true,showProcess:false});
-  check(visible().includes('reasoning')&&!visible().includes('progress')&&!visible().includes('command'),'Activity filter includes tools and commentary but retains reasoning');
+  check(visible().includes('reasoning')&&visible().includes('progress')&&!visible().includes('command'),'Activity filter hides tools but retains commentary and reasoning');
   timeline.setVisibility({showReasoning:false,showProcess:false});
-  check(JSON.stringify(visible())===JSON.stringify(['user','final','legacy','error']),'Reply view retains user text, final replies, unknown-phase replies and errors');
+  check(JSON.stringify(visible())===JSON.stringify(['user','progress','final','legacy','error']),'Reply view retains progress, user text, final replies, unknown-phase replies and errors');
   check(meta.requests[0].id==='pending'&&timeline.pendingRequests,'Pending user requests remain available');
   timeline.viewport.scrollTop=timeline.nodes.get('final').node.offsetTop+20;
   timeline.following=false;timeline.newer.hidden=true;
@@ -151,6 +151,51 @@ async function runTimelineVisibilityTests() {
   check(emptyBody.hidden&&getComputedStyle(emptyBody).display==='none','Empty image preview body does not reserve space');
   empty.dispose();
   return checks;
+}
+
+async function runTimelineGroupingTests(){
+  const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  document.getElementById('messages').replaceChildren();
+  const timeline=new ChatTimeline({url:action=>'/fixture/'+action+'?',request:async()=>({}),renderMeta:()=>{},renderText:(node,text)=>node.textContent=text,status:()=>{}});
+  timeline.setVisibility({showReasoning:true,showProcess:true});
+  const make=(key,role,kind,text,extra={})=>({key,role,kind,text,version:'v1',turnId:'turn',turnStatus:'inProgress',...extra});
+  const rows=[make('q','user','userMessage','开始工作'),make('p1','assistant','agentMessage','正在查看',{phase:'commentary'}),
+    make('c','activity','commandExecution','command output'),make('p2','assistant','agentMessage','有了新发现',{phase:'commentary'}),
+    make('t','activity','mcpToolCall','tool result'),make('f','activity','fileChange','file diff'),make('r','activity','reasoning','summary')].map((row,order)=>({...row,order}));
+  const page=(items,sequence)=>({rows:items,sequence,epoch:'groups',files:[],hasMore:false,meta:{requests:[]}});
+  timeline.apply(page(rows,1),true);
+  const progress=()=>timeline.messageGroups.get('group:progress:turn'),process=()=>timeline.messageGroups.get('group:process:turn');
+  const painted=node=>{const box=node.getBoundingClientRect();return box.width>0&&box.height>0;};
+  check(progress().open&&painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('p2').node),'运行时进度独立展开并直接显示文字');
+  check(!process().open&&!painted(timeline.nodes.get('c').node),'工具总框默认收起');
+  check(process().querySelectorAll('.chat-group-body > details').length===3,'命令、调用和文件变更合并为一个总框内的三个详情框');
+  process().querySelector('summary').click();timeline.nodes.get('c').node.querySelector('summary').click();
+  check(painted(timeline.nodes.get('c').node.querySelector('pre'))&&!painted(timeline.nodes.get('t').node.querySelector('pre')),'总框和每条工具详情分别展开');
+  timeline.apply(page([{...rows[2],version:'v2',text:'new output'}],2));
+  check(process().open&&timeline.nodes.get('c').node.open,'流式更新保留总框和命令详情展开状态');
+  progress().querySelector('summary').click();timeline.apply(page([{...rows[1],version:'v2',text:'still checking'}],3));
+  check(!progress().open,'运行时手动收起后，进度更新不强行展开');
+  progress().open=true;
+  const answer=make('a','assistant','agentMessage','最终结果',{phase:'final_answer',turnStatus:'completed',order:7});
+  timeline.apply(page([...rows.map(row=>({...row,turnStatus:'completed'})),answer],4));
+  check(!progress().open&&!painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('a').node),'任务完成自动收起进度并直接显示最终结果');
+  check(process().open&&timeline.nodes.get('c').node.open,'完成事件不改变手动展开的工具详情');
+  progress().querySelector('summary').click();timeline.apply(page([],5));
+  check(progress().open&&painted(timeline.nodes.get('p1').node),'完成后手动展开历史进度，后续刷新继续保留');
+  timeline.setVisibility({showReasoning:false,showProcess:false});
+  check(painted(timeline.nodes.get('p1').node)&&process().hidden&&timeline.nodes.get('r').node.hidden,'隐藏执行过程与思考摘要不隐藏进度文字');
+  const next=[make('q2','user','userMessage','下一轮',{turnId:'next',order:8}),make('p3','assistant','agentMessage','继续处理',{phase:'commentary',turnId:'next',order:9}),make('c2','activity','commandExecution','next command',{turnId:'next',order:10})];
+  timeline.apply(page(next,6));timeline.setVisibility({showReasoning:true,showProcess:true});
+  check(timeline.messageGroups.get('group:progress:next').open&&!timeline.messageGroups.get('group:process:next').open,'新一轮单独展开进度并默认收起工具');
+  timeline.apply(page(next.map(row=>({...row,turnStatus:'failed'})),7));
+  check(!timeline.messageGroups.get('group:progress:next').open,'失败结束也自动收起进度');
+  timeline.apply(page([make('err','error','error','失败原因',{turnId:'next',turnStatus:'failed',order:11})],8));
+  check(timeline.nodes.get('err').node.parentElement===timeline.container&&painted(timeline.nodes.get('err').node),'错误保持直接可见，不藏进执行过程');
+  timeline.dispose();
+  const historical=new ChatTimeline({url:()=>'',request:async()=>({}),renderMeta:()=>{},renderText:(node,text)=>node.textContent=text,status:()=>{}});
+  historical.apply(page([...rows.map(row=>({...row,turnStatus:'completed'})),answer],9),true);
+  check(!historical.messageGroups.get('group:progress:turn').open,'首次加载已完成历史默认收起文字进度');
+  historical.dispose();return checks;
 }
 
 async function runReasoningSummaryTests() {

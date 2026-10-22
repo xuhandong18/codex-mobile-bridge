@@ -222,7 +222,7 @@ const server=http.createServer((req,res)=>{
       check(await page.evaluate(()=>navigationFixture.timeline.rows.size<=100),'重新打开后恢复完整目录且不加载全部正文 '+width);
       await page.evaluate(()=>navigationFixture.timeline.dispose());
       await page.reload();
-      for(const name of ['runTimelineTests','runTimelineVisibilityTests','runReasoningSummaryTests','runQuestionReadingScrollTests']){
+      for(const name of ['runTimelineTests','runTimelineVisibilityTests','runTimelineGroupingTests','runReasoningSummaryTests','runQuestionReadingScrollTests']){
         const assertions=await page.evaluate(name=>window[name](),name);check(assertions.length>0,name+' 实际执行 '+assertions.length+' 项 '+width);
       }
       await context.close();

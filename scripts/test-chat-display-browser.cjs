@@ -57,7 +57,8 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(()=>document.documentElement.dataset.showProcess==='false'&&document.documentElement.dataset.showReasoning==='false',null,{timeout:10000});
       check(await page.locator('#messages [data-key="command"]').isHidden(),'手机隐藏主聊天的命令 '+width);
       check(await page.locator('#messages [data-key="files"]').isHidden(),'手机隐藏文件变更 '+width);
-      check(await page.locator('#messages [data-key="progress"]').isHidden(),'手机隐藏进度说明 '+width);
+      check(await page.locator('#messages .chat-progress-group').isVisible(),'手机保留独立的进度折叠框 '+width);
+      check(!await page.locator('#messages .chat-progress-group').evaluate(node=>node.open),'已有最终结果时进度默认收起 '+width);
       check(await page.locator('#messages [data-key="reason"]').isHidden(),'手机独立同步思考摘要 '+width);
       check(await page.locator('#messages [data-key="answer"]').isVisible(),'手机保留最终回复 '+width);
       check(await page.evaluate(()=>document.documentElement.dataset.theme==='light'),'电脑主题不覆盖手机外观 '+width);
@@ -68,7 +69,10 @@ const server=http.createServer(async(req,res)=>{
       if(width===390){
         await desktop.locator('[data-open-appearance]:visible').first().click();await desktop.locator('#appearance-process').check();
         await page.waitForFunction(()=>document.documentElement.dataset.showProcess==='true',null,{timeout:10000});
-        check(await page.locator('.wb-side-message.activity:visible').count()===2,'电脑切换后手机已打开的侧边聊天实时更新');
+        check(await page.locator('.wb-side-messages .chat-process-group:visible').count()===1,'电脑切换后手机显示统一执行过程框');
+        check(await page.locator('.wb-side-message.activity:visible').count()===0,'执行过程默认收起');
+        await page.locator('.wb-side-messages .chat-process-group > summary').click();
+        check(await page.locator('.wb-side-message.activity:visible').count()===2,'展开总框后分别显示命令和文件详情');
         check(await page.locator('#messages [data-key="reason"]').isHidden(),'开启过程不改变思考摘要开关');
         await desktop.locator('#appearance-process').uncheck();
         await page.waitForFunction(()=>document.documentElement.dataset.showProcess==='false',null,{timeout:10000});
