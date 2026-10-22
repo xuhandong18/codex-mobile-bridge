@@ -367,10 +367,18 @@ class Workbench {
     if(!session||document.hidden||session.host!=='local'||session.provider&&!['codex','deepseek'].includes(session.provider)||session.provider==='deepseek'&&session.access?.canUseSideChat!==true||session.access?.canUseSideChat===false||this.sessions.get(session.key)!==session)return;
     if(session.sideChatRead&&!session.sideChatRead.signal.aborted)return;
     const controller=session.sideChatRead=new AbortController();
+    const observed=session.files.filter(tab=>tab.sideChat?.state?.id&&!tab.sideChat.busy).map(tab=>({tab,panel:tab.sideChat,id:tab.sideChat.state.id,revision:tab.sideChat.readRevision}));
     try{
       const url=session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(session.id):'/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host);
       const state=await this.request(url,undefined,controller.signal);
-      if(!controller.signal.aborted&&this.current===session&&!document.hidden&&session.access?.canUseSideChat!==false)this.syncSideChats(session,state.slots);
+      if(!controller.signal.aborted&&this.current===session&&!document.hidden&&session.access?.canUseSideChat!==false){
+        this.syncSideChats(session,state.slots);
+        if(Array.isArray(state.slots))for(const {tab,panel,id,revision} of observed){
+          if(!session.files.includes(tab)||panel.disposed||panel.busy||panel.state?.id!==id||panel.readRevision!==revision)continue;
+          const row=state.slots.find(row=>row.slot===(tab.slot||''));
+          if(!row||row.id!==id)panel.apply({id:null,connected:false,turns:[],requests:[]});
+        }
+      }
     }catch(error){
       if(!controller.signal.aborted&&error.status===401)this.onUnauthorized();
       // Keep existing tabs and drafts; the next read can recover a lost connection.

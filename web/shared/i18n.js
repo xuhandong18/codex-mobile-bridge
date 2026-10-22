@@ -2,6 +2,10 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"此侧边聊天已失效，当前记录仅供只读查看，不能输入消息或添加选区内容。请新建侧边聊天继续。":"This side chat has expired. Its current messages are read-only; you cannot type or add selected text. Create a new side chat to continue.",
+"侧边聊天已断开，已有记录仅供只读查看，暂时不能输入消息或添加选区内容。":"This side chat disconnected. Its existing messages are read-only; typing and adding selected text are temporarily unavailable.",
+"关闭标签":"Close tab",
+"这段临时聊天的记录已不可用，无法恢复。":"This temporary chat's messages are no longer available and cannot be recovered.",
 "目标轮次":"Goal rounds",
 "目标等待恢复":"Goal awaiting resume",
 "当前 Harness 会话不支持目标模式，请更新接入或检查智能体配置":"This Harness session does not support Goal mode. Update the connector or check the agent configuration.",

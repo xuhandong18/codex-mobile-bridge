@@ -12,7 +12,7 @@ class Element{
 }
 function fixture(provider='codex'){
   const document={documentElement:{dataset:{showProcess:'false',showReasoning:'true'}}};
-  const context=vm.createContext({document,AbortController,BridgeI18n:{t:text=>text},renderMarkdown:(node,text)=>node.textContent=text});
+  const context=vm.createContext({document,AbortController,uuid:()=> 'new-creation',BridgeI18n:{t:text=>text},renderMarkdown:(node,text)=>node.textContent=text});
   vm.runInContext(fs.readFileSync('web/features/chat/message-groups.js','utf8'),context);
   for(const file of ['side-chat','agents-panel'])vm.runInContext(fs.readFileSync('web/features/workspace/'+file+'.js','utf8'),context);
   const Panel=vm.runInContext('SideChatPanel',context),panel=Object.create(Panel.prototype);
@@ -22,10 +22,46 @@ function fixture(provider='codex'){
     {role:'activity',kind:'reasoning',title:'reasoning',text:'summary'},
     {role:'assistant',phase:'final_answer',text:'answer'},{role:'error',text:'failure'}];
   Object.assign(panel,{session:{provider},tab:{body:new Element()},workbench:{node:(...args)=>new Element(...args),setSideChatTitle:()=>false},
-    contextUsage:{update(){}},attachments:{key:'child'},modelButton:new Element(),permissionsButton:new Element(),workMode:{},status:new Element(),messages:new Element(),
+    contextUsage:{update(){}},attachments:{key:'child',ids:()=>[],clear(){},reset(){}},input:{value:''},fileQuotes:{rows:[],clear(){}},references:{close(){}},modelButton:new Element(),permissionsButton:new Element(),workMode:{},status:new Element(),messages:new Element(),
     updateCaption(){},renderApprovals(rows){this.requests=rows;},renderQueue(){},controls(){}});
   return {panel,Panel,context,document,messages};
 }
+
+test('侧边聊天从服务端消失后保留已有消息和身份，明确提示只读失效',()=>{
+  const {panel,messages}=fixture();
+  panel.apply({id:'child',connected:true,status:'active',turns:[{id:'turn',messages}],requests:[]});
+  panel.input.value='未发送草稿';
+  panel.apply({id:null,connected:false,turns:[],requests:[],slots:[]});
+  assert.equal(panel.state.id,'child','旧聊天不能退回未创建状态');
+  assert.equal(panel.state.connected,false);
+  assert.deepEqual(Array.from(panel.messageNodes,row=>row.message.text),messages.map(row=>row.text));
+  assert.equal(panel.input.value,'未发送草稿');
+  assert.match(panel.status.textContent,/已失效.*只读/);
+  panel.apply({id:'replacement',connected:true,turns:[],requests:[]});
+  assert.equal(panel.state.id,'child','失效标签不能静默改为另一段聊天');
+  assert.equal(panel.state.connected,false);
+  assert.deepEqual(Array.from(panel.messageNodes,row=>row.message.text),messages.map(row=>row.text));
+});
+
+test('短暂读取失败保留记录并锁定选区，同一聊天重新连接后恢复可写',async()=>{
+  const {panel,messages}=fixture();
+  const state={id:'child',connected:true,status:'active',turns:[{id:'turn',messages}],requests:[]};
+  panel.apply(state);panel.request=async()=>{throw Error('网络暂时断开');};
+  await panel.load();
+  assert.equal(panel.state.connected,false);assert.equal(panel.canReceiveQuote(),false);
+  assert.match(panel.status.textContent,/只读.*网络暂时断开/);
+  assert.ok(!panel.status.textContent.includes('正在回复'));
+  assert.equal(panel.messageNodes.length,messages.length);
+  panel.apply(state);assert.equal(panel.canReceiveQuote(),true);
+});
+
+test('已有标签首次读取就失效时显示记录不可用，不伪装成新建聊天',()=>{
+  const {panel}=fixture();panel.tab.titleChild='missing-child';panel.attachments.open=()=>{};
+  panel.apply({id:null,connected:false,turns:[],requests:[]});
+  assert.equal(panel.state.id,'missing-child');assert.equal(panel.state.expired,true);
+  assert.match(panel.messages.textContent||panel.messages.children[0].textContent,/无法恢复/);
+  assert.equal(panel.canReceiveQuote(),false);
+});
 test('文字进度在关闭工具详情后仍可阅读',()=>{
   const {Panel}=fixture();
   assert.equal(Panel.messageVisible({role:'assistant',phase:'commentary',text:'正在核对运行状态'}),true);

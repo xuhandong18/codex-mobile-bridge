@@ -71,6 +71,19 @@ test('cancelled and stale target pickers cannot change any draft or create side 
   assert.equal(creates.length,0);
 });
 
+test('失效或断开的侧边聊天不能接收选区，已打开的选择窗口也会重新检查',()=>{
+  const {wb,session,router,choose}=fixture(),tab=wb.createSideChat(session,'expired');
+  tab.sideChat.state={id:'old-child',connected:true};
+  router.addText('不得写入失效聊天');
+  tab.sideChat.state.connected=false;
+  assert.equal(router.targets(session).find(target=>target.id===tab.id).available(),false);
+  choose(tab.id);
+  assert.equal(tab.sideChat.fileQuotes.input.value,'');
+  tab.sideChat.state={id:'old-child',connected:false,expired:true};
+  router.choose(session,{file:{path:'/demo.js',text:'不可写入'}});choose(tab.id);
+  assert.equal(tab.sideChat.fileQuotes.rows.length,0);
+});
+
 test('oversized references are rejected before creating a new side tab and include existing file tags in limits',()=>{
   const {wb,session,router,choose,notices,creates}=fixture();router.addText('x'.repeat(20000));choose('new-sidechat');assert.equal(session.files.length,0);assert.equal(notices.length,1);assert.equal(creates.length,0);
   router.close();wb.fileQuotes.input.maxLength=45;wb.fileQuotes.add({path:'/p',text:'x'.repeat(20)});router.addText('some more text');choose('chat');

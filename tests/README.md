@@ -82,6 +82,8 @@ npm run test:updater
 
 侧边聊天直接创建运行 `node scripts/test-side-chat-create-browser.cjs`，使用已有 Playwright/Chromium 和合成 API，在手机竖横屏、平板和电脑宽度实际点击“＋ → 侧边聊天”和“选区操作 → 新建侧边聊天”，检查 Codex/Harness 自动创建后可直接发送、选区完整保留且不自动发送、主聊天草稿保留、多标签独立、刷新恢复只读，以及创建失败、显式重试与回执丢失时不自动重发。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不启动真实客户端或模型。`node --test tests/workbench-side-chats.test.cjs tests/selection-targets.test.cjs` 另覆盖初始读取与创建回包的竞态、同一标签防止重复创建，以及取消、失效或超长选区不创建聊天。
 
+同一浏览器驱动还会删除合成服务端的旧侧边槽位，验证停留主聊天时发现失效、旧消息与草稿保留、只读提示、真实键盘不能修改输入、主聊天与其他侧边聊天的真实选区入口禁用失效目标，以及失效前已打开的目标窗口不能继续投递；发送、创建和关闭失效标签均不额外写入服务端。`tests/chat-display-panels.test.cjs` 另覆盖短暂读取失败后恢复、首次读取已无记录、聊天身份变化和反复读取不恢复失效标签。
+
 同一驱动还实际执行 `side-message-navigation.browser.js`，检查侧边聊天复用主聊天的缩略导航、摘要点击定位、单条与附件发言、重复发言和上下文过滤、160 条发言的虚拟列表、新回复下的阅读锚点、手动或按钮返回最新、分屏定位、标签隔离及关闭后的监听释放。主聊天导航原有回归仍为 `node scripts/test-message-navigation-browser.cjs`；所有夹具只使用合成数据。
 
 [浏览器夹具](browser/README.md) 位于 `tests/browser/*.browser.js`，依赖真实 DOM 或隔离服务，应由相应驱动调用。其中有些文件只定义测试函数，单独加载不会执行断言。本轮将它们与 Node 分开，避免虚增通过计数。

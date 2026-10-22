@@ -10,7 +10,7 @@ class ChatSelectionTargets {
     const targets=[{id:'chat',name:BridgeI18n.t('主会话'),quotes:wb.fileQuotes,available:()=>this.current(session)&&wb.canQuoteMain?.()!==false&&session.access?.canSend!==false,
       focus:()=>{wb.select('chat');wb.revealMainComposer?.();}}];
     for(const tab of session.files){const side=tab.sideChat;if(!side||side.disposed)continue;
-      targets.push({id:tab.id,name:tab.name,quotes:side.fileQuotes,available:()=>this.current(session)&&session.files.includes(tab)&&!side.disposed&&!side.busy&&!side.pending,
+      targets.push({id:tab.id,name:tab.name,quotes:side.fileQuotes,available:()=>this.current(session)&&session.files.includes(tab)&&side.canReceiveQuote(),
         focus:()=>{wb.select(tab.id);side.collapse(false);side.controls();}});
     }
     if(this.canCreate(session))targets.push({id:'new-sidechat',name:BridgeI18n.t('新建侧边聊天'),available:()=>this.canCreate(session),create:true});

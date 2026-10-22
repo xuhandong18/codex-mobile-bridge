@@ -196,3 +196,22 @@ test('background summary updates the existing side-chat tab and keeps its draft 
   tablet.wb.syncSideChats(session,[{slot,id:'child',title:'过期预览',titleRevision:1,titleSource:'preview'}]);
   assert.equal(tab.name,'修复侧边聊天同步');
 });
+
+test('主聊天停留期间发现旧侧边槽位消失，会刷新隐藏面板的失效状态',async()=>{
+  let slots=[{slot,id:'child'}];
+  const tablet=device(async()=>({id:null,slots}));tablet.wb.open('parent','local');await tablet.flush();
+  const panel=tablet.wb.current.files[0].sideChat;panel.state={id:'child',connected:true};
+  slots=[];await tablet.wb.refreshSideChats();
+  assert.equal(panel.state.connected,false);assert.equal(tablet.wb.current.active,'chat');
+  assert.ok(tablet.calls.every(call=>call.body===undefined));
+});
+
+test('旧发现请求返回时不能把刚创建或更新的侧边聊天标记失效',async()=>{
+  let finish,delayed=false;
+  const tablet=device(async()=>delayed?new Promise(resolve=>finish=resolve):{slots:[{slot,id:'child'}]});
+  tablet.wb.open('parent','local');await tablet.flush();
+  const panel=tablet.wb.current.files[0].sideChat;panel.state={id:'child',connected:true};
+  delayed=true;const reading=tablet.wb.refreshSideChats();await tablet.flush();
+  panel.readRevision=(panel.readRevision||0)+1;
+  finish({slots:[]});await reading;assert.equal(panel.state.connected,true);
+});

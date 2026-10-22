@@ -59,8 +59,8 @@ async function runSideMessageNavigationBrowserTests(provider='codex'){
   wb.select(other.id);otherPanel.apply({...otherPanel.state,turns:turns(1,'另一侧边聊天'),requests:[]});await frame();
   check(!map.root.isConnected&&!otherPanel.messageMap.root.hidden&&otherPanel.messageMap.entries[0].summary.startsWith('另一侧边聊天'),'切换标签只显示当前侧边聊天的导航');
   wb.select(tab.id);await frame();check(map.root.isConnected&&map.entries.length===160,'切回原标签保留其独立导航目录');
-  const oldEntry=map.entries[0];panel.apply({...base,id:'replacement-child',turns:turns(1)});await frame();const replacementScroll=panel.messages.scrollTop;
-  panel.navigateMessage(oldEntry);check(panel.following&&panel.messages.scrollTop===replacementScroll,'旧聊天摘要不能定位到替换后的聊天');
+  panel.apply({...base,id:'replacement-child',turns:turns(1)});await frame();
+  check(panel.state.id===base.id&&panel.state.expired&&!panel.state.connected&&map.entries.length===160,'服务端聊天身份变化后保留原聊天导航和记录，旧标签变为只读');
   check(mainInput.value===mainDraft,'浏览侧边历史保留主聊天草稿');
   panel.dispose();check(!map.root.isConnected&&map.abort.signal.aborted,'关闭侧边视图释放导航节点及监听');
   return checks;

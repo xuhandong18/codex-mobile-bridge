@@ -136,6 +136,51 @@ const server=http.createServer(async(req,res)=>{
       check(await page.evaluate(()=>creationPanel().input.value==='> 选区中的第一行\n> 选区中的第二行\n\n'),'直接创建后完整保留选中的多行文字');
       check(await page.evaluate(()=>creationWorkbench.fileQuotes.input.value==='保留主聊天草稿'),'选区操作保留主聊天草稿');
       check(writes.filter(write=>write.body.action==='send').length===beforeSend,'选区新建不会自动发送文字');
+      const expiredSlot=await page.evaluate(()=>{
+        const wb=creationWorkbench,session=wb.current;
+        window.expirationSource=creationPanel();
+        window.expirationTab=session.files.find(tab=>tab.sideChat?.state?.turns?.some(turn=>turn.messages?.some(message=>message.text==='创建后直接聊天')));
+        window.expirationPanel=expirationTab.sideChat;clearTimeout(expirationPanel.timer);
+        expirationPanel.input.value='失效前的未发送草稿';expirationPanel.input.dispatchEvent(new Event('input'));
+        wb.select('chat');wb.selectionTargets.addText('选择窗口打开后目标才失效');
+        return expirationTab.slot||'';
+      });
+      const expirationWrites=writes.length;
+      states.delete(provider+'|'+expiredSlot);
+      await page.evaluate(()=>creationWorkbench.refreshSideChats());
+      await page.waitForFunction(()=>expirationPanel.state.expired);
+      check(await page.evaluate(()=>!expirationPanel.state.connected&&expirationPanel.messages.textContent.includes('可以直接聊天')),'停留主聊天时也能发现侧边聊天失效并保留消息');
+      await page.evaluate(()=>document.querySelector('.file-quote-target[open] [data-quote-target="'+expirationTab.id+'"]').click());
+      check(await page.evaluate(()=>expirationPanel.input.value==='失效前的未发送草稿'),'选择窗口打开后目标失效也不能写入旧草稿');
+      await page.evaluate(()=>creationWorkbench.selectionTargets.close());
+      for(const source of ['main','side']){
+        await page.evaluate(source=>{
+          const wb=creationWorkbench;
+          const sourcePanel=source==='side'?expirationSource:null;
+          if(sourcePanel)wb.select(sourcePanel.tab.id);else wb.select('chat');
+          const body=document.createElement('div');body.className='message-body';body.textContent='不能投递到失效聊天的选中文字';
+          (sourcePanel?.messages||(wb===workbench?$('messages'):desktopSessions.messages)).append(body);
+          const range=document.createRange();range.selectNodeContents(body);getSelection().removeAllRanges();getSelection().addRange(range);
+          const action=sourcePanel?.selectionAction||(wb===workbench?selectedTextAction:desktopSessions.selectionAction);
+          action.update();
+          if(action.trigger.disabled)throw Error('合成文字选区没有启用真实选区入口');
+          action.trigger.click();
+          if(!wb.selectionTargets.dialog?.open)throw Error('真实选区入口没有打开目标选择窗口');
+        },source);
+        check(await page.evaluate(()=>document.querySelector('.file-quote-target[open] [data-quote-target="'+expirationTab.id+'"]').disabled),source==='main'?'主聊天选区不能选择失效侧边聊天':'其他侧边聊天选区不能选择失效侧边聊天');
+        await page.evaluate(()=>creationWorkbench.selectionTargets.close());
+      }
+      await page.evaluate(()=>creationWorkbench.select(expirationTab.id));
+      check(await page.evaluate(()=>expirationPanel.landing.hidden&&!expirationPanel.messageArea.hidden&&expirationPanel.input.readOnly&&expirationPanel.sendButton.disabled&&expirationPanel.status.textContent.includes('已失效')),'打开失效标签显示记录、只读提示并禁用输入和发送');
+      await page.locator('.wb-side-composer:visible textarea').press('End');await page.keyboard.insertText('不应写入');
+      check(await page.evaluate(()=>expirationPanel.input.value==='失效前的未发送草稿'),'真实键盘输入不能修改失效聊天');
+      await page.evaluate(async()=>{await expirationPanel.send();await expirationPanel.create();});
+      check(writes.length===expirationWrites,'失效检测、选区和发送尝试均不产生写入请求');
+      await page.evaluate(async()=>{
+        const wb=creationWorkbench,active=wb.current.files.find(tab=>tab.sideChat&&tab!==expirationTab&&!tab.sideChat.state?.expired&&tab.sideChat.state?.connected);
+        await wb.close(expirationTab.id);wb.select(active.id);
+      });
+      check(writes.length===expirationWrites,'关闭失效标签不会误操作服务端其他聊天');
       results.push({width,height,provider,passed:checks.length});
       await page.addScriptTag({path:path.join(root,'tests/browser/side-message-navigation.browser.js')});
       const navigationWrites=writes.length,navigationChecks=await page.evaluate(provider=>runSideMessageNavigationBrowserTests(provider),provider);
