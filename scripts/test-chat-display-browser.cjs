@@ -12,7 +12,7 @@ const messages=[{key:'user',role:'user',kind:'userMessage',text:'Question'},
   {key:'files',role:'activity',kind:'fileChange',title:'Changes',text:'file diff'},
   {key:'progress',role:'assistant',kind:'agentMessage',phase:'commentary',text:'Progress'},
   {key:'reason',role:'activity',kind:'reasoning',title:'Reasoning',text:'Public summary'},
-  {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Final answer'}].map((message,order)=>({...message,order,version:'v1'}));
+  {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Final answer'}].map((message,order)=>({...message,turnId:'display-turn',turnStatus:'completed',order,version:'v1'}));
 const server=http.createServer(async(req,res)=>{
   try{
     const url=new URL(req.url,'http://localhost'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -28,7 +28,7 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/accounts')return json({accounts:[],current:{kind:'api'}});
       if(p==='/api/sidebar-preferences')return json({revision:0,fields:{}});
       if(p==='/api/sessions'||p==='/api/activity')return json({sessions:[row],complete:true,sidebar:{sections:[],projects:[]}});
-      if(p.endsWith('/side-chat'))return json({id:'fixture-side',connected:true,turns:[{messages}],requests:[],submissions:[],slots:[{slot:'',id:'fixture-side'}]});
+      if(p.endsWith('/side-chat'))return json({id:'fixture-side',connected:true,turns:[{id:'display-turn',status:'completed',messages}],requests:[],submissions:[],slots:[{slot:'',id:'fixture-side'}]});
       if(p.endsWith('/timeline')||p.endsWith('/changes'))return json({epoch:'fixture',sequence:1,rows:messages,files:[],hasMore:false,meta:{...row,connected:true,requests:[],turns:[],queue:[]}});
       if(p.endsWith('/updates')){await new Promise(resolve=>setTimeout(resolve,100));return json({epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{...row,connected:true,requests:[],turns:[],queue:[]}});}
       if(p.endsWith('/message-index'))return json({revision:'fixture',status:'ready',complete:true,total:1,entries:[],nextCursor:null});

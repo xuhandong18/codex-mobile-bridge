@@ -168,7 +168,11 @@ async function runTimelineGroupingTests(){
   const painted=node=>{const box=node.getBoundingClientRect();return box.width>0&&box.height>0;};
   check(progress().open&&painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('p2').node),'运行时进度独立展开并直接显示文字');
   check(!process().open&&!painted(timeline.nodes.get('c').node),'工具总框默认收起');
-  check(process().querySelectorAll('.chat-group-body > details').length===3,'命令、调用和文件变更合并为一个总框内的三个详情框');
+  const processGroups=[...timeline.container.querySelectorAll('.chat-process-group')];
+  check(processGroups.length===2&&processGroups[0].querySelectorAll('.chat-group-body > details').length===1&&processGroups[1].querySelectorAll('.chat-group-body > details').length===2,'只合并相邻工具，文字进度前后的工具保留各自的折叠段');
+  const sequence=[...timeline.container.querySelectorAll('[data-key]')].filter(node=>timeline.nodes.has(node.dataset.key)).map(node=>node.dataset.key);
+  check(JSON.stringify(sequence)===JSON.stringify(rows.map(row=>row.key)),'多段文字进度、工具和思考摘要的实际时序完全不变');
+  check([...timeline.container.querySelectorAll('.chat-message-group')].every(node=>{const style=getComputedStyle(node),summary=getComputedStyle(node.querySelector('summary'));return style.borderTopWidth==='0px'&&style.borderRadius==='0px'&&style.backgroundColor==='rgba(0, 0, 0, 0)'&&summary.paddingTop==='2px'&&summary.paddingLeft==='0px';}),'文字进度和执行过程都采用无边框、无背景、紧凑标题的样式');
   process().querySelector('summary').click();timeline.nodes.get('c').node.querySelector('summary').click();
   check(painted(timeline.nodes.get('c').node.querySelector('pre'))&&!painted(timeline.nodes.get('t').node.querySelector('pre')),'总框和每条工具详情分别展开');
   timeline.apply(page([{...rows[2],version:'v2',text:'new output'}],2));
@@ -177,8 +181,11 @@ async function runTimelineGroupingTests(){
   check(!progress().open,'运行时手动收起后，进度更新不强行展开');
   progress().open=true;
   const answer=make('a','assistant','agentMessage','最终结果',{phase:'final_answer',turnStatus:'completed',order:7});
+  timeline.apply(page([{...answer,turnStatus:'inProgress'}],3));
+  check(progress().open,'最终文字到达但本轮仍运行时不提前收起进度');
   timeline.apply(page([...rows.map(row=>({...row,turnStatus:'completed'})),answer],4));
   check(!progress().open&&!painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('a').node),'任务完成自动收起进度并直接显示最终结果');
+  check([...timeline.container.querySelectorAll('.chat-progress-group')].every(node=>!node.open),'成功完成时每一段文字进度都自动收起');
   check(process().open&&timeline.nodes.get('c').node.open,'完成事件不改变手动展开的工具详情');
   progress().querySelector('summary').click();timeline.apply(page([],5));
   check(progress().open&&painted(timeline.nodes.get('p1').node),'完成后手动展开历史进度，后续刷新继续保留');
@@ -188,13 +195,18 @@ async function runTimelineGroupingTests(){
   timeline.apply(page(next,6));timeline.setVisibility({showReasoning:true,showProcess:true});
   check(timeline.messageGroups.get('group:progress:next').open&&!timeline.messageGroups.get('group:process:next').open,'新一轮单独展开进度并默认收起工具');
   timeline.apply(page(next.map(row=>({...row,turnStatus:'failed'})),7));
-  check(!timeline.messageGroups.get('group:progress:next').open,'失败结束也自动收起进度');
+  check(timeline.messageGroups.get('group:progress:next').open,'失败时文字进度保持展开');
+  timeline.messageGroups.get('group:progress:next').open=false;
+  timeline.apply(page(next.map(row=>({...row,turnStatus:'interrupted'})),7));
+  check(timeline.messageGroups.get('group:progress:next').open,'中断时重新展开此前手动收起的进度，便于检查原因');
   timeline.apply(page([make('err','error','error','失败原因',{turnId:'next',turnStatus:'failed',order:11})],8));
   check(timeline.nodes.get('err').node.parentElement===timeline.container&&painted(timeline.nodes.get('err').node),'错误保持直接可见，不藏进执行过程');
   timeline.dispose();
   const historical=new ChatTimeline({url:()=>'',request:async()=>({}),renderMeta:()=>{},renderText:(node,text)=>node.textContent=text,status:()=>{}});
   historical.apply(page([...rows.map(row=>({...row,turnStatus:'completed'})),answer],9),true);
   check(!historical.messageGroups.get('group:progress:turn').open,'首次加载已完成历史默认收起文字进度');
+  historical.apply(page([...rows.map(row=>({...row,turnStatus:'failed'})),{...answer,turnStatus:'failed'}],10),true);
+  check([...historical.container.querySelectorAll('.chat-progress-group')].every(node=>node.open),'首次加载失败历史时，即使有最终文字也展开全部进度段');
   historical.dispose();return checks;
 }
 

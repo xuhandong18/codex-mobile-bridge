@@ -51,10 +51,10 @@
 .host-error-row button{flex:none;min-width:32px;min-height:32px;margin:-6px -8px -6px 0;font-size:18px}
 .session-diagnostics-summary{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}
 #session-diagnostics-export[hidden]{display:none}
-.chat-message-group{margin:12px 0 20px;border:1px solid var(--line);border-radius:12px;min-width:0;white-space:normal}
-.chat-group-summary{cursor:pointer;padding:10px 14px;color:var(--muted);font-size:12px;line-height:1.6;list-style-position:inside;user-select:none}
-.chat-group-summary:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:10px}
-.chat-group-body{padding:0 14px 8px;min-width:0}
+.chat-message-group{margin:8px 0 12px;border:0;border-radius:0;background:transparent;min-width:0;white-space:normal}
+.chat-group-summary{cursor:pointer;padding:2px 0;color:var(--muted);font-size:12px;line-height:1.65;list-style-position:inside;user-select:none}
+.chat-group-summary:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.chat-group-body{padding:0;min-width:0;background:transparent}
 .chat-message-group:not([open])>.chat-group-body{display:none}
 .chat-group-body>.message,.chat-group-body>.wb-side-message{margin:10px 0}
 .chat-group-body>.activity{margin:8px 0}

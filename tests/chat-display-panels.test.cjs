@@ -30,6 +30,38 @@ test('文字进度在关闭工具详情后仍可阅读',()=>{
   const {Panel}=fixture();
   assert.equal(Panel.messageVisible({role:'assistant',phase:'commentary',text:'正在核对运行状态'}),true);
 });
+test('交替的文字进度和工具段严格保留实际时序',()=>{
+  const {panel,document}=fixture();document.documentElement.dataset.showProcess='true';
+  const messages=[{id:'q',role:'user',text:'开始'},
+    {id:'p1',role:'assistant',phase:'commentary',text:'第一段进度'},
+    {id:'c1',role:'activity',kind:'commandExecution',text:'第一条命令'},
+    {id:'f1',role:'activity',kind:'fileChange',text:'第一次变更'},
+    {id:'p2',role:'assistant',phase:'commentary',text:'第二段进度'},
+    {id:'t1',role:'activity',kind:'mcpToolCall',text:'工具调用'},
+    {id:'r',role:'activity',kind:'reasoning',text:'摘要'},
+    {id:'c2',role:'activity',kind:'commandExecution',text:'第二条命令'},
+    {id:'p3',role:'assistant',phase:'commentary',text:'第三段进度'}];
+  panel.apply({id:'child',connected:true,turns:[{id:'turn',status:'inProgress',messages}],requests:[]});
+  const order=[],rows=new Map(panel.messageNodes.map(({node,message})=>[node,message.id]));
+  const walk=node=>{if(rows.has(node))order.push(rows.get(node));else for(const child of node.children)walk(child);};walk(panel.messages);
+  assert.deepEqual(order,messages.map(message=>message.id));
+  assert.equal(panel.messages.children.filter(node=>node.className.includes('chat-progress-group')).length,3);
+  assert.equal(panel.messages.children.filter(node=>node.className.includes('chat-process-group')).length,3);
+});
+test('本轮中断失败时即使已有最终消息也保留展开的文字进度',()=>{
+  for(const status of [undefined,'inProgress','interrupted','failed','cancelled','stopped']){
+    const {panel,messages}=fixture();
+    panel.apply({id:'child',connected:true,turns:[{id:'turn',status,messages}],requests:[]});
+    assert.equal(panel.messageGroups.get('group:progress:turn').open,true,status);
+  }
+});
+test('补读同一段更早的进度时保留原折叠状态和节点',()=>{
+  const {panel}=fixture(),p1={id:'p1',role:'assistant',phase:'commentary',text:'更早进展'},p2={id:'p2',role:'assistant',phase:'commentary',text:'当前进展'};
+  const state={id:'child',connected:true,turns:[{id:'turn',status:'inProgress',messages:[p2]}],requests:[]};
+  panel.apply(state);const progress=panel.messageGroups.get('group:progress:turn');progress.open=false;
+  panel.apply({...state,turns:[{id:'turn',status:'inProgress',messages:[p1,p2]}]});
+  assert.equal(panel.messageGroups.get('group:progress:turn'),progress);assert.equal(progress.open,false);
+});
 test('Codex and Harness side chats honor process and reasoning independently through live updates',()=>{
   for(const provider of ['codex','deepseek']){
     const {panel,document,messages}=fixture(provider),state={id:'child',connected:true,turns:[{messages}],requests:[{id:'approval'}]};
