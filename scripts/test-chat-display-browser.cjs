@@ -6,13 +6,13 @@ const root=path.resolve(__dirname,'..'),web=path.join(root,'web');
 const read=file=>fs.readFileSync(path.join(web,file));
 const assets=JSON.parse(read('assets.json')),id='11111111-1111-4111-8111-111111111111';
 let display={revision:0,settings:{}},writes=0;
-const row={id,host:'local',title:'Display fixture',cwd:'/fixture',status:'idle',access:{source:'desktop',canSend:true,canUseSideChat:true}};
+const row={id,host:'local',title:'Display fixture',cwd:'/fixture',status:'idle',access:{source:'desktop',canSend:true,canUseSideChat:true,canEditMessages:true}};
 const messages=[{key:'user',role:'user',kind:'userMessage',text:'Question'},
   {key:'command',role:'activity',kind:'commandExecution',title:'Command',text:'command output'},
   {key:'files',role:'activity',kind:'fileChange',title:'Changes',text:'file diff'},
   {key:'progress',role:'assistant',kind:'agentMessage',phase:'commentary',text:'Progress starts here. '+('Checking the actual message order and preserving readable progress. '.repeat(12))+'\n\nAdditional paragraph remains available when expanded.'},
   {key:'reason',role:'activity',kind:'reasoning',title:'Reasoning',text:'Public summary'},
-  {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Final answer'}].map((message,order)=>({...message,turnId:'display-turn',turnStatus:'completed',order,version:'v1'}));
+  {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Final answer'}].map((message,order)=>({...message,turnId:'display-turn',turnStatus:'completed',order,version:'v1',timestamp:Date.parse('2026-10-23T01:02:03Z')+order*1000,editable:message.key==='user',forkable:message.key==='answer'}));
 const server=http.createServer(async(req,res)=>{
   try{
     const url=new URL(req.url,'http://localhost'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -51,10 +51,15 @@ const server=http.createServer(async(req,res)=>{
     const address='http://127.0.0.1:'+server.address().port+'/#'+id+'~local';
     await desktop.goto(address);await desktop.waitForSelector('#messages [data-key="answer"]');
     for(const width of [390,820,844]){
-      const phone=await browser.newContext({viewport:{width,height:width===844?390:844},hasTouch:true});
+      const phone=await browser.newContext({viewport:{width,height:width===844?390:844},hasTouch:true,timezoneId:'Asia/Hong_Kong'});
       const page=await phone.newPage();page.on('pageerror',error=>errors.push(error.message));await page.goto(address);
       await page.waitForSelector('#messages [data-key="answer"]');
       await page.waitForFunction(()=>document.documentElement.dataset.showProcess==='false'&&document.documentElement.dataset.showReasoning==='false',null,{timeout:10000});
+      for(const key of ['user','answer']){
+        check(await page.locator('#messages [data-key="'+key+'"] .message-actions').evaluate(node=>node.lastElementChild.matches('time.message-time')&&node.querySelectorAll('time').length===1),'消息操作栏末尾只有一个时间 '+key+' '+width);
+      }
+      check(await page.locator('#messages [data-key="user"] time').textContent()==='10-23 09:02:03','原始消息时间按手机时区精确到秒 '+width);
+      for(const key of ['command','files','reason'])check(await page.locator('#messages [data-key="'+key+'"] > summary').evaluate(node=>node.lastElementChild.matches('time.message-time')),'执行记录在各自折叠标题末尾显示时间 '+key+' '+width);
       check(await page.locator('#messages [data-key="command"]').isHidden(),'手机隐藏主聊天的命令 '+width);
       check(await page.locator('#messages [data-key="files"]').isHidden(),'手机隐藏文件变更 '+width);
       check(await page.locator('#messages .chat-progress-group').isVisible(),'手机保留独立的进度折叠框 '+width);
@@ -63,6 +68,10 @@ const server=http.createServer(async(req,res)=>{
       check((await summary.innerText()).startsWith('Progress starts here.')&&await summary.locator('.message-body').count()===1,'正文直接接在三角形后，只渲染一次且没有文字进度标题 '+width);
       check(await summary.evaluate(node=>getComputedStyle(node,'::after').content.includes('...')&&node.querySelector('.message-body').getBoundingClientRect().height<=parseFloat(getComputedStyle(node).lineHeight)+1),'折叠时仅保留一行正文和三个点 '+width);
       await summary.click();check(await progress.evaluate(node=>node.open),'点击折叠后的正文行展开 '+width);
+      check(await summary.locator('.message-actions time').isVisible(),'进度展开后直接显示消息操作栏时间 '+width);
+      await page.evaluate(()=>chatTimeline.relabel());
+      check(await page.locator('#messages [data-key="command"] > summary time').count()===1,'重新标记标题保留执行时间 '+width);
+      check(await page.locator('#messages [data-key="answer"] .message-actions').evaluate(node=>node.lastElementChild.matches('time')),'更新操作按钮后时间仍在最后 '+width);
       await summary.evaluate(node=>node.scrollIntoView({block:'start'}));
       const line=await summary.evaluate(node=>{const body=node.querySelector('.message-body'),first=body.firstElementChild||body,rect=first.getBoundingClientRect();return {x:rect.x,y:rect.y,height:parseFloat(getComputedStyle(first).lineHeight)};});
       await page.mouse.click(line.x+30,line.y+line.height*1.5);
@@ -79,6 +88,8 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(()=>window.BridgeWorkbench?.current?.files.some(tab=>tab.sideChat?.state?.id));
       await page.evaluate(()=>{const wb=window.BridgeWorkbench;wb.select(wb.current.files.find(tab=>tab.sideChat?.state?.id).id);});
       check(await page.locator('.wb-side-message.activity').count()===3,'侧边聊天加载真实过程分类 '+width);
+      check(await page.locator('.wb-side-message.user .message-actions > time').count()===1,'侧边聊天也显示原始消息时间 '+width);
+      check(await page.locator('.wb-side-message.activity summary > time').count()===3,'侧边聊天的执行折叠栏保留各自时间 '+width);
       check(await page.locator('.wb-side-message.activity:visible').count()===0,'侧边聊天遵守共享开关 '+width);
       if(width===390){
         await desktop.locator('[data-open-appearance]:visible').first().click();await desktop.locator('#appearance-process').check();

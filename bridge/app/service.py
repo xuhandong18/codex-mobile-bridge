@@ -85,6 +85,10 @@ class LiveSession:
         self.activation_lock = threading.Lock()
         self.action_lock = threading.RLock()
         self.timeline = Timeline()
+        self.message_times = {}
+        self.message_time_checkpoint = None
+        self.message_time_reading = False
+        self.message_time_retry_at = 0
 
     def changed(self):
         self.sequence += 1
@@ -98,7 +102,9 @@ class LiveSession:
 
     def view(self):
         with self.condition:
-            result = normalize_state(self.state or {"id": self.id}, self.connected)
+            state = self.state or {"id": self.id}
+            result = normalize_state({**state, 'itemStartedAtMsById': {
+                **self.message_times, **(state.get('itemStartedAtMsById') or {})}}, self.connected)
             if self.saved_view and result.get('titleSource') != 'native' and self.saved_view.get('titleSource') == 'native':
                 result['title'] = self.saved_view['title']
                 result['titleSource'] = 'native'
@@ -1754,6 +1760,7 @@ class Bridge:
 
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)
+        self._refresh_message_times(session)
         goal_available = self._refresh_session_goal(session)
         with session.condition:
             session.access = self._access(session.origin, session)
@@ -1774,6 +1781,38 @@ class Bridge:
         self._submission_meta(session, view)
         view["forkedFrom"] = self._fork_origin(thread_id)
         return view
+
+    def _refresh_message_times(self, session):
+        reader = getattr(self.store, 'message_times', None)
+        if not callable(reader) or self.closed.is_set():
+            return
+        with session.condition:
+            if session.message_time_reading or time.monotonic() < session.message_time_retry_at:
+                return
+            session.message_time_reading = True
+            session.message_time_retry_at = time.monotonic() + (5 if isinstance(self.store, RemoteStore) else 1)
+            checkpoint = session.message_time_checkpoint
+        def read():
+            try:
+                result = reader(session.id, checkpoint)
+                with session.condition:
+                    if self.closed.is_set():
+                        return
+                    times = {} if result['reset'] else dict(session.message_times)
+                    times.update(result['times'])
+                    times = dict(list(times.items())[-8192:])
+                    session.message_time_checkpoint = result['checkpoint']
+                    if times != session.message_times:
+                        session.message_times = times
+                        session.changed()
+            except Exception:
+                # Missing/unfinished rollout metadata must not break the chat.
+                with session.condition:
+                    session.message_time_retry_at = time.monotonic() + 5
+            finally:
+                with session.condition:
+                    session.message_time_reading = False
+        threading.Thread(target=read, daemon=True, name='message-times').start()
 
     def _latest_created_goal_objective(self, thread_id):
         with self.submit_lock:
@@ -2123,6 +2162,7 @@ class Bridge:
 
     def timeline_read(self, thread_id, mode='page', **options):
         session = self.session(thread_id, background=True)
+        self._refresh_message_times(session)
         if mode == 'page' and (options.get('around') or options.get('after') or str(options.get('before') or '').startswith('nav.')):
             return self._navigation_page(session, thread_id, **options)
         if mode == 'detail':

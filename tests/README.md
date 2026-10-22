@@ -50,6 +50,8 @@ npm run test:updater
 
 聊天分组的真实 DOM 回归由 `node scripts/test-message-navigation-browser.cjs` 调用 `runTimelineGroupingTests`，覆盖交替进度和工具的时序、相邻工具与思考摘要合并、无边框无背景的紧凑样式、正文作为进度折叠点击行且不重复渲染、运行中进度默认展开、成功完成才自动收起、中断和失败保持展开、不同结果的历史默认状态、完成后手动重开、不同轮次隔离、嵌套工具详情、流式更新及补读保留展开、错误直接可见。侧边聊天和子任务记录同样由 `tests/chat-display-panels.test.cjs` 验证；不连接真实客户端或发送模型任务。
 
+消息时间运行 `python -B scripts/test-backend.py --source-only -p test_message_times.py` 与 `node --test tests/message-times-ui.test.cjs`，覆盖原生开始时间、保存记录与导航窗口、增量读取及未完成尾行、大记录有界读取、独立 SSH 源码执行、文件边界、关闭时丢弃晚到结果、仅补时间不改变消息身份，以及秒/毫秒/ISO 时间和缺失时间。`node scripts/test-chat-display-browser.cjs` 同时在三种尺寸检查原始时间按设备时区精确到秒、消息操作栏末尾只有一个时间、各执行记录的折叠标题时间、重标标题与更新按钮后时间保留。使用合成数据，不将页面刷新时间作为消息时间。
+
 侧栏聊天排序可运行 `node --test tests/sidebar-sync.test.cjs tests/project-thread-order.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-order-browser.cjs`。后者在手机、平板和电脑宽度检查三种列表方式、最新五条与加载更多、分区/置顶/独立聊天、交互更新、折叠展开和刷新，并预置旧的本机聊天顺序以确认其不再覆盖最近交互排序；还实际操作右键/长按菜单，检查手动聊天调序及排序切换入口已移除、项目内多个置顶的独立时间顺序、取消、普通分页额度、搜索过滤，以及冷启动时全局预读行和最近一百条以外的旧置顶。定向元数据读取的登录、主机、数量及原有可见性边界由 `test_bridge.py` 覆盖。仅使用合成数据，需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
 侧栏跨设备同步运行 `node --test tests/sidebar-preferences.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p 'test_sidebar*.py'`；真实页面验证为 `node scripts/test-sidebar-preferences-browser.cjs`。后者使用独立浏览器上下文，在手机、平板和电脑宽度实际操作长按/右键菜单，检查旧设置迁移、前台自动同步、项目上下顺序、原生项目跨分区移动、分区顺序、聊天归属、整页重载及丢失保存回包时不重复提交。后端另验证原生项目完成后无需浏览器轮询即可清除旧显示覆盖、未知原生结果不清除，以及操作期间另一设备的新选择优先。所有数据与原生客户端均为合成夹具，需要已有 Playwright/Chromium，不启动真实聊天或模型。

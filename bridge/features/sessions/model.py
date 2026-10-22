@@ -161,6 +161,10 @@ def normalize_item(item):
     kind = item.get("type", "unknown")
     row = {"id": item.get("id"), "kind": kind, "status": item.get("status")}
     row.update({key: item[key] for key in ('navigationId', 'navigationPosition') if key in item})
+    timestamp = next((item[key] for key in ('timestamp', 'startedAtMs', 'createdAtMs', 'started_at_ms', 'createdAt', 'created_at')
+                      if item.get(key) is not None), None)
+    if timestamp is not None:
+        row['timestamp'] = timestamp
     incoming = incoming_thread_message(item)
     if incoming:
         row.update(incoming)
@@ -307,6 +311,7 @@ def session_title_source(state, first_user_text=''):
 def normalize_state(state, connected=True):
     turns = ordered_turns(state)
     result = []
+    recorded_starts = state.get('itemStartedAtMsById') or {}
     for ordinal, turn in enumerate(turns):
         items = items_array(turn.get("items", []))
         messages, calls = [], {}
@@ -319,6 +324,8 @@ def normalize_state(state, connected=True):
                 calls[message['id']] = message
                 if 'navigationPosition' in item:
                     message['navigationPosition'] = item['navigationPosition']
+                if item.get('timestamp') is not None:
+                    message['timestamp'] = item['timestamp']
                 messages.append(message)
             elif kind in ('function_call_output', 'custom_tool_call_output') and item.get('call_id') in calls:
                 output = item.get('output', '')
@@ -330,6 +337,17 @@ def normalize_state(state, connected=True):
             if opening:
                 messages.insert(0, {"id": "opening-" + str(turn.get("turnId", ordinal)), "role": "user", "kind": "userMessage", "text": opening})
         params = turn.get('params') or {}
+        starts = {**(turn.get('itemStartedAtMsById') or {}),
+                  **(turn.get('aeonAssistantMessageStartedAtMsById') or {}),
+                  **(turn.get('commandExecutionStartedAtMsById') or {})}
+        first_user = next((message for message in messages if message['role'] == 'user'
+                           and not message.get('isUserContext') and message.get('kind') != 'threadMessage'), None)
+        for message in messages:
+            timestamp = starts.get(message['id'], recorded_starts.get(message['id']))
+            if timestamp is None and message is first_user and not message.get('timestamp'):
+                timestamp = turn.get('turnStartedAtMs')
+            if timestamp is not None:
+                message['timestamp'] = timestamp
         settings = (params.get('collaborationMode') or {}).get('settings') or {}
         model = params.get('model') or settings.get('model') or turn.get('model')
         effort = params.get('effort') or params.get('reasoningEffort') or settings.get('reasoning_effort') or turn.get('reasoningEffort')

@@ -56,6 +56,13 @@ def _line(stream):
 
 
 def _item(record, ordinal):
+    item = _record_item(record, ordinal)
+    if item is not None and record.get('timestamp') is not None:
+        item['timestamp'] = record['timestamp']
+    return item
+
+
+def _record_item(record, ordinal):
     payload = record.get('payload', {})
     if record.get('type') == 'event_msg' and payload.get('type') == 'item_completed':
         item = payload.get('item', {})

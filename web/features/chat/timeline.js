@@ -404,6 +404,7 @@ class ChatTimeline {
       }
       if(row.forkable&&this.canEdit())add('fork','从这里分支',false);
       for(const button of bar.querySelectorAll('[data-message-action]'))if(!actions.has(button.dataset.messageAction))button.remove();
+      const time=bar.querySelector('.message-time');if(time)bar.append(time);
     }
   }
   relabel(){
@@ -415,6 +416,7 @@ class ChatTimeline {
       const row=this.rows.get(key)?.row;if(!row)continue;
       const node=entry.node,heading=node.firstElementChild;
       if(heading)heading.textContent=this.rowHeading(row);
+      ChatMessageGroups.decorateTime(node,row);
       const more=node.querySelector('.detail-more');
       if(more&&!more.disabled)more.textContent=timelineText(this.details.has(key)?'继续加载正文':'展开完整内容');
       const attachment=node.querySelector('.timeline-attachments small.muted');

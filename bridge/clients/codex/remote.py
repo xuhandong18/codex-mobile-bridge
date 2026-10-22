@@ -136,6 +136,9 @@ class RemoteStore:
     def history(self, thread_id, turn_limit=None):
         return self.call('history', {'thread_id': thread_id, 'turn_limit': turn_limit})
 
+    def message_times(self, thread_id, checkpoint=None):
+        return self.call('message_times', {'thread_id': thread_id, 'checkpoint': checkpoint})
+
     def navigation_scan(self, thread_id, checkpoint=None):
         return self.call('navigation_scan', {'thread_id': thread_id, 'checkpoint': checkpoint})
 

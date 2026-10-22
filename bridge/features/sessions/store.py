@@ -57,6 +57,54 @@ class SessionStore:
         except OSError as exc:
             raise ValueError('会话记录暂不可用，请刷新目录后重试') from exc
 
+    def message_times(self, thread_id, checkpoint=None):
+        """Read native item start metadata without exposing event bodies.
+
+        Start with a bounded tail, then follow complete lines incrementally.
+        The checkpoint is internal read state, never a browser-supplied path.
+        """
+        path = self._navigation_path(thread_id)
+        checkpoint = checkpoint or {}
+        with path.open('rb') as stream:
+            stat = os.fstat(stream.fileno())
+            prefix = stream.read(min(512, stat.st_size))
+            previous_prefix = bytes.fromhex(checkpoint.get('prefix', ''))
+            reset = (checkpoint.get('path') != str(path) or checkpoint.get('inode') != stat.st_ino
+                     or stat.st_size < checkpoint.get('offset', 0)
+                     or not prefix.startswith(previous_prefix)
+                     or stat.st_size == checkpoint.get('size') and stat.st_mtime_ns != checkpoint.get('mtime'))
+            tail = max(0, stat.st_size - 4 * 1024 * 1024)
+            offset = tail if reset else max(tail, checkpoint['offset'])
+            stream.seek(offset)
+            if offset and (reset or offset != checkpoint['offset']):
+                stream.readline()
+            times = {}
+            scanned = 0
+            while stream.tell() < stat.st_size and scanned < 4 * 1024 * 1024:
+                begin = stream.tell()
+                raw = stream.readline(4 * 1024 * 1024 + 1)
+                scanned += len(raw)
+                if not raw.endswith(b'\n'):
+                    # Leave an incomplete tail for the next read. Skip oversized
+                    # records, whose payload is never needed by the time reader.
+                    if len(raw) > 4 * 1024 * 1024:
+                        stream.readline()
+                    else:
+                        stream.seek(begin)
+                    break
+                try:
+                    record = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                payload = record.get('payload') or {}
+                if record.get('type') == 'event_msg' and payload.get('type') == 'item_completed':
+                    item = payload.get('item') or {}
+                    if item.get('id') and payload.get('started_at_ms') is not None:
+                        times[item['id']] = payload['started_at_ms']
+            return {'reset': reset, 'times': times, 'checkpoint': {
+                'path': str(path), 'inode': stat.st_ino, 'size': stat.st_size, 'mtime': stat.st_mtime_ns,
+                'offset': stream.tell(), 'prefix': prefix.hex()}}
+
     @contextmanager
     def _connect(self):
         database = None
@@ -437,6 +485,7 @@ class SessionStore:
             except ValueError:
                 continue
             payload = record.get("payload", {})
+            previous_count = len(items)
             if record.get("type") == "event_msg" and payload.get("type") == "task_started":
                 current = {"turnId": payload.get("turn_id"), "status": "inProgress", "items": []}
                 turns.append(current)
@@ -465,6 +514,8 @@ class SessionStore:
                     current["status"] = "completed" if payload["type"] == "task_complete" else "interrupted"
             elif record.get("type") == "event_msg" and payload.get("type") == "item_completed":
                 item = payload.get("item", {})
+                if current is not None and isinstance(item, dict) and item.get('id') and payload.get('started_at_ms') is not None:
+                    current.setdefault('itemStartedAtMsById', {})[item['id']] = payload['started_at_ms']
                 if isinstance(item, dict) and item.get("type") in ("ImageView", "imageView"):
                     # ImageView evidence only exists in event records. Preserve it
                     # so saved history can still render the image after restart.
@@ -493,6 +544,9 @@ class SessionStore:
                                   "summary": copy.deepcopy(payload.get("summary") or [])})
                 elif payload.get("type") in ("function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"):
                     items.append({"id": payload.get("call_id", str(len(items))), "type": "storedToolEvent", **payload})
+            if record.get('timestamp') is not None:
+                for item in items[previous_count:]:
+                    item['timestamp'] = record['timestamp']
         result = {"id": thread_id, "title": meta.get("name") or meta.get("title"), "cwd": meta["cwd"],
                 "latestModel": meta.get('model') or next((t['params']['model'] for t in reversed(turns) if (t.get('params') or {}).get('model')), None),
                 "latestReasoningEffort": next((t['params']['effort'] for t in reversed(turns) if (t.get('params') or {}).get('effort')), None),

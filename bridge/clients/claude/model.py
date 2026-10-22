@@ -98,6 +98,7 @@ def transcript(value):
         if not isinstance(blocks, list):
             continue
         texts = []
+        first_row = len(result)
         text_part = 0
         event_id=event.get('uuid') or message.get('id') or str(index)
         def flush():
@@ -163,6 +164,10 @@ def transcript(value):
                 summary=block.get('text') or block.get('summary')
                 if summary:result.append({'id':str(event_id)+':thinking:'+str(part),'role':'reasoning','kind':'reasoning','title':'思考摘要','text':str(summary)})
         flush()
+        timestamp = event.get('timestamp') or message.get('timestamp')
+        if timestamp is not None:
+            for row in result[first_row:]:
+                row['timestamp'] = timestamp
     return result
 
 

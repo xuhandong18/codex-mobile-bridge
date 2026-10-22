@@ -18,6 +18,26 @@ class ChatMessageGroups {
     const keep=new Set(nodes);for(const child of [...container.children])if(!keep.has(child))child.remove();
   }
   get(key){return this.groups.get(key)?.node||this.firstGroups.get(key);}
+  static decorateTime(node,message,make=(tag,classes='',text='')=>{
+    const element=document.createElement(tag);element.className=classes;element.textContent=text;return element;
+  }){
+    const value=message.timestamp;
+    const numeric=typeof value==='number'||typeof value==='string'&&/^\d+(\.\d+)?$/.test(value);
+    const date=new Date(numeric?(Number(value)<1e11?Number(value)*1000:Number(value)):typeof value==='string'?value:NaN);
+    if(!Number.isFinite(date.getTime())||date.getTime()<=0)return;
+    const text=['user','assistant','error'].includes(message.role);
+    let parent=text?node.querySelector('.message-actions'):node.querySelector('summary');
+    if(!parent&&text){parent=make('div','message-actions');node.append(parent);}
+    if(!parent)return;
+    let time=parent.querySelector('.message-time');
+    if(!time){time=make('time','message-time');parent.append(time);}
+    const pad=value=>String(value).padStart(2,'0');
+    const clock=pad(date.getHours())+':'+pad(date.getMinutes())+':'+pad(date.getSeconds());
+    time.dateTime=date.toISOString();time.textContent=pad(date.getMonth()+1)+'-'+pad(date.getDate())+' '+clock;
+    time.title=date.getFullYear()+'-'+time.textContent;
+    // Actions may arrive later than the message body; the timestamp stays last.
+    parent.append(time);
+  }
   progressSummary(summary){
     // The first rendered message is the summary itself: no duplicate preview.
     summary.onclick=event=>{
@@ -34,6 +54,7 @@ class ChatMessageGroups {
     const assignments=[],turns=new Map();let fallback=0;
     for(const entry of entries){
       const message=entry.message;
+      ChatMessageGroups.decorateTime(entry.node,message,this.node);
       if(message.role==='user'&&!message.isUserContext&&message.kind!=='threadMessage')fallback++;
       const turn=entry.turnId??'legacy:'+fallback,kind=ChatMessageGroups.kind(message);
       const state=turns.get(turn)||{};

@@ -262,6 +262,7 @@ def messages(records):
     result = []
     for item in records:
         event = item.get('event', {})
+        first_row = len(result)
         data = event.get('data') or {}
         kind = event.get('type')
         if kind in ('user/message', 'assistant/message'):
@@ -279,6 +280,10 @@ def messages(records):
                                    'effort': presentation.get('effort', '')})
         elif kind in ('tool/call', 'tool/result', 'todo/write'):
             result.append({'id': str(event.get('seq')), 'role': 'activity', 'title': data.get('name') or data.get('toolName') or kind, 'text': json.dumps(data, ensure_ascii=False, indent=2)})
+        timestamp = event.get('timestamp')
+        if timestamp is not None:
+            for row in result[first_row:]:
+                row['timestamp'] = timestamp
     return result
 
 
