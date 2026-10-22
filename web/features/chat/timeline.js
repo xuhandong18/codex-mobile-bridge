@@ -223,7 +223,7 @@ class ChatTimeline {
   rowVisible(row){
     if(row.isUserContext)return false;
     if(row.role==='user'||row.role==='error')return true;
-    if(row.kind==='reasoning')return this.showReasoning&&!!row.text?.trim();
+    if(row.kind==='reasoning')return this.showProcess&&this.showReasoning&&!!row.text?.trim();
     if(row.role==='activity')return this.showProcess;
     return true;
   }

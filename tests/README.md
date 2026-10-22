@@ -46,9 +46,9 @@ npm run test:updater
 
 `test:desktop` 通过 `scripts/test-frontend.cjs` 自动递归发现 `tests/` 和 `mobile/tests/` 中 `*.test.js`、`*.test.cjs`、`*.test.mjs`。新增 Node 用例不需编辑长命令清单；资源路径检查包含在该入口。
 
-对话显示跨设备同步运行 `python -B scripts/test-backend.py --source-only -p test_chat_display.py`、`node --test tests/chat-display-sync.test.cjs tests/chat-display-panels.test.cjs` 和 `node scripts/test-chat-display-browser.cjs`。浏览器驱动使用合成 API 与独立电脑/手机存储，在手机竖横屏和平板尺寸核验电脑关闭后手机主聊天、侧边聊天隐藏工具详情，但保留独立的文字进度框；开启后相邻工具放进默认收起的执行过程段，逐项详情仍可单独展开，文字进度与工具交替时保持原顺序和多个段落。开关更新同步到已打开的面板，思考摘要独立控制且主题不跨设备覆盖。Node 夹具还验证子任务记录、错误和待确认请求保留；后端覆盖持久化、并发版本、登录、Origin/CSRF 与中继白名单。需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时，不连接真实客户端或调用模型。
+对话显示跨设备同步运行 `python -B scripts/test-backend.py --source-only -p test_chat_display.py`、`node --test tests/chat-display-sync.test.cjs tests/chat-display-panels.test.cjs` 和 `node scripts/test-chat-display-browser.cjs`。浏览器驱动使用合成 API 与独立电脑/手机存储，在手机竖横屏和平板尺寸核验电脑关闭后手机主聊天、侧边聊天隐藏工具详情，但保留独立的文字进度框；开启后相邻工具放进默认收起的执行过程段，逐项详情仍可单独展开，文字进度与工具交替时保持原顺序和多个段落。开关更新同步到已打开的面板，思考摘要在执行过程内单独控制且主题不跨设备覆盖。Node 夹具还验证子任务记录、错误和待确认请求保留；后端覆盖持久化、并发版本、登录、Origin/CSRF 与中继白名单。另在手机竖横屏和平板尺寸实际点击进度正文首行与后续行，并用回车和空格操作，检查单行省略与全文展开。需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时，不连接真实客户端或调用模型。
 
-聊天分组的真实 DOM 回归由 `node scripts/test-message-navigation-browser.cjs` 调用 `runTimelineGroupingTests`，覆盖交替进度和工具的时序、无边框无背景的紧凑样式、运行中进度默认展开、成功完成才自动收起、中断和失败保持展开、不同结果的历史默认状态、完成后手动重开、不同轮次隔离、嵌套工具详情、流式更新及补读保留展开、错误直接可见。侧边聊天和子任务记录同样由 `tests/chat-display-panels.test.cjs` 验证；不连接真实客户端或发送模型任务。
+聊天分组的真实 DOM 回归由 `node scripts/test-message-navigation-browser.cjs` 调用 `runTimelineGroupingTests`，覆盖交替进度和工具的时序、相邻工具与思考摘要合并、无边框无背景的紧凑样式、正文作为进度折叠点击行且不重复渲染、运行中进度默认展开、成功完成才自动收起、中断和失败保持展开、不同结果的历史默认状态、完成后手动重开、不同轮次隔离、嵌套工具详情、流式更新及补读保留展开、错误直接可见。侧边聊天和子任务记录同样由 `tests/chat-display-panels.test.cjs` 验证；不连接真实客户端或发送模型任务。
 
 侧栏聊天排序可运行 `node --test tests/sidebar-sync.test.cjs tests/project-thread-order.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-order-browser.cjs`。后者在手机、平板和电脑宽度检查三种列表方式、最新五条与加载更多、分区/置顶/独立聊天、交互更新、折叠展开和刷新，并预置旧的本机聊天顺序以确认其不再覆盖最近交互排序；还实际操作右键/长按菜单，检查手动聊天调序及排序切换入口已移除、项目内多个置顶的独立时间顺序、取消、普通分页额度、搜索过滤，以及冷启动时全局预读行和最近一百条以外的旧置顶。定向元数据读取的登录、主机、数量及原有可见性边界由 `test_bridge.py` 覆盖。仅使用合成数据，需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 

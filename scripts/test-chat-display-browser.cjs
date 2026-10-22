@@ -10,7 +10,7 @@ const row={id,host:'local',title:'Display fixture',cwd:'/fixture',status:'idle',
 const messages=[{key:'user',role:'user',kind:'userMessage',text:'Question'},
   {key:'command',role:'activity',kind:'commandExecution',title:'Command',text:'command output'},
   {key:'files',role:'activity',kind:'fileChange',title:'Changes',text:'file diff'},
-  {key:'progress',role:'assistant',kind:'agentMessage',phase:'commentary',text:'Progress'},
+  {key:'progress',role:'assistant',kind:'agentMessage',phase:'commentary',text:'Progress starts here. '+('Checking the actual message order and preserving readable progress. '.repeat(12))+'\n\nAdditional paragraph remains available when expanded.'},
   {key:'reason',role:'activity',kind:'reasoning',title:'Reasoning',text:'Public summary'},
   {key:'answer',role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Final answer'}].map((message,order)=>({...message,turnId:'display-turn',turnStatus:'completed',order,version:'v1'}));
 const server=http.createServer(async(req,res)=>{
@@ -59,6 +59,20 @@ const server=http.createServer(async(req,res)=>{
       check(await page.locator('#messages [data-key="files"]').isHidden(),'手机隐藏文件变更 '+width);
       check(await page.locator('#messages .chat-progress-group').isVisible(),'手机保留独立的进度折叠框 '+width);
       check(!await page.locator('#messages .chat-progress-group').evaluate(node=>node.open),'已有最终结果时进度默认收起 '+width);
+      const progress=page.locator('#messages .chat-progress-group'),summary=progress.locator(':scope > summary');
+      check((await summary.innerText()).startsWith('Progress starts here.')&&await summary.locator('.message-body').count()===1,'正文直接接在三角形后，只渲染一次且没有文字进度标题 '+width);
+      check(await summary.evaluate(node=>getComputedStyle(node,'::after').content.includes('...')&&node.querySelector('.message-body').getBoundingClientRect().height<=parseFloat(getComputedStyle(node).lineHeight)+1),'折叠时仅保留一行正文和三个点 '+width);
+      await summary.click();check(await progress.evaluate(node=>node.open),'点击折叠后的正文行展开 '+width);
+      await summary.evaluate(node=>node.scrollIntoView({block:'start'}));
+      const line=await summary.evaluate(node=>{const body=node.querySelector('.message-body'),first=body.firstElementChild||body,rect=first.getBoundingClientRect();return {x:rect.x,y:rect.y,height:parseFloat(getComputedStyle(first).lineHeight)};});
+      await page.mouse.click(line.x+30,line.y+line.height*1.5);
+      check(await progress.evaluate(node=>node.open),'点击后续正文行不误收起 '+width);
+      await summary.evaluate(node=>node.scrollIntoView({block:'start'}));
+      const firstLine=await summary.evaluate(node=>{const body=node.querySelector('.message-body'),first=body.firstElementChild||body,rect=first.getBoundingClientRect();return {x:rect.x,y:rect.y,height:parseFloat(getComputedStyle(first).lineHeight)};});
+      await page.mouse.click(firstLine.x+30,firstLine.y+firstLine.height/2);
+      check(!await progress.evaluate(node=>node.open),'点击正文第一行即可收起 '+width);
+      await summary.focus();await summary.press('Enter');check(await progress.evaluate(node=>node.open),'键盘回车可展开正文 '+width);
+      await summary.press('Space');check(!await progress.evaluate(node=>node.open),'键盘空格可收起正文 '+width);
       check(await page.locator('#messages [data-key="reason"]').isHidden(),'手机独立同步思考摘要 '+width);
       check(await page.locator('#messages [data-key="answer"]').isVisible(),'手机保留最终回复 '+width);
       check(await page.evaluate(()=>document.documentElement.dataset.theme==='light'),'电脑主题不覆盖手机外观 '+width);
@@ -71,7 +85,7 @@ const server=http.createServer(async(req,res)=>{
         await page.waitForFunction(()=>document.documentElement.dataset.showProcess==='true',null,{timeout:10000});
         check(await page.locator('.wb-side-messages .chat-process-group:visible').count()===1,'电脑切换后手机显示统一执行过程框');
         check(await page.locator('.wb-side-message.activity:visible').count()===0,'执行过程默认收起');
-        await page.locator('.wb-side-messages .chat-process-group > summary').click();
+        await page.locator('.wb-side-messages .chat-process-group:visible > summary').click();
         check(await page.locator('.wb-side-message.activity:visible').count()===2,'展开总框后分别显示命令和文件详情');
         check(await page.locator('#messages [data-key="reason"]').isHidden(),'开启过程不改变思考摘要开关');
         await desktop.locator('#appearance-process').uncheck();

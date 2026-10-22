@@ -4,7 +4,7 @@
 class SideChatPanel {
   static messageVisible(message){
     if(message.role==='user'||message.role==='error')return true;
-    if(message.kind==='reasoning'||message.role==='reasoning')return document.documentElement.dataset.showReasoning!=='false'&&!!message.text?.trim();
+    if(message.kind==='reasoning'||message.role==='reasoning')return document.documentElement.dataset.showProcess!=='false'&&document.documentElement.dataset.showReasoning!=='false'&&!!message.text?.trim();
     if(message.role!=='assistant')return document.documentElement.dataset.showProcess!=='false';
     return true;
   }

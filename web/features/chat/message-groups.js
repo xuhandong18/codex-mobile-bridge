@@ -6,7 +6,8 @@ class ChatMessageGroups {
     const element=document.createElement(tag);element.className=classes;element.textContent=text;return element;
   }){this.container=container;this.node=node;this.groups=new Map();this.firstGroups=new Map();}
   static kind(message){
-    if(message.isUserContext||message.kind==='reasoning'||message.role==='reasoning')return null;
+    if(message.isUserContext)return null;
+    if(message.kind==='reasoning'||message.role==='reasoning')return 'process';
     if(message.role==='assistant')return message.phase==='commentary'?'progress':null;
     return ['user','error'].includes(message.role)?null:'process';
   }
@@ -17,6 +18,18 @@ class ChatMessageGroups {
     const keep=new Set(nodes);for(const child of [...container.children])if(!keep.has(child))child.remove();
   }
   get(key){return this.groups.get(key)?.node||this.firstGroups.get(key);}
+  progressSummary(summary){
+    // The first rendered message is the summary itself: no duplicate preview.
+    summary.onclick=event=>{
+      if(event.target.closest?.('a,button,input,select,textarea,[role="button"]'))return;
+      const selection=window.getSelection();if(selection&&!selection.isCollapsed){event.preventDefault();return;}
+      if(event.detail===0)return; // Keep native keyboard activation.
+      const body=summary.querySelector('.message-body'),first=body?.firstElementChild||body||summary;
+      const rect=first.getBoundingClientRect(),style=getComputedStyle(first);
+      const line=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.8;
+      if(event.clientY>rect.top+line)event.preventDefault();
+    };
+  }
   render(entries,{showProcess=true}={}){
     const assignments=[],turns=new Map();let fallback=0;
     for(const entry of entries){
@@ -51,15 +64,17 @@ class ChatMessageGroups {
       const outcome=completed?'completed':['interrupted','failed','cancelled','stopped'].includes(state.status)?state.status:'running';
       if(!group){
         const root=this.node('details','chat-message-group chat-'+kind+'-group');root.dataset.key=groupKey;
-        const label=kind==='progress'?'文字进度':'执行过程',summary=this.node('summary','chat-group-summary',typeof BridgeI18n==='undefined'?label:BridgeI18n.t(label));
-        summary.dataset.i18n=label;
+        const label='执行过程',summary=this.node('summary','chat-group-summary'+(kind==='progress'?' chat-progress-summary':''),kind==='progress'?'':typeof BridgeI18n==='undefined'?label:BridgeI18n.t(label));
+        if(kind==='progress')this.progressSummary(summary);else summary.dataset.i18n=label;
         const body=this.node('div','chat-group-body');root.append(summary,body);
-        group={node:root,body,outcome};this.groups.set(groupKey,group);
+        group={node:root,summary,body,outcome};this.groups.set(groupKey,group);
         root.open=kind==='progress'&&!completed;
       }else if(kind==='progress'&&group.outcome!==outcome)group.node.open=!completed;
       Object.assign(group,{kind,turn,outcome,keys:new Set(rows.map(row=>row.key))});
       used.add(groupKey);roots.push(group.node);if(!this.firstGroups.has(baseKey))this.firstGroups.set(baseKey,group.node);
-      const nodes=rows.map(row=>row.node);ChatMessageGroups.place(group.body,nodes);
+      const nodes=rows.map(row=>row.node);
+      if(kind==='progress')ChatMessageGroups.place(group.summary,nodes.slice(0,1));
+      ChatMessageGroups.place(group.body,kind==='progress'?nodes.slice(1):nodes);
       group.node.hidden=kind==='process'&&!showProcess||nodes.every(node=>node.hidden);
     }
     for(const [key,group] of this.groups){

@@ -122,7 +122,7 @@ async function runTimelineVisibilityTests() {
   timeline.setVisibility({showReasoning:false,showProcess:true});
   check(!visible().includes('reasoning')&&visible().includes('command'),'Reasoning can be hidden independently');
   timeline.setVisibility({showReasoning:true,showProcess:false});
-  check(visible().includes('reasoning')&&visible().includes('progress')&&!visible().includes('command'),'Activity filter hides tools but retains commentary and reasoning');
+  check(!visible().includes('reasoning')&&visible().includes('progress')&&!visible().includes('command'),'执行过程关闭时一并隐藏工具和思考摘要，仍保留文字进度');
   timeline.setVisibility({showReasoning:false,showProcess:false});
   check(JSON.stringify(visible())===JSON.stringify(['user','progress','final','legacy','error']),'Reply view retains progress, user text, final replies, unknown-phase replies and errors');
   check(meta.requests[0].id==='pending'&&timeline.pendingRequests,'Pending user requests remain available');
@@ -169,10 +169,11 @@ async function runTimelineGroupingTests(){
   check(progress().open&&painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('p2').node),'运行时进度独立展开并直接显示文字');
   check(!process().open&&!painted(timeline.nodes.get('c').node),'工具总框默认收起');
   const processGroups=[...timeline.container.querySelectorAll('.chat-process-group')];
-  check(processGroups.length===2&&processGroups[0].querySelectorAll('.chat-group-body > details').length===1&&processGroups[1].querySelectorAll('.chat-group-body > details').length===2,'只合并相邻工具，文字进度前后的工具保留各自的折叠段');
+  check(processGroups.length===2&&processGroups[0].querySelectorAll('.chat-group-body > details').length===1&&processGroups[1].querySelectorAll('.chat-group-body > details').length===3,'相邻工具、文件变更和思考摘要合并，文字进度前后仍保留各自的执行过程段');
   const sequence=[...timeline.container.querySelectorAll('[data-key]')].filter(node=>timeline.nodes.has(node.dataset.key)).map(node=>node.dataset.key);
   check(JSON.stringify(sequence)===JSON.stringify(rows.map(row=>row.key)),'多段文字进度、工具和思考摘要的实际时序完全不变');
-  check([...timeline.container.querySelectorAll('.chat-message-group')].every(node=>{const style=getComputedStyle(node),summary=getComputedStyle(node.querySelector('summary'));return style.borderTopWidth==='0px'&&style.borderRadius==='0px'&&style.backgroundColor==='rgba(0, 0, 0, 0)'&&summary.paddingTop==='2px'&&summary.paddingLeft==='0px';}),'文字进度和执行过程都采用无边框、无背景、紧凑标题的样式');
+  check([...timeline.container.querySelectorAll('.chat-message-group')].every(node=>{const style=getComputedStyle(node),summary=getComputedStyle(node.querySelector('summary'));return style.borderTopWidth==='0px'&&style.borderRadius==='0px'&&style.backgroundColor==='rgba(0, 0, 0, 0)'&&summary.paddingTop==='2px';}),'文字进度和执行过程都没有外框、背景和多余留白');
+  check(progress().querySelector('summary').firstChild===timeline.nodes.get('p1').node&&!progress().querySelector('summary').dataset.i18n,'文字进度首条正文就是点击行，没有额外标题和重复预览');
   process().querySelector('summary').click();timeline.nodes.get('c').node.querySelector('summary').click();
   check(painted(timeline.nodes.get('c').node.querySelector('pre'))&&!painted(timeline.nodes.get('t').node.querySelector('pre')),'总框和每条工具详情分别展开');
   timeline.apply(page([{...rows[2],version:'v2',text:'new output'}],2));
@@ -184,7 +185,7 @@ async function runTimelineGroupingTests(){
   timeline.apply(page([{...answer,turnStatus:'inProgress'}],3));
   check(progress().open,'最终文字到达但本轮仍运行时不提前收起进度');
   timeline.apply(page([...rows.map(row=>({...row,turnStatus:'completed'})),answer],4));
-  check(!progress().open&&!painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('a').node),'任务完成自动收起进度并直接显示最终结果');
+  check(!progress().open&&painted(timeline.nodes.get('p1').node)&&painted(timeline.nodes.get('a').node),'任务完成后进度保留正文首行，最终结果仍直接显示');
   check([...timeline.container.querySelectorAll('.chat-progress-group')].every(node=>!node.open),'成功完成时每一段文字进度都自动收起');
   check(process().open&&timeline.nodes.get('c').node.open,'完成事件不改变手动展开的工具详情');
   progress().querySelector('summary').click();timeline.apply(page([],5));

@@ -59,3 +59,18 @@
 .chat-group-body>.message,.chat-group-body>.wb-side-message{margin:10px 0}
 .chat-group-body>.activity{margin:8px 0}
 .chat-progress-group>.chat-group-body>.message .who,.chat-progress-group>.chat-group-body>.wb-side-message>small{display:none}
+.chat-progress-summary{display:block;position:relative;padding:2px 0 2px 16px;list-style:none;color:var(--text);font-size:var(--message-size,14px);line-height:var(--message-leading,1.8);user-select:text}
+.chat-progress-summary::-webkit-details-marker{display:none}
+.chat-progress-summary::before{content:'▸';position:absolute;left:0;top:.25em;color:var(--muted);font-size:12px;line-height:1.8}
+.chat-progress-group[open]>.chat-progress-summary::before{content:'▾'}
+.chat-progress-summary>[data-key]{margin:0;padding:0;border:0;background:transparent}
+.chat-progress-summary>[data-key]>.who,.chat-progress-summary>[data-key]>small{display:none}
+.chat-progress-summary .message-body>:first-child{margin-top:0}
+.chat-progress-summary .message-body>:last-child{margin-bottom:0}
+.chat-progress-group:not([open])>.chat-progress-summary{display:flex;align-items:baseline;gap:2px}
+.chat-progress-group:not([open])>.chat-progress-summary>[data-key]{min-width:0;flex:0 1 auto}
+.chat-progress-group:not([open])>.chat-progress-summary::after{content:'...';flex:none}
+.chat-progress-group:not([open])>.chat-progress-summary>[data-key]>:not(.message-body){display:none}
+.chat-progress-group:not([open])>.chat-progress-summary .message-body{white-space:nowrap;overflow:hidden;text-overflow:clip;max-height:1.8em;max-height:1lh}
+.chat-progress-group:not([open])>.chat-progress-summary .message-body *{display:inline;margin:0;padding:0;white-space:nowrap;font-size:inherit;line-height:inherit}
+.chat-progress-group:not([open])>.chat-progress-summary .message-body :is(br,img,svg,video,button){display:none}

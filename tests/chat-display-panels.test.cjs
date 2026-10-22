@@ -46,7 +46,16 @@ test('交替的文字进度和工具段严格保留实际时序',()=>{
   const walk=node=>{if(rows.has(node))order.push(rows.get(node));else for(const child of node.children)walk(child);};walk(panel.messages);
   assert.deepEqual(order,messages.map(message=>message.id));
   assert.equal(panel.messages.children.filter(node=>node.className.includes('chat-progress-group')).length,3);
-  assert.equal(panel.messages.children.filter(node=>node.className.includes('chat-process-group')).length,3);
+  assert.equal(panel.messages.children.filter(node=>node.className.includes('chat-process-group')).length,2);
+});
+test('文字进度以首条正文作为折叠点击行，不额外渲染文字进度标题或复制正文',()=>{
+  const {panel}=fixture(),messages=[{id:'p1',role:'assistant',phase:'commentary',text:'正在检查第一步\n这是后续正文'},
+    {id:'p2',role:'assistant',phase:'commentary',text:'第二条相邻进度'}];
+  panel.apply({id:'child',connected:true,turns:[{id:'turn',status:'inProgress',messages}],requests:[]});
+  const group=panel.messageGroups.get('group:progress:turn'),summary=group.querySelector('summary');
+  assert.equal(summary.children[0],panel.messageNodes[0].node);
+  assert.equal(summary.textContent,'');assert.equal(summary.dataset.i18n,undefined);
+  assert.equal(group.children[1].children[0],panel.messageNodes[1].node);
 });
 test('本轮中断失败时即使已有最终消息也保留展开的文字进度',()=>{
   for(const status of [undefined,'inProgress','interrupted','failed','cancelled','stopped']){
@@ -67,7 +76,7 @@ test('Codex and Harness side chats honor process and reasoning independently thr
     const {panel,document,messages}=fixture(provider),state={id:'child',connected:true,turns:[{messages}],requests:[{id:'approval'}]};
     panel.apply(state);
     const visible=()=>Array.from(panel.messageNodes.filter(({node})=>!node.hidden),({message})=>message.text);
-    assert.deepEqual(visible(),['question','progress','summary','answer','failure']);assert.equal(panel.requests.length,1);
+    assert.deepEqual(visible(),['question','progress','answer','failure']);assert.equal(panel.requests.length,1);
     document.documentElement.dataset.showReasoning='false';panel.applyVisibility();
     assert.deepEqual(visible(),['question','progress','answer','failure']);
     panel.apply({...state,turns:[{messages:[...messages,{role:'activity',kind:'commandExecution',text:'streaming'}]}]});
@@ -80,7 +89,7 @@ test('saved subagent records obey the same filter without reloading or suppressi
   const {Panel,context,document,messages}=fixture(),Agents=vm.runInContext('AgentsPanel',context),agent=Object.create(Agents.prototype);
   Object.assign(agent,{selected:{id:'child'},detail:new Element(),node:(...args)=>new Element(...args),url:()=>'/fixture',
     workbench:{request:async()=>({turns:[{messages,status:'completed'}],historyComplete:true})}});
-  await agent.readDetail();assert.equal(agent.messageNodes.filter(({node})=>!node.hidden).length,5);
+  await agent.readDetail();assert.equal(agent.messageNodes.filter(({node})=>!node.hidden).length,4);
   document.documentElement.dataset.showReasoning='false';agent.applyVisibility();
   assert.deepEqual(Array.from(agent.messageNodes.filter(({node})=>!node.hidden),({message})=>message.role),['user','assistant','assistant','error']);
   assert.equal(Panel.messageVisible({role:'activity',kind:'reasoning',text:''}),false);
