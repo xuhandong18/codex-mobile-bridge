@@ -1099,12 +1099,16 @@ class Bridge:
             sessions = [(sid, self.live.get(sid)) for sid in dict.fromkeys(identifiers) if sid in self.listed]
         rows = []
         for sid, session in sessions:
-            if session is not None:
-                with session.condition:
-                    running = session.connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active'
-            else:
-                running = False
-            row = {'id': sid, 'host': self.host, 'connected': bool(session and session.connected),
+            connected = running = False
+            # The query deadline has already expired. Its fallback must not
+            # wait on the same session lock that may have stalled the query.
+            if session is not None and session.condition.acquire(blocking=False):
+                try:
+                    connected = session.connected
+                    running = connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active'
+                finally:
+                    session.condition.release()
+            row = {'id': sid, 'host': self.host, 'connected': bool(connected),
                    'activityConnected': bool(running), 'status': 'active' if running else 'unknown',
                    'parentStatus': 'active' if running else 'unknown', 'runningSubagents': 0,
                    'subagentsKnown': False, 'turnId': None, 'turnStatus': None}
@@ -1697,41 +1701,58 @@ class Bridge:
     def _maintain(self):
         delay = 3
         while not self.closed.wait(delay):
-            if self.accounts is not None:
-                try:
-                    self.accounts.check_ready()
-                except ValueError:
-                    continue
-            self.subagent_activity.prune()
-            with self.lock:
-                sessions = list(self.live.values())
-            for session in sessions:
-                with self.submit_lock:
-                    queued = [(k, dict(v)) for k, v in self.submissions.items() if k.startswith(session.id + ":") and v["status"] == "queued"]
-                if queued and session.connected and session.view().get("status") == "idle":
-                    key, entry = queued[0]
-                    try:
-                        self._send_queued(session, key, entry)
-                    except Exception:
-                        pass  # Unknown outcomes stay recorded and are never automatically replayed.
-                if (session.viewers > 0 or queued or session.watched) and not session.connected:
-                    if session.activity_only and session.viewers == 0 and not queued:
-                        if time.monotonic() >= session.retry_at:
-                            session.retry_at = time.monotonic() + 15
-                            self._attach(session, timeout=0)
-                    else:
-                        self._refresh_async(session)
-                elif session.viewers == 0 and not queued and not session.watched and time.monotonic() - session.touched > 300:
-                    with self.lock:
-                        if session.viewers != 0 or session.watched:
-                            continue
-                        self.live.pop(session.id, None)
-                    if (session.connected or session.discovering) and session.runtime != "cli":
-                        try:
-                            self.ipc.follow(session.id, session.owner, False, host=self.host)
-                        except IPCError:
-                            pass
+            try:
+                self._maintain_pass()
+            except Exception:
+                logging.getLogger(__name__).exception('Session maintenance pass failed host=%s', self.host)
             delay = 3 if self.ipc.client_id else min(30, delay * 2)
+
+    def _maintain_pass(self):
+        if self.accounts is not None:
+            try:
+                self.accounts.check_ready()
+            except ValueError:
+                return
+        self.subagent_activity.prune()
+        with self.lock:
+            sessions = list(self.live.values())
+        for session in sessions:
+            try:
+                self._maintain_session(session)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    'Session maintenance failed host=%s thread=%s', self.host, session.id)
+
+    def _maintain_session(self, session):
+        prefix = session.id + ':'
+        queued = []
+        with self.submit_lock:
+            for key, entry in self.submissions.items():
+                if key.startswith(prefix) and entry['status'] == 'queued':
+                    queued.append((key, dict(entry)))
+        if queued and session.connected and session.view().get('status') == 'idle':
+            key, entry = queued[0]
+            try:
+                self._send_queued(session, key, entry)
+            except Exception:
+                pass  # Unknown outcomes stay recorded and are never automatically replayed.
+        if (session.viewers > 0 or queued or session.watched) and not session.connected:
+            if session.activity_only and session.viewers == 0 and not queued:
+                if time.monotonic() >= session.retry_at:
+                    session.retry_at = time.monotonic() + 15
+                    self._attach(session, timeout=0)
+            else:
+                self._refresh_async(session)
+        elif session.viewers == 0 and not queued and not session.watched and time.monotonic() - session.touched > 300:
+            with self.lock:
+                if session.viewers != 0 or session.watched:
+                    return
+                self.live.pop(session.id, None)
+            if (session.connected or session.discovering) and session.runtime != 'cli':
+                try:
+                    self.ipc.follow(session.id, session.owner, False, host=self.host)
+                except IPCError:
+                    pass
 
     def _target(self, thread_id):
         session = self.activate(thread_id)

@@ -6,7 +6,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from bridge.features.sessions.activity import ActivityQueries
+from bridge.features.sessions.activity import ActivityQueries, query_activity
+from bridge.app.service import Bridge, LiveSession
 import test_bridge
 
 
@@ -146,6 +147,49 @@ class ActivityQueryTests(unittest.TestCase):
                 release.set()
         with self.assertRaises(TimeoutError):
             reader.query(['chat'])
+
+
+class ActivityFallbackTests(unittest.TestCase):
+    def test_timeout_does_not_wait_again_for_a_busy_session_lock(self):
+        bridge = Bridge.__new__(Bridge)
+        bridge.host = 'local'
+        bridge.lock = threading.RLock()
+        locked = LiveSession('locked')
+        locked.connected = True
+        locked.state = {'threadRuntimeStatus': {'type': 'active'}}
+        healthy = LiveSession('healthy')
+        healthy.connected = True
+        healthy.state = {'threadRuntimeStatus': {'type': 'active'}}
+        bridge.listed = {'locked', 'healthy'}
+        bridge.live = {'locked': locked, 'healthy': healthy}
+        bridge.activity_queries = SimpleNamespace(query=Mock(side_effect=TimeoutError))
+        entered, release, done = threading.Event(), threading.Event(), threading.Event()
+        result = []
+        def hold():
+            with locked.condition:
+                entered.set()
+                release.wait(2)
+        def read():
+            try:
+                result.append(query_activity(bridge, {'local': ['locked', 'healthy']}))
+            finally:
+                done.set()
+        holder = threading.Thread(target=hold, daemon=True)
+        reader = threading.Thread(target=read, daemon=True)
+        holder.start()
+        try:
+            self.assertTrue(entered.wait(.5))
+            reader.start()
+            self.assertTrue(done.wait(.3), '状态查询已超时，回退读取却再次无限等待会话锁')
+        finally:
+            release.set()
+            holder.join(1)
+            reader.join(1)
+        self.assertEqual(result[0]['sessions'][0]['status'], 'unknown')
+        self.assertEqual(result[0]['sessions'][0]['activityError'], 'timeout')
+        self.assertFalse(result[0]['sessions'][0]['connected'])
+        self.assertEqual(result[0]['sessions'][1]['status'], 'active')
+        self.assertTrue(result[0]['timedOut'])
 
 
 class ActivityHttpTests(unittest.TestCase):
