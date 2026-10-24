@@ -169,6 +169,7 @@ class Bridge:
         self.store = RemoteStore(alias) if alias else SessionStore(codex_home)
         self.message_navigation = MessageNavigation(self.store.navigation_scan, self.store.navigation_window)
         self.catalog_reader = RemoteCatalog(alias) if alias else Catalog(codex_home, codex_bin)
+        self._desktop_tool_hint = None
         self.terminals = TerminalManager()
         self.uploads = Uploads(data_dir, (lambda *args: upload_file(alias, *args)) if alias else None)
         executable_getter = (lambda: self.catalog_reader.executable) if host == 'local' else None

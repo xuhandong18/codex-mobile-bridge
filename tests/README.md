@@ -76,6 +76,8 @@ npm run test:updater
 
 未加载的 Desktop 聊天状态补读由 `test_desktop_metadata_activity.py`、`test_tool_pipe.py` 和 `test_uploads_activity.py` 覆盖，验证只读方法白名单、原生身份、缓存过期、失败回退、可见范围及不提升为可写连接。上述浏览器驱动同时验证“未知灰点 → 同一请求等待原生确认未加载/已完成 → 灰点消失”的查询过程。
 
+`test_desktop_tool_profile.py` 验证状态补读复用自动发现的桌面程序路径，避免每五秒重新扫描 Windows 安装目录；每次连接仍核验管道服务进程、当前项目和聊天上下文。首次发现耗尽截止时间时不再提交原生读取，下一次查询可复用发现结果；路径消失、运行时变化或连接失败后重新发现，明确选择的桌面程序始终优先。路径提示不缓存聊天状态，也不作为停止程序或切换账号的依据。
+
 原桌面重建状态订阅后的完成同步由 `test_codex_ipc_following.py` 与 `test_bridge.py` 覆盖：经真实长度前缀帧恢复仍有效的订阅，检查聊天/主机/owner、取消与断连边界，并用隔离命名管道复现“桌面空闲、网关仍运行中”后确认状态变为空闲、下一条普通消息只发送一次且沿用原 owner。夹具不连接真实聊天。
 
 历史聊天自动连接运行 `node --test tests/chat-opening-ui.test.cjs tests/cli-access-ui.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p test_bridge.py`，覆盖历史与重连并行、CLI 被动阅读不激活、模型目录不重复等待 owner、正文未加载时沿用已核验的 cwd/provider，以及连接分阶段耗时日志。真实 DOM 驱动为 `node scripts/test-chat-opening-browser.cjs`，使用已有 Playwright/Chromium，在 390、820、1280 像素下实际阻塞合成重连接口，确认历史先显示、连接前不预读模型，以及连接后即使模型查询仍被阻塞也能继续输入且保留草稿；不操作真实客户端。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。

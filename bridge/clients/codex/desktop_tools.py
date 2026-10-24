@@ -5,6 +5,7 @@ import struct
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from bridge.clients.codex.transport import connect_stream
 
@@ -101,9 +102,29 @@ class DesktopTools:
         contexts = bridge.store.list(limit=1, source='desktop')
         if not projects or not contexts:
             raise ToolError('No verified desktop profile context')
-        executable = bridge.accounts.index.get('desktopExecutable') or DesktopApp.scan(bridge.catalog_reader.executable, bridge.codex_home)
-        return cls.connect(executable, contexts[0]['id'], projects,
-                           **({'timeout': max(0, deadline-time.monotonic())} if deadline is not None else {}))
+        executable = bridge.accounts.index.get('desktopExecutable')
+        hint = None
+        if not executable:
+            runtime = bridge.catalog_reader.executable
+            hint = getattr(bridge, '_desktop_tool_hint', None)
+            if hint is None or hint[0] != runtime or not Path(hint[1]).is_file():
+                hint = (runtime, DesktopApp.scan(runtime, bridge.codex_home))
+                # Only reuse installation discovery, never a connection or a
+                # status snapshot. connect() verifies the server and current
+                # profile projects again on every request.
+                bridge._desktop_tool_hint = hint
+            executable = hint[1]
+        if deadline is not None and time.monotonic() >= deadline:
+            # A slow first scan may finish after this caller's deadline. Keep
+            # its path so the next read does not repeat that same slow scan.
+            raise ToolError('读取桌面状态超时')
+        try:
+            return cls.connect(executable, contexts[0]['id'], projects,
+                               **({'timeout': max(0, deadline-time.monotonic())} if deadline is not None else {}))
+        except (OSError, ValueError):
+            if hint is not None and getattr(bridge, '_desktop_tool_hint', None) == hint:
+                bridge._desktop_tool_hint = None
+            raise
 
     @classmethod
     def connect(cls, executable, context_id, project_ids, *, timeout=None):
