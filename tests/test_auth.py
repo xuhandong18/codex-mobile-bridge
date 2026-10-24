@@ -1,6 +1,7 @@
 """Authentication lifetime, durable revocation and local-only access management."""
 import json
 import os
+import stat
 import tempfile
 import threading
 import unittest
@@ -147,6 +148,113 @@ class AuthTests(unittest.TestCase):
         (self.directory / 'auth-sessions.json').write_text('{not json')
         with self.assertRaises(ValueError):
             self.auth()
+
+    def test_persistence_syncs_complete_private_files_before_replacing(self):
+        auth = self.auth()
+        primary = self.directory / 'auth-sessions.json'
+        backup = self.directory / 'auth-sessions.json.bak'
+        previous = primary.read_bytes()
+        synced = set()
+        replacements = []
+        real_sync, real_replace = os.fsync, Path.replace
+
+        def sync(fd):
+            info = os.fstat(fd)
+            synced.add((info.st_dev, info.st_ino))
+            return real_sync(fd)
+
+        def replace(source, target):
+            info = source.stat()
+            self.assertIn((info.st_dev, info.st_ino), synced, 'File replaced before durable flush')
+            json.loads(source.read_text(encoding='utf-8'))
+            replacements.append(target)
+            return real_replace(source, target)
+
+        with patch('bridge.features.auth.auth.os.fsync', side_effect=sync), patch.object(Path, 'replace', replace):
+            token, _ = auth.new_session('192.0.2.7')
+        self.assertEqual(replacements, [backup, primary])
+        self.assertEqual(backup.read_bytes(), previous)
+        self.assertIn(auth.key(token), json.loads(primary.read_text())['sessions'])
+        self.assertNotIn(token, backup.read_text())
+        for path in (primary, backup):
+            if os.name != 'nt':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(list(self.directory.glob('*.tmp')), [])
+
+    def test_first_save_and_legacy_state_both_get_a_valid_backup(self):
+        self.auth()
+        primary = self.directory / 'auth-sessions.json'
+        backup = self.directory / 'auth-sessions.json.bak'
+        self.assertEqual(json.loads(backup.read_text()), json.loads(primary.read_text()))
+        backup.unlink()
+        self.auth()
+        self.assertEqual(json.loads(backup.read_text()), json.loads(primary.read_text()))
+
+    def test_failed_flush_or_replace_preserves_committed_state_and_cleans_temporary(self):
+        for failure_stage in ('backup_sync', 'backup_replace', 'primary_sync', 'primary_replace'):
+            with self.subTest(stage=failure_stage):
+                auth = self.auth()
+                token, _ = auth.new_session('192.0.2.7')
+                primary = self.directory / 'auth-sessions.json'
+                backup = self.directory / 'auth-sessions.json.bak'
+                previous, previous_backup = primary.read_bytes(), backup.read_bytes()
+                backup_replaced = False
+                real_sync, real_replace = os.fsync, Path.replace
+
+                def sync(fd):
+                    if stat.S_ISREG(os.fstat(fd).st_mode):
+                        stage = 'primary_sync' if backup_replaced else 'backup_sync'
+                        if failure_stage == stage:
+                            raise OSError('fixture flush failure')
+                    return real_sync(fd)
+
+                def replace(source, target):
+                    nonlocal backup_replaced
+                    stage = 'backup_replace' if target == backup else 'primary_replace'
+                    if failure_stage == stage:
+                        raise OSError('fixture replace failure')
+                    result = real_replace(source, target)
+                    if target == backup:
+                        backup_replaced = True
+                    return result
+
+                with patch('bridge.features.auth.auth.os.fsync', side_effect=sync), patch.object(Path, 'replace', replace):
+                    with self.assertRaises(OSError):
+                        auth.logout(token)
+                self.assertEqual(primary.read_bytes(), previous)
+                self.assertEqual(backup.read_bytes(), previous if backup_replaced else previous_backup)
+                self.assertIsNotNone(self.auth().get(token))
+                self.assertEqual(list(self.directory.glob('*.tmp')), [])
+
+    def test_backup_cannot_automatically_restore_a_revoked_session_or_ip_policy(self):
+        auth = self.auth()
+        token, _ = auth.new_session('192.0.2.7')
+        auth.manage({'action': 'block', 'id': auth.key(token)})
+        primary = self.directory / 'auth-sessions.json'
+        backup = self.directory / 'auth-sessions.json.bak'
+        self.assertIn(auth.key(token), json.loads(backup.read_text())['sessions'])
+        previous_backup = backup.read_bytes()
+        for damaged in ('\0' * 4954, '{invalid', 'missing'):
+            with self.subTest(damaged=damaged[:10]):
+                if damaged == 'missing':
+                    primary.unlink()
+                else:
+                    primary.write_text(damaged, encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    self.auth()
+                self.assertEqual(backup.read_bytes(), previous_backup)
+
+    def test_corrupt_primary_never_overwrites_a_good_backup_during_save(self):
+        auth = self.auth()
+        primary = self.directory / 'auth-sessions.json'
+        backup = self.directory / 'auth-sessions.json.bak'
+        previous_backup = backup.read_bytes()
+        primary.write_bytes(b'\0' * 4954)
+        with self.assertRaises(ValueError):
+            auth.persist()
+        self.assertEqual(backup.read_bytes(), previous_backup)
+        self.assertEqual(primary.read_bytes(), b'\0' * 4954)
+        self.assertEqual(list(self.directory.glob('*.tmp')), [])
 
     def test_device_management_uses_existing_private_control_channel(self):
         auth = self.auth()

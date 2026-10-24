@@ -31,6 +31,8 @@ HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据�
 
 需要真实符号链接的夹具通过 `symlink_support.require_symlink_support()` 检查能力。Windows 账户缺少该权限（WinError 1314）时，仅跳过对应检查并显示原因；不修改系统安全策略，也不把这些检查算作通过。
 
+认证持久化保护运行 `python -B scripts/test-backend.py --source-only -p test_auth.py`，并联动 `test_login_security.py`、`test_pairing.py`。覆盖完整 JSON 强制落盘后才替换、首次保存与旧数据补建备份、落盘及替换失败时保留主文件和清理临时文件、全零/非法/缺失主文件不自动恢复旧权限，以及损坏主文件不覆盖有效备份。夹具使用合成数据和真实临时文件；故障注入不代表已完成真实断电或蓝屏测试。
+
 Harness 个人分支功能另有 `node scripts/test-deepseek-browser.cjs`：需要已有的 Playwright 与 Chromium（可通过 `NODE_PATH` 使用现有测试运行时），在四种屏幕尺寸执行实际 DOM 断言，仅使用隔离合成会话。详情见 [功能对应与验证](../docs/deepseek-personal-features.md)。
 
 Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_dsh_menu_native.py`：复用本机已有 Electron 运行库（可通过 `CMB_TEST_ELECTRON_EXECUTABLE` 指定），仅将运行库复制到 `.tmp/`，在非活动桌面启动独立合成应用，实际调用中英文标题栏菜单和原生退出项。覆盖正常清理、待处理窗口、重复退出项和进程创建身份变化；不加载真实 Harness 资源、数据目录或模型。缺少运行库时明确跳过，不计作通过。

@@ -49,6 +49,26 @@ def password_record(password):
     return {"algorithm": "pbkdf2-sha256", "iterations": 600000, "salt": salt.hex(), "hash": digest.hex()}
 
 
+def _durable_replace(path, content):
+    temporary = path.with_name(path.name + '.' + secrets.token_hex(8) + '.tmp')
+    try:
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        if os.name == 'posix':
+            # Persist the rename too. Windows does not support opening directories
+            # for fsync; the file contents are committed before replacement above.
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 class LoginRejected(PermissionError):
     def __init__(self, message, status):
         super().__init__(message)
@@ -72,6 +92,7 @@ class Auth:
         self.identity = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         legacy_identity = hashlib.sha256(json.dumps({**identity, 'sessionHours': self.hours}, sort_keys=True).encode()).hexdigest()
         self.path = Path(data_dir) / 'auth-sessions.json' if data_dir is not None else None
+        self.backup_path = self.path.with_name(self.path.name + '.bak') if self.path else None
         # A cookie namespace belongs to the gateway data directory, not the
         # process or its (possibly changed) login policy.
         self.cookie_name = self.COOKIE + '_' + secrets.token_hex(12)
@@ -94,6 +115,8 @@ class Auth:
                 self.persist()
             if not saved.get('cookieName'):
                 self.persist()
+            if not self.backup_path.exists():
+                self.persist()
         elif self.path:
             self.persist()
 
@@ -108,13 +131,26 @@ class Auth:
     def persist(self):
         if self.path is None:
             return
-        temporary = self.path.with_name(self.path.name + '.' + secrets.token_hex(8) + '.tmp')
-        try:
-            with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as stream:
-                json.dump({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}, stream)
-            temporary.replace(self.path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        with self.lock:
+            content = json.dumps({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy,
+                                  'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}).encode('utf-8')
+            if self.path.exists():
+                previous = self.path.read_bytes()
+                saved = json.loads(previous.decode('utf-8'))
+                if (not isinstance(saved, dict) or not isinstance(saved.get('identity'), str) or
+                        not isinstance(saved.get('sessions'), dict)):
+                    raise ValueError('登录状态文件格式不正确，已保留备份')
+                access_policy(saved.get('policy'))
+            elif self.backup_path.exists():
+                # An old backup can contain revoked sessions or weaker IP rules.
+                # Recovery must be an explicit local decision, never a rollback.
+                raise ValueError('登录状态文件缺失，已保留备份；请在本机确认恢复')
+            else:
+                previous = content
+            # A failed flush leaves the committed primary intact. Never rotate
+            # corrupt bytes into the only good backup.
+            _durable_replace(self.backup_path, previous)
+            _durable_replace(self.path, content)
 
     def permitted(self, address):
         with self.lock:
