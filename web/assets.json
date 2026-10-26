@@ -62,9 +62,10 @@
   "/workbench.css": [
     "features/workspace/workbench.css",
     "layouts/medium/workbench.css",
-    "features/workspace/workbench-input.css"
+    "features/workspace/workbench-input.css",
+    "features/workspace/markdown-editor.css"
   ],
-  "/workbench.js": "features/workspace/workbench.js",
+  "/workbench.js": ["features/workspace/markdown-editor.js", "features/workspace/workbench.js"],
   "/source-view.js": "features/workspace/source-view.js",
   "/vendor/prism/source-view.min.js": "vendor/prism/source-view.min.js",
   "/presentation.js": ["features/settings/chat-display.js", "features/settings/presentation.js"],

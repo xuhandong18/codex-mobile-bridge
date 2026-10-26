@@ -5,6 +5,11 @@ class Workbench {
     Object.assign(this, {chat, request, csrf, notify, onUnauthorized, openChat, loadReferences});
     window.BridgeFileActions?.register(chat,this);
     this.sessions = new Map();
+    window.addEventListener('beforeunload', event => {
+      if ([...this.sessions.values()].some(session => session.files.some(tab => tab.editor && (tab.editor.dirty || tab.editor.busy || tab.editor.needsCheck)))) {
+        event.preventDefault(); event.returnValue = '';
+      }
+    });
     this.scrollPositions = new WeakMap();
     this.strip = this.node('nav', 'workbench-tabs'); this.strip.dataset.i18nAriaLabel='工作台标签';this.strip.setAttribute("data-i18n-aria-label",'工作台标签');this.strip.setAttribute('aria-label', BridgeI18n.t('工作台标签'));
     this.tabs = this.node('div', 'wb-tabs'); this.tabs.setAttribute('role', 'tablist');
@@ -219,7 +224,7 @@ class Workbench {
     if (this.previewFullscreen && (!provider || this.previewFullscreen.session.provider === provider)) this.closePreviewFullscreen();
     const visible=!provider||this.current?.provider===provider;
     if(visible){this.tabAnimation?.cancel();this.stopThumbnails();this.uploadController?.abort();clearTimeout(this.sideChatTimer);}
-    for(const [key,session] of this.sessions)if(!provider||session.provider===provider){session.sideChatRead?.abort();for(const tab of session.files){tab.controller?.abort();tab.pdf?.dispose();tab.html?.dispose();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
+    for(const [key,session] of this.sessions)if(!provider||session.provider===provider){session.sideChatRead?.abort();for(const tab of session.files){tab.controller?.abort();tab.editor?.dispose();tab.pdf?.dispose();tab.html?.dispose();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
     if(visible){this.current=null;this.chat.classList.remove('workbench-active','wb-split');this.endDrag();this.panel.replaceChildren();this.panel.hidden=true;this.tabs.replaceChildren();}
   }
   get isFileVisible() { return !!this.current && !this.splitMode && this.current.active !== 'chat'; }
@@ -262,6 +267,7 @@ class Workbench {
     this.tabs.replaceChildren();
     for (const tab of [{id: 'chat', name: BridgeI18n.t('聊天')}, ...session.files]) {
       const group = this.node('div', 'wb-tab');group.dataset.tab=tab.id; group.classList.toggle('selected', this.splitMode ? ['chat',session.splitTab].includes(tab.id) : session.active === tab.id);
+      group.classList.toggle('wb-tab-dirty', !!tab.editor?.dirty);
       const select = this.button(tab.name, () => this.select(tab.id)); if(tab.id.startsWith('file:')||tab.customTitle)this.raw(select); select.setAttribute('role', 'tab'); select.setAttribute('aria-selected', String(this.splitMode?['chat',session.splitTab].includes(tab.id):session.active===tab.id));
       if(tab.sideChat)select.ondblclick=()=>tab.sideChat.rename();
       group.append(select);
@@ -298,12 +304,15 @@ class Workbench {
   async close(id) {
     const session = this.current, index = session.files.findIndex(t => t.id === id);
     if (index < 0) return;
+    const closing = session.files[index];
+    if (closing.editor && (closing.editor.dirty || closing.editor.busy || closing.editor.needsCheck) && !await closing.editor.confirmLeave()) return;
+    if (this.current !== session || session.files[index] !== closing) return;
     const fullscreenTab=this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===session.files[index]
       ?session.files.find(tab=>tab.id!==id&&tab.id.startsWith('file:')):null;
     if (this.previewFullscreen?.tab === session.files[index]&&!fullscreenTab) this.closePreviewFullscreen();
     if (session.files[index].sideChat && !await session.files[index].sideChat.end()) return;
     if (!session.files[index] || session.files[index].id !== id) return;
-    session.files[index].controller?.abort(); session.files[index].pdf?.dispose(); session.files[index].html?.dispose(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
+    session.files[index].controller?.abort(); session.files[index].editor?.dispose(); session.files[index].pdf?.dispose(); session.files[index].html?.dispose(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
     if(session.splitTab===id)session.splitTab=(session.files[index]||session.files[index-1])?.id||null;
     const wasActive=session.active===id;
     if(wasActive)session.active=fullscreenTab?.id||session.splitTab||(session.files.some(t=>t.id==='files')?'files':'chat');
@@ -485,7 +494,7 @@ class Workbench {
     const onKeydown = event => {
       if (event.key === 'Escape') { event.preventDefault(); this.closePreviewFullscreen(); return; }
       if (event.key !== 'Tab') return;
-      const controls = [...body.querySelectorAll('a[href],button,iframe,[tabindex]')].filter(node => !node.hidden && !node.disabled && node.getClientRects().length);
+      const controls = [...body.querySelectorAll('a[href],button,input,textarea,select,iframe,[tabindex]')].filter(node => !node.hidden && !node.disabled && node.getClientRects().length);
       const first = controls[0], last = controls.at(-1);
       if (!first) { event.preventDefault(); focusTarget.focus(); }
       else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
@@ -567,6 +576,8 @@ class Workbench {
   }
   async refreshPreview(session, tab) {
     if (session !== this.current || this.sessions.get(session.key) !== session || !session.files.includes(tab) || tab.loading) return;
+    if (tab.editor && (tab.editor.dirty || tab.editor.busy || tab.editor.needsCheck) && !await tab.editor.confirmLeave()) return;
+    if (session !== this.current || !session.files.includes(tab) || tab.loading) return;
     const entry = tab.entry, controller = tab.controller = new AbortController();
     tab.loading = true; tab.body.setAttribute('aria-busy', 'true');
     if (tab.refreshButton) tab.refreshButton.disabled = true;
@@ -585,6 +596,7 @@ class Workbench {
       const wrapped = previous?.querySelector?.('.wb-source')?.dataset.wrap === 'true';
       const restoreFocus = !!tab.refreshButton && document.activeElement === tab.refreshButton;
       if (this.current === session) this.fileSelection?.close();
+      tab.editor?.dispose(); tab.editor = null;
       tab.pdf?.dispose(); tab.html?.dispose(); tab.pdf = tab.html = tab.markdown = null;
       const head = this.node('div', 'wb-preview-head'), title = this.node('div', 'wb-preview-title'), actions = this.node('div', 'wb-preview-actions');
       title.append(this.raw(this.node('strong', '', result.name)), this.node('small', '', this.size(result.size) + ' · ' + entry.path));
@@ -593,7 +605,7 @@ class Workbench {
       const refresh = tab.refreshButton ||= this.button('刷新', () => this.refreshPreview(session, tab));
       refresh.className = 'wb-preview-refresh'; refresh.disabled = true; actions.append(refresh);
       const content = this.node('div', 'wb-preview-content');
-      let modes = null, copyAction = null;
+      let modes = null, copyAction = null, contentHost = content;
       if (result.kind === 'pdf') {
         tab.pdf = BridgePdfPreview.create({url:downloadUrl, info:result});
         content.classList.add('wb-pdf-content'); content.append(tab.pdf.element);
@@ -601,13 +613,19 @@ class Workbench {
       else if (result.kind === 'text') {
         if (/\.(md|markdown)$/i.test(result.name)) {
           tab.markdown = content;
-          renderMarkdown(content, result.text, [], undefined, {headingAnchors:true, resolveLink:reference => {
-            const target = this.markdownTarget(entry.path, reference);
-            if (!target) return null;
-            return {url:this.url(session, 'preview', target.path) + (target.fragment === undefined ? '' : '#' + encodeURIComponent(target.fragment)), activate:() => {
-              if (session === this.current && session.files.includes(tab)) this.preview(session, {path:target.path, name:target.path.split('/').pop()}, target.fragment);
-            }};
-          }});
+          const render = text => {
+            const top = content.scrollTop; content.replaceChildren();
+            renderMarkdown(content, text, [], undefined, {headingAnchors:true, resolveLink:reference => {
+              const target = this.markdownTarget(entry.path, reference);
+              if (!target) return null;
+              return {url:this.url(session, 'preview', target.path) + (target.fragment === undefined ? '' : '#' + encodeURIComponent(target.fragment)), activate:() => {
+                if (session === this.current && session.files.includes(tab)) this.preview(session, {path:target.path, name:target.path.split('/').pop()}, target.fragment);
+              }};
+            }});
+            content.scrollTop = top;
+          };
+          tab.editor = new MarkdownEditor(this, session, tab, result, content, actions, render);
+          modes = tab.editor.modes; contentHost = tab.editor.element;
         }
         else if (/\.html?$/i.test(result.name)) {
           modes = this.node('div', 'wb-preview-modes');
@@ -645,7 +663,7 @@ class Workbench {
       }
       if (copyAction) actions.append(copyAction);
       tab.previewContent = content;
-      tab.body.replaceChildren(...(modes ? [head, modes, content] : [head, content]));
+      tab.body.replaceChildren(...(modes ? [head, modes, contentHost] : [head, contentHost]));
       content.scrollTop = position.top; content.scrollLeft = position.left; this.scrollPositions?.set(content, content.isConnected ? content.scrollTop : position.top);
       if (wrapped) content.querySelector?.('.wb-source-wrap')?.click();
       const sourceBody = content.querySelector?.('.wb-source-body');
