@@ -3,8 +3,8 @@
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http'), assert = require('node:assert/strict');
 const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '..'), web = path.join(root, 'web'), assets = require('../web/assets.json');
-const fixture = fs.readFileSync(path.join(root, 'tests/browser/file-refresh.browser.js'), 'utf8');
-const scripts = ['/host.js', '/layout.js', '/i18n.js', '/vendor/markdown-it.min.js', '/vendor/katex/katex.min.js', '/vendor/texmath.js', '/markdown.js', '/app.js', '/vendor/prism/source-view.min.js', '/source-view.js', '/pdf-preview.js', '/html-preview.js', '/workbench.js', '/fixture.js'];
+const fixture = ['file-refresh','file-links'].map(name=>fs.readFileSync(path.join(root, 'tests/browser/' + name + '.browser.js'), 'utf8')).join('\n');
+const scripts = ['/host.js', '/layout.js', '/i18n.js', '/vendor/markdown-it.min.js', '/vendor/katex/katex.min.js', '/vendor/texmath.js', '/markdown.js', '/app.js', '/downloads.js', '/file-actions.js', '/vendor/prism/source-view.min.js', '/source-view.js', '/pdf-preview.js', '/html-preview.js', '/workbench.js', '/fixture.js'];
 const html = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/workbench.css"></head><body>' + scripts.map(src=>'<script defer src="' + src + '"></script>').join('') + '</body></html>';
 const csp = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 let pdfRevision = 1;
@@ -49,6 +49,8 @@ const server = http.createServer((req, res) => {
           fs.mkdirSync(path.join(root, '.tmp'), {recursive:true});
           await page.screenshot({path:path.join(root, '.tmp', 'file-refresh-' + width + '-' + language + '.png')});
         });
+        const links = await page.evaluate(()=>runFileLinkBrowserChecks()); assert.ok(links.passed > 0);
+        results.push({width, height, language, fixture:'file-links', ...links});
         const result = await page.evaluate(()=>runFileRefreshBrowserChecks()); assert.deepEqual(errors, []);
         results.push({width, height, language, ...result}); await context.close();
       }

@@ -6,6 +6,8 @@
 
 `file-refresh.browser.js` 的 `runFileRefreshBrowserChecks()` 由 `node scripts/test-file-refresh-browser.cjs` 执行。需要已有 Playwright 和 Chromium，可通过 `NODE_PATH` 指向现有依赖、`BROWSER_EXECUTABLE` 指定测试浏览器。驱动在电脑、手机、平板和横屏尺寸分别验证中文与英文，实际刷新 Markdown、HTML 预览／源码、源码、图片、PDF 与仅下载文件，覆盖全屏、文本阅读位置、错误重试、重复点击、八标签上限、关闭／重置后的旧回包，以及 SSH 和其他客户端的读取归属。所有会话和文件均为合成夹具，不访问已安装客户端。
 
+同一驱动还执行 `file-links.browser.js` 的 `runFileLinkBrowserChecks()`，使用生产 Markdown 链接、文件入口和工作台，验证主聊天／侧边聊天文件链接直接打开标签、重复点击复用、读取前后无选择框、目录直接定位、预览栏下载入口、SSH 与 Claude/Harness 归属、项目外文件限制、失败提示及切换聊天／退出后丢弃旧结果。只使用合成元数据和预览正文，不下载真实文件。
+
 `selection-gestures.browser.js` 的 `runSelectionGestureBrowserTests()` 使用同一合成文件夹具，但目录响应故意省略 `root`。它分阶段模拟手机选词、扩大/缩小范围和重复长按，分别检查文件、聊天消息及活动正文：所有触屏 contextmenu 均不被网页取消，所有长按都不显示自定义菜单或浮动按钮，只有主动点击“引用选区”或“选区操作”才执行草稿操作，且菜单获得焦点后清空选区仍能引用先前完整文本。驱动需覆盖手机、平板和横屏，并确认选择/引用没有发出聊天发送请求。
 
 Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`firesTouchEvents=false` 的菜单事件，不能把它当作电脑右键。此事件由上述夹具及 `navigation-preferences.test.cjs` 单列覆盖；验证系统复制、分享和拖动手柄时，还应在独立 Android WebView 夹具或实机上执行真实触屏操作，不能用脚本先设置 DOM Range 替代原生手柄。

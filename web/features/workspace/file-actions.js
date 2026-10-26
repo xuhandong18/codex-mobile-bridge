@@ -1,5 +1,5 @@
 'use strict';
-// One file-choice flow for browser, Android and iOS; downloads still use the host's manager.
+// Shared file links open workspace tabs; explicit downloads use the host's manager.
 window.BridgeFileActions = (() => {
   const workbenches=new WeakMap(),t=text=>BridgeI18n.t(text);
   const node=(tag,text,cls='')=>{const n=document.createElement(tag);n.className=cls;if(text!==undefined)n.textContent=text;return n;};
@@ -23,33 +23,22 @@ window.BridgeFileActions = (() => {
     row.addEventListener('click',e=>{if(suppress){e.preventDefault();e.stopImmediatePropagation();suppress=false;}},true);
     row.addEventListener('keydown',e=>{if(e.key==='F10'&&e.shiftKey){e.preventDefault();menu(workbench,session,entry);}});
   }
-  async function choose(anchor,workbench){
+  async function openLink(anchor,workbench){
     const session=workbench.current;if(!session)return;
-    const box=dialog(anchor.textContent.trim()||t('文件')),status=node('p',t('正在读取文件…'),'muted');box.append(status);box.showModal();
     try{
       const url=new URL(anchor.href,location.href);url.searchParams.set('info','1');
       const info=await workbench.request(url.pathname+url.search);
-      if(!box.open||session!==workbench.current)return box.close();
-      status.textContent=info.name+(info.kind==='directory'?'':' · '+workbench.size(info.size));
-      if(info.kind!=='directory'){
-        const opened=session.files.some(tab=>tab.id==='file:'+info.path);
-        const open=node('button',t(opened?'切换到已打开的标签页':'在标签页打开'),'plain');open.type='button';open.disabled=!info.locatable||!info.path;
-        open.onclick=()=>{box.close();workbench.preview(session,{path:info.path,name:info.name,size:info.size,kind:'file'}).catch(error=>workbench.notify(t(error.message)));};box.append(open);
-      }
-      const locate=node('button',t('定位并打开所在文件夹'),'plain');locate.type='button';locate.disabled=!info.locatable||!info.path;
-      locate.onclick=()=>{box.close();workbench.locate(session,info.path).catch(error=>workbench.notify(t(error.message)));};box.append(locate);
-      if(info.kind!=='directory'){
-        if(info.size<=info.clickDownloadMiB*1024*1024)download(box,anchor.href,info.name);
-        else box.append(node('p',t('文件超过点击下载阈值；可在标签页打开，或定位后长按下载。'),'muted'));
-      }
-      if(locate.disabled)box.append(node('p',t('此文件位于聊天项目之外，无法在当前工作台中打开或定位。'),'muted'));
-    }catch(error){status.textContent=t(error.message);status.className='error';}
+      if(session!==workbench.current)return;
+      if(!info.locatable||!info.path)throw Error('此文件位于聊天项目之外，无法在当前工作台中打开或定位。');
+      if(info.kind==='directory')await workbench.locate(session,info.path);
+      else await workbench.preview(session,{path:info.path,name:info.name,size:info.size,kind:'file'});
+    }catch(error){if(session===workbench.current)workbench.notify(t(error.message));}
   }
   document.addEventListener('click',event=>{
     const anchor=event.target.closest?.('a[href]');
     if(!anchor||event.defaultPrevented||event.button!==0||anchor.dataset.directDownload||anchor.hasAttribute('data-image-preview')||typeof BridgeDownload==='undefined'||!BridgeDownload.eligible(anchor.href,location.href))return;
     const chat=anchor.closest('.chat'),workbench=chat&&workbenches.get(chat);if(!workbench)return;
-    event.preventDefault();event.stopImmediatePropagation();choose(anchor,workbench);
+    event.preventDefault();event.stopImmediatePropagation();openLink(anchor,workbench);
   },true);
   function mountSettings(container,request,{ready=()=>document.getElementById('app')?.hidden===false}={}){
     if(!container)return;

@@ -589,7 +589,7 @@ class Workbench {
       const head = this.node('div', 'wb-preview-head'), title = this.node('div', 'wb-preview-title'), actions = this.node('div', 'wb-preview-actions');
       title.append(this.raw(this.node('strong', '', result.name)), this.node('small', '', this.size(result.size) + ' · ' + entry.path));
       head.append(title, actions);
-      { const download = this.node('a', 'wb-download', '下载'); download.href = pdf && result.size > result.clickDownloadMiB * 1024 * 1024 ? downloadUrl + '&explicit=1' : downloadUrl; download.download = result.name; download.dataset.i18nAriaLabel = '下载文件'; download.setAttribute('aria-label', BridgeI18n.t('下载文件')); actions.append(download); }
+      { const download = this.node('a', 'wb-download', '下载'); download.href = pdf && result.size > result.clickDownloadMiB * 1024 * 1024 ? downloadUrl + '&explicit=1' : downloadUrl; download.download = result.name; download.dataset.directDownload = 'true'; download.dataset.i18nAriaLabel = '下载文件'; download.setAttribute('aria-label', BridgeI18n.t('下载文件')); actions.append(download); }
       const refresh = tab.refreshButton ||= this.button('刷新', () => this.refreshPreview(session, tab));
       refresh.className = 'wb-preview-refresh'; refresh.disabled = true; actions.append(refresh);
       const content = this.node('div', 'wb-preview-content');
