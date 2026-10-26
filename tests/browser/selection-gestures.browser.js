@@ -32,7 +32,7 @@ async function runSelectionGestureBrowserTests(){
   };
   await workbench.preview(workbench.current,{name:'demo.js',path:'src/demo.js'});
   const code=workbench.panel.querySelector('.wb-source-code code');
-  const fileText=await exercise(code,'File',()=>workbench.fileSelection.menu.menu,'引用到聊天');
+  const fileText=await exercise(code,'File',()=>document.querySelector('.file-quote-target[open]'),'引用到聊天');
   check(workbench.fileQuotes.rows.length===1,'An older gateway can add a file excerpt');
   check(workbench.fileQuotes.rows[0].path==='D:/fixture/project/src/demo.js','The current chat directory supplies the missing absolute root');
   check(workbench.fileQuotes.rows[0].text===fileText,'The file tag retains the fully expanded selection');

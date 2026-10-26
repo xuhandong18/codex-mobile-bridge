@@ -13,8 +13,10 @@ async function runQuestionSelectionBrowserTests(provider='codex'){
     if(mouse){
       const snapshot=action.capture(),node=snapshot.input||snapshot.range.startContainer.parentElement;
       node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'mouse',button:2}));
-      check(!node.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'mouse',button:2})),'电脑右键问题选区直接打开统一引用目标框');
-    }else{button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true}));button.click();}
+      check(node.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'mouse',button:2})),'电脑右键问题选区保留系统菜单');
+      check(!wb.selectionTargets.dialog?.open,'电脑右键问题选区不会打开引用目标框');
+    }
+    button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:mouse?'mouse':'touch',isPrimary:true}));button.click();
     await waitFor(()=>wb.selectionTargets.dialog?.open);
     wb.selectionTargets.dialog.querySelector('[data-quote-target="'+target+'"]').click();
   };

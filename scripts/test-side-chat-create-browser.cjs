@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'),web=path.join(root,'web'),assets=require('../web/assets.json');
 const id='11111111-1111-4111-8111-111111111111';
-const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',status:'idle',access:{source:'cli',canSend:true,canApprove:true,canUseSideChat:true}};
+const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',projectKey:'local|/fixture',projectName:'Fixture',recency:1,status:'idle',access:{source:'cli',canSend:true,canApprove:true,canUseSideChat:true}};
 const states=new Map(),writes=[],errors=[];let mode='success',serial=0,createGate=null,questionFixture=false;
 const questions=[{id:'choice',question:'希望先解释哪个处理方案？',options:[{label:'先解释',description:'说明各个步骤'},{label:'直接处理',description:'执行已确认的方案'}]},{id:'free',question:'需要进一步说明的细节是什么？'}];
 const questionRequests=()=>questionFixture?[{id:'fixture-question',supported:true,method:'item/tool/requestUserInput',params:{questions},needsInput:true,tool:'AskUserQuestion',input:{questions}}]:[];
@@ -196,6 +196,28 @@ const server=http.createServer(async(req,res)=>{
         assert.ok(quoteChecks.length>0);assert.equal(createWrites().length,3,'主聊天和文件选区各自只创建对应的新聊天');
         results.push({width,height,provider,fixture:'selection-targets',passed:quoteChecks.length+1});await quoteContext.close();
       }
+      states.clear();writes.length=0;
+      const popupContext=await browser.newContext({viewport:{width,height},hasTouch:width!==1440}),popupPage=await popupContext.newPage();
+      popupPage.on('pageerror',error=>errors.push(error.message));
+      await popupPage.goto('http://127.0.0.1:'+server.address().port+'/#'+id+'~local');await popupPage.waitForFunction(()=>state?.connected);
+      if(provider==='deepseek'){
+        await popupPage.evaluate(hash=>BridgeNavigation.openChat(hash),'#'+id+'~desktop%3Adeepseek');
+        await popupPage.waitForFunction(()=>desktopSessions.provider==='deepseek'&&desktopSessions.freshDetail);
+      }
+      await popupPage.addScriptTag({path:path.join(root,'tests/browser/selection-popup.browser.js')});
+      const popupChecks=await popupPage.evaluate(({gesture,provider})=>runUnifiedSelectionPopupBrowserTests(gesture,provider),{gesture:width===1440?'mouse':'touch',provider});
+      if(width===1440){
+        const code=popupPage.locator('.wb-source-code code:visible'),selected=await code.textContent();
+        await code.click({button:'right'});
+        assert.equal(await popupPage.locator('dialog[open]').count(),0,'真实鼠标右键不会打开选区引用框');
+        assert.equal(await popupPage.evaluate(()=>getSelection().toString()),selected,'真实右键保留文件完整选区');
+        await popupPage.keyboard.press('Escape');await popupPage.locator('.wb-preview-quote:visible').click();
+        await popupPage.locator('.file-quote-target[open] [data-quote-target="chat"]').click();
+        assert.equal(await popupPage.evaluate(provider=>(provider==='codex'?workbench:desktopSessions.workbench).fileQuotes.rows[0].text,provider),selected,'实际点击引用选区保留完整文件文字');
+        popupChecks.push('真实鼠标右键不弹框且选区保留','实际点击文件栏按钮完整引用');
+      }
+      assert.ok(popupChecks.length>0);assert.ok(!writes.some(write=>['send','respond'].includes(write.body.action)),'右键和选区入口不会发送消息或提交问题答案');
+      results.push({width,height,provider,fixture:'selection-popup',passed:popupChecks.length+1});await popupContext.close();
       states.clear();writes.length=0;questionFixture=true;
       const questionContext=await browser.newContext({viewport:{width,height},hasTouch:width!==1440}),questionPage=await questionContext.newPage();
       questionPage.on('pageerror',error=>errors.push(error.message));

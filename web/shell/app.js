@@ -831,7 +831,6 @@ window.BridgeSelection=Object.freeze({
   run:(action,token)=>{const target=nativeSelectionTarget;if(!target||target.id!==token)return false;const consumed=target.action.activate(action,target.token);if(consumed)nativeSelectionTarget=null;return consumed;},
   release:token=>{const target=nativeSelectionTarget;if(target?.id===token){nativeSelectionTarget=null;target.action.releaseNative(target.token);}}
 });
-const messageSelectionMenu=new ChatContextMenu(workbench.mainPane,()=>[],{touch:false,show:()=>{const snapshot=selectedTextAction.captureMenu();return !!snapshot&&selectedTextAction.activate('add',snapshot.token);}});
 $('fork-source').onclick=()=>{const source=state?.forkedFrom;if(source){$('chat-details-dialog').close();openChat(source.id,source.host).catch(e=>toast(e.message));}};
 function saveDraft(){runningSendChoice?.close();composerReferences.close();if(currentId)composerDrafts.set('codex:'+chatKey(),$('message').value);}
 $('message').oninput=saveDraft;

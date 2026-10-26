@@ -67,7 +67,6 @@ class SideChatPanel {
     this.selectionAction=new SelectedTextAction(tab.body,{available:()=>!this.disposed&&workbench.isVisible(session,tab),context:()=>session.key+'|'+tab.id+'|'+(this.state?.id||''),trigger:this.selectionButton,
       canAdd:()=>workbench.selectionTargets.available(session),canExplain:()=>false,add:text=>workbench.selectionTargets.addText(text,session),
       openMenu:snapshot=>this.selectionAction.activate('add',snapshot.token)});
-    this.selectionMenu=new ChatContextMenu(tab.body,()=>[],{touch:false,show:()=>{const snapshot=this.selectionAction.captureMenu();return !!snapshot&&this.selectionAction.activate('add',snapshot.token);}});
     this.attachments=new ChatAttachments({root:this.attachmentList,button:this.attachButton,input:this.fileInput,paste:this.input,drop:this.form,
       onChange:()=>this.controls(),preview:(key,id)=>this.uploadUrl(key,id,'preview'),
       upload:(key,id,file)=>this.uploadFile(this.uploadUrl(key,id)+'&name='+encodeURIComponent(file.name),file),
@@ -389,5 +388,5 @@ class SideChatPanel {
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }
-  dispose(){this.visibilityObserver?.disconnect();this.messageMap?.dispose();this.messages.onscroll=null;this.contextUsage.dispose();this.disposed=true;this.renameDialog?.close();this.selectionAction.dispose();this.selectionMenu.menu?.close();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
+  dispose(){this.visibilityObserver?.disconnect();this.messageMap?.dispose();this.messages.onscroll=null;this.contextUsage.dispose();this.disposed=true;this.renameDialog?.close();this.selectionAction.dispose();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
 }

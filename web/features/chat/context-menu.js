@@ -87,7 +87,7 @@ class NewChatSettings {
 }
 
 // The Android shell extends its own selection menu through capture/activate.
-// Touch selection belongs to the native Copy/Share menu; draft actions are explicit.
+// Text selection keeps native context menus; draft actions use explicit buttons.
 class SelectedTextAction {
   constructor(root,{available,run,add,canAdd=()=>!!add,canExplain=()=>true,context=()=>'',trigger=null,openMenu=()=>{}}){
     Object.assign(this,{root,available,run,add,canAdd,canExplain,context,trigger});this.revision=0;

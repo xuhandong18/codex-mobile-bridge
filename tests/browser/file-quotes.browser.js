@@ -7,12 +7,14 @@ async function runFileQuoteBrowserTests(gesture='mouse'){
   const select=()=>{const code=wb.panel.querySelector('.wb-source-code code'),range=document.createRange();range.selectNodeContents(code);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);return code;};
   const menu=async()=>{
     const code=select();
-    if(gesture==='touch'){
-      await new Promise(resolve=>setTimeout(resolve,200));const button=wb.current.files.find(tab=>tab.filePath==='src/demo.js').quoteButton;
-      check(!button.disabled,'The file header offers an explicit selection quote action');button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:'touch',isPrimary:true,pointerId:51}));button.click();return;
-    }else code.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:80,clientY:120}));
+    if(gesture==='mouse'){
+      check(code.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'mouse',button:2,clientX:80,clientY:120})),'File right-click keeps the native menu');
+      check(!wb.selectionTargets.dialog?.open,'File right-click does not open the destination picker');
+    }
+    await new Promise(resolve=>setTimeout(resolve,200));const button=wb.current.files.find(tab=>tab.filePath==='src/demo.js').quoteButton;
+    check(!button.disabled,'The file header offers an explicit selection quote action');button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerType:gesture,isPrimary:true,pointerId:51}));button.click();
     await waitFor(()=>!!wb.selectionTargets.dialog?.open);
-    check(!document.querySelector('.chat-context-menu[open]'),'File right-click opens the destination picker directly');
+    check(!document.querySelector('.chat-context-menu[open]'),'The explicit quote action opens the destination picker directly');
   };
   const chooseMain=async()=>{await waitFor(()=>!!document.querySelector('.file-quote-target[open]'));document.querySelector('.file-quote-target[open] [data-quote-target=chat]').click();};
   $('message').value='已有草稿';$('message').oninput();await preview();await menu();await chooseMain();

@@ -10,7 +10,7 @@
 
 Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`firesTouchEvents=false` 的菜单事件，不能把它当作电脑右键。此事件由上述夹具及 `navigation-preferences.test.cjs` 单列覆盖；验证系统复制、分享和拖动手柄时，还应在独立 Android WebView 夹具或实机上执行真实触屏操作，不能用脚本先设置 DOM Range 替代原生手柄。
 
-`file-quotes.browser.js` 的 `runFileQuoteBrowserTests(gesture)` 使用合成文件、两个聊天和侧边聊天夹具，`gesture` 为 `mouse` 或 `touch`。检查电脑右键与触屏显式引用按钮、统一目标选择、代码选区与完整路径、引用标签详情和删除、聊天草稿隔离，以及主会话/侧边聊天仅有引用时的发送与成功清理。驱动需在电脑、手机、平板和手机横屏分别执行，并检查捕获的发送正文；触屏长按由浏览器 PointerEvent 定时器模拟，不能替代 Android/iOS 原生选区菜单实机验证。
+`file-quotes.browser.js` 的 `runFileQuoteBrowserTests(gesture)` 使用合成文件、两个聊天和侧边聊天夹具，`gesture` 为 `mouse` 或 `touch`。检查电脑右键保留系统菜单、电脑与触屏显式引用按钮、统一目标选择、代码选区与完整路径、引用标签详情和删除、聊天草稿隔离，以及主会话/侧边聊天仅有引用时的发送与成功清理。驱动需在电脑、手机、平板和手机横屏分别执行，并检查捕获的发送正文；触屏长按由浏览器 PointerEvent 定时器模拟，不能替代 Android/iOS 原生选区菜单实机验证。
 
 本目录中的 `*.browser.js` 依赖真实 DOM、页面模块及隔离的网关夹具。它们由浏览器驱动加载并调用文件中声明的检查函数；Markdown 与公式脚本在加载后直接运行。各文件开头说明所需页面与前置状态。
 
@@ -50,8 +50,8 @@ Android 原生选区手柄还会生成 `pointerType=mouse`、`button=-1`、`fire
 
 `side-message-navigation.browser.js` 的 `runSideMessageNavigationBrowserTests(provider)` 由同一驱动在四种尺寸分别验证 Codex/Harness 侧边聊天的缩略导航，实际断言弹窗位置、摘要跳转、阅读锚点、恢复跟随、附件及重复发言、160 条目录虚拟渲染、分屏与多标签隔离、聊天标识替换及关闭清理。导航夹具不发起聊天创建、发送或问题回复请求。
 
-`question-selection.browser.js` 的 `runQuestionSelectionBrowserTests(provider)` 由同一驱动在手机竖横屏、平板和电脑尺寸分别执行，验证 Codex/Harness 真实问题卡片的题目、选项说明和已填写回答片段能够自动启用“选区操作”，引用到主聊天、已有或新建侧边聊天，并检查桌面右键、原生凭证消费、草稿保留、视图隔离、移除或修改后凭证失效。驱动核对没有聊天发送或问题回复请求；原生选区通过 DOM 和输入框偏移模拟，不能代替 Android/iOS 设备上的原生手柄实测。
+`question-selection.browser.js` 的 `runQuestionSelectionBrowserTests(provider)` 由同一驱动在手机竖横屏、平板和电脑尺寸分别执行，验证 Codex/Harness 真实问题卡片的题目、选项说明和已填写回答片段能够自动启用“选区操作”，引用到主聊天、已有或新建侧边聊天，并检查桌面右键保留系统菜单、原生凭证消费、草稿保留、视图隔离、移除或修改后凭证失效。驱动核对没有聊天发送或问题回复请求；原生选区通过 DOM 和输入框偏移模拟，不能代替 Android/iOS 设备上的原生手柄实测。
 
-`selection-popup.browser.js` 的 `runUnifiedSelectionPopupBrowserTests(gesture)` 使用各自隔离的合成侧边会话，检查主消息、侧边消息、文件三处主动引用后直接出现同一个目标框，并比较完整弹框 DOM。电脑通过右键触发，手机/平板通过显式按钮触发，触屏长按保留原生菜单；同时检查提醒设置入口已移至聊天详情。
+`selection-popup.browser.js` 的 `runUnifiedSelectionPopupBrowserTests(gesture,provider)` 由 `node scripts/test-side-chat-create-browser.cjs` 在四种尺寸分别执行 Codex/Harness，使用各自隔离的合成侧边会话，检查主消息、侧边消息、文件三处主动引用后直接出现同一个目标框，并比较完整弹框 DOM。电脑右键和键盘菜单事件均不被取消、不弹出引用框，并保留完整选区；电脑、手机和平板通过显式按钮触发引用，电脑另检查选区旁的浮动按钮，驱动还用真实鼠标右键和点击文件栏按钮验证完整引用；触屏长按保留原生菜单；同时检查提醒设置入口已移至聊天详情。
 
 `side-reference-picker.browser.js` 的 `runSideReferencePickerBrowserTests()` 使用独立合成侧边聊天与 221 项技能目录，验证侧边“＋”与主会话共用三个引用类型、技能分页和光标插入、项目文件完整路径、会话分区树、主/侧草稿隔离、新侧边创建前的文件引用，以及切换后丢弃旧读取。驱动需校验侧边技能请求绑定子会话 ID、发送正文包含全部引用且没有独立 `skills` 字段；`UNCONFIRMED_SIDE_REFERENCE` 在夹具中返回未知发送结果，用于验证保留草稿且不自动重发。不要在真实会话运行发送夹具。

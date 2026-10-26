@@ -12,10 +12,6 @@ class FileSelectionAction {
     document.addEventListener('selectionchange',update);document.addEventListener('scroll',update,true);window.addEventListener('resize',update);
     document.addEventListener('pointerdown',event=>{if(event.pointerType==='touch'||event.pointerType==='pen')this.touchSelecting=true;else if(event.pointerType==='mouse'&&(!window.matchMedia?.('(any-pointer: coarse)').matches||event.button===2))this.touchSelecting=false;if(this.touchSelecting)this.bar.hidden=true;},{passive:true,capture:true});
     window.visualViewport?.addEventListener('resize',update);window.visualViewport?.addEventListener('scroll',update);
-    this.menu=new ChatContextMenu(workbench.chat,()=>[],{touch:false,show:target=>{
-      const selection=this.capture();if(!selection||!selection.content.contains(target))return false;
-      this.add(selection);return true;
-    }});
   }
   bindPreview(session,tab,actions){
     const button=tab.quoteButton=this.workbench.button('引用选区',()=>{const selection=this.triggerSnapshot||this.capture();this.triggerSnapshot=null;if(selection?.session===session&&selection.tab===tab)this.add(selection);},'引用选中文字');
@@ -59,8 +55,8 @@ class FileSelectionAction {
       const path=ChatReferencePicker.fileItems({root,entries:[{name:tab.name,path:tab.filePath,kind:'file'}]},session.cwd).items[0].value;
       if(!path)throw Error(BridgeI18n.t('当前会话未提供可访问的项目完整目录'));
       const quote={path,name:tab.name,text,host:session.host};
-      wb.selectionTargets.choose(session,{file:quote},valid,()=>{this.menu.suppressUntil=0;});
+      wb.selectionTargets.choose(session,{file:quote},valid);
     }catch(error){wb.notify(error.message);}
   }
-  close(){this.bar.hidden=true;this.menu.menu?.close();this.workbench.selectionTargets.close();}
+  close(){this.bar.hidden=true;this.workbench.selectionTargets.close();}
 }
