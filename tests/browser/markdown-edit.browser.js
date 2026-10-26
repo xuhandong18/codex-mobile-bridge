@@ -1,3 +1,51 @@
+window.runMarkdownAvailabilityBrowserChecks = async () => {
+  const checks = [], failures = [], check = (name, value) => { checks.push(name); if (!value) failures.push(name); };
+  const chat = document.createElement('section'); chat.id = 'chat'; chat.className = 'chat';
+  chat.style.cssText = 'display:flex;flex-direction:column;width:100vw;height:100dvh';
+  chat.innerHTML = '<header class="chat-head"></header><div class="timeline" tabindex="0"></div><div class="composer"><textarea></textarea></div>';
+  document.body.append(chat);
+  let disk = '# 原文\r\n', token = 'a'.repeat(64), omitVersion = true, writes = 0, reads = 0;
+  const requests = [];
+  const wb = new Workbench({chat,notify:()=>{},request:async (url,body) => {
+    requests.push({url,body});
+    if (body) { writes++; check('save never omits the verified file version', body.version === token); disk = body.text; token = 'b'.repeat(64); return {outcome:'saved',version:token}; }
+    reads++; return {kind:'text',name:'说明.md',text:disk,size:disk.length,...(omitVersion ? {} : {version:token})};
+  }});
+  wb.refreshSideChats = () => {};
+  wb.open('33333333-3333-4333-8333-333333333333','remote-ssh:availability');
+  await wb.preview(wb.current,{path:'说明.md',name:'说明.md'});
+  const tab = wb.current.files[0], editor = tab.editor;
+  const input = text => {editor.input.dispatchEvent(new InputEvent('beforeinput'));editor.input.value=text;editor.input.dispatchEvent(new InputEvent('input'));};
+  const visible = node => !!node && !node.hidden && getComputedStyle(node).display !== 'none' && node.getBoundingClientRect().width > 0;
+  try {
+    editor.show('edit'); input('# 我的草稿\n');
+    check('typing enables Save even when the initial response omitted a version', !editor.saveButton.disabled);
+    const before = reads;
+    await editor.save();
+    check('missing-version save checks the file read-only instead of remaining silently disabled', reads === before+1 && writes === 0);
+    check('an old gateway explains how to restore saving and keeps the draft', editor.status.textContent === BridgeI18n.t('当前网关尚未提供文件保存能力，请更新或重启网关后重试；草稿已保留。') && editor.input.value === '# 我的草稿\n' && !editor.needsCheck);
+    omitVersion = false;
+    await editor.save();
+    check('retry after the gateway is ready saves the preserved draft with a verified version', writes === 1 && !editor.dirty && disk === '# 我的草稿\n');
+    input('# 继续修改\n');
+    editor.show('preview');
+    check('preview keeps Save visible for the current draft', visible(editor.saveButton) && !editor.saveButton.disabled);
+    editor.show('edit');
+    wb.openPreviewFullscreen(wb.current,tab,tab.previewContent,tab.fullscreenButton);
+    check('fullscreen keeps Download visible', visible(tab.body.querySelector('.wb-download')));
+    check('fullscreen keeps Save visible and enabled after editing', visible(editor.saveButton) && !editor.saveButton.disabled);
+    if (window.captureMarkdownAvailability) await window.captureMarkdownAvailability();
+    editor.show('preview');
+    check('fullscreen preview retains the Save action', visible(editor.saveButton));
+    wb.closePreviewFullscreen();
+    editor.version = null; disk = '# 电脑已修改'; token = 'c'.repeat(64);
+    const beforeConflict = writes; await editor.save();
+    check('version recovery refuses to overwrite externally changed content', writes === beforeConflict && editor.conflict && editor.input.value === '# 继续修改\n');
+    check('version recovery reads keep the original SSH host and session', requests.every(item=>item.url.includes('host=remote-ssh%3Aavailability') && item.url.includes('33333333-3333-4333-8333-333333333333')));
+  } finally { wb.reset(); chat.remove(); }
+  return {passed:checks.length-failures.length,checks,failures};
+};
+
 window.runMarkdownEditBrowserChecks = async () => {
   const checks = [], check = (name, value) => { if (!value) throw Error(name); checks.push(name); };
   const settle = () => new Promise(resolve => setTimeout(resolve, 220));

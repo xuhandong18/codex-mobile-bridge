@@ -6,6 +6,8 @@
 
 Markdown 编辑的专项后端验证为 `python -B scripts/test-backend.py --source-only -p test_markdown_edit.py`，HTTP 保存边界包含在 `test_workspace.py`。真实浏览器验证为 `node scripts/test-markdown-edit-browser.cjs`（可加 `--screenshots` 将截图写入 `.tmp/`），使用隔离 Chromium 和合成文件，覆盖六种尺寸、中英文、格式工具、真实键盘快捷键、草稿保留、并发保存、冲突与回执丢失后的只读核对。需要已有 Playwright，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不连接真实客户端或修改用户文件。
 
+保存可用性专项复现为 `node scripts/test-markdown-edit-browser.cjs --availability-only`，模拟初次读取未返回版本、旧网关未就绪、后端恢复和外部修改，断言修改后可以点击保存、先只读核对再写入、草稿保留，以及预览／全屏中下载与保存按钮的真实可见性。
+
 从仓库根目录，使用已有项目环境运行：
 
 ```sh

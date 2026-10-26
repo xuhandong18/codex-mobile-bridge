@@ -3,6 +3,9 @@
 const BridgeI18n=(()=>{
 const en={
 "Markdown 编辑内容":"Markdown source",
+"尚未取得文件版本，保存前将先核对。":"The file version is unavailable. It will be checked before saving.",
+"正在核对文件版本…":"Checking the file version…",
+"当前网关尚未提供文件保存能力，请更新或重启网关后重试；草稿已保留。":"This gateway does not yet provide file saving. Update or restart the gateway and try again. Your draft is retained.",
 "Tab 缩进，Shift+Tab 取消缩进，Esc 后按 Tab 移动焦点。":"Tab indents, Shift+Tab outdents. Press Escape then Tab to move focus.",
 "Markdown 格式工具":"Markdown formatting tools",
 "编辑与预览":"Edit and preview",

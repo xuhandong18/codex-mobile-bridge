@@ -37,6 +37,15 @@ const server = http.createServer((req,res) => {
         page.on('pageerror',error=>errors.push(error.message));
         await page.goto('http://127.0.0.1:'+server.address().port+'/');
         await page.evaluate(language=>BridgeI18n.setLanguage(language),language);
+        if (process.argv.includes('--screenshots') && language === 'zh') {
+          await page.exposeFunction('captureMarkdownAvailability',async()=>{
+            await page.waitForTimeout(220);
+            await page.screenshot({path:path.join(root,'.tmp','markdown-fullscreen-'+width+'.png')});
+          });
+        }
+        const availability = await page.evaluate(()=>runMarkdownAvailabilityBrowserChecks());
+        assert.deepEqual(availability.failures,[],JSON.stringify({width,height,language,failures:availability.failures}));
+        if (process.argv.includes('--availability-only')) {assert.deepEqual(errors,[]);results.push({width,height,language,passed:availability.passed});await context.close();continue;}
         const result = await page.evaluate(()=>runMarkdownEditBrowserChecks());
         const textarea = page.locator('.wb-md-input'); await textarea.focus();
         await page.keyboard.press('Control+A'); await page.keyboard.insertText('键盘快捷键'); await page.keyboard.press('Control+A'); await page.keyboard.press('Control+B');
@@ -52,7 +61,7 @@ const server = http.createServer((req,res) => {
         if (process.argv.includes('--screenshots') && language === 'zh') {
           await page.screenshot({path:path.join(root,'.tmp','markdown-edit-'+width+'.png')});
         }
-        assert.deepEqual(errors,[]); results.push({width,height,language,passed:result.passed+5});
+        assert.deepEqual(errors,[]); results.push({width,height,language,passed:result.passed+5+availability.passed});
         await page.evaluate(()=>{markdownFixture.wb.reset();markdownFixture.chat.remove();}); await context.close();
       }
     }

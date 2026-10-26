@@ -2,7 +2,8 @@
 
 class MarkdownEditor {
   constructor(workbench, session, tab, result, content, actions, render) {
-    Object.assign(this, {workbench, session, tab, content, render, version:result.version});
+    Object.assign(this, {workbench, session, tab, content, render});
+    this.version = this.validVersion(result.version) ? result.version : null;
     this.original = this.normalize(result.text);
     this.history = []; this.future = [];
     const node = (...args) => workbench.node(...args), button = (...args) => workbench.button(...args);
@@ -79,6 +80,7 @@ class MarkdownEditor {
     this.show(tab.markdownMode || 'preview'); this.changed(false);
   }
   normalize(text) { return text.replace(/\r\n?/g, '\n'); }
+  validVersion(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value); }
   get dirty() { return this.input.value !== this.original; }
   get busy() { return this.saving || this.checking; }
   state() { return {text:this.input.value, start:this.input.selectionStart, end:this.input.selectionEnd}; }
@@ -171,7 +173,6 @@ class MarkdownEditor {
     this.mode = this.tab.markdownMode = mode; this.element.dataset.mode = mode;
     this.editor.hidden = mode === 'preview'; this.content.hidden = mode === 'edit';
     for (const [key, control] of this.modeButtons) control.setAttribute('aria-pressed', String(key === mode));
-    this.saveButton.hidden = mode === 'preview';
     this.workbench.fileSelection?.close();
     if (mode !== 'edit') this.render(this.input.value);
     if (mode !== 'preview') this.input.focus({preventScroll:true});
@@ -189,11 +190,13 @@ class MarkdownEditor {
     clearTimeout(this.renderTimer);
     if (render && this.mode !== 'edit') this.renderTimer = setTimeout(() => { if (!this.disposed) this.render(this.input.value); }, 180);
     this.updatePosition(); this.update();
-    if (!this.needsCheck && !this.conflict && !this.busy) this.message(this.dirty ? '有未保存的更改' : '已保存');
+    if (!this.needsCheck && !this.conflict && !this.busy) {
+      this.message(!this.version ? '尚未取得文件版本，保存前将先核对。' : this.dirty ? '有未保存的更改' : '已保存');
+    }
     if (!this.findbar.hidden) this.matchCount();
   }
   update() {
-    this.saveButton.disabled = !this.dirty || this.busy || this.needsCheck || this.conflict || !this.version;
+    this.saveButton.disabled = !this.dirty || this.busy || this.needsCheck || this.conflict;
     this.undoButton.disabled = !this.history.length; this.redoButton.disabled = !this.future.length;
     this.checkButton.hidden = !this.needsCheck; this.checkButton.disabled = this.busy;
     if (this.workbench.current === this.session) {
@@ -201,8 +204,27 @@ class MarkdownEditor {
     }
     this.element.setAttribute('aria-busy', String(!!this.busy));
   }
+  async prepareVersion() {
+    this.checking = true; this.message('正在核对文件版本…'); this.update();
+    try {
+      const result = await this.workbench.request(this.workbench.url(this.session,'preview',this.tab.entry.path));
+      if (this.disposed) return false;
+      if (result.kind !== 'text' || !this.validVersion(result.version)) {
+        this.message('当前网关尚未提供文件保存能力，请更新或重启网关后重试；草稿已保留。'); return false;
+      }
+      if (this.normalize(result.text) !== this.original) {
+        this.conflict = true; this.message('文件已被其他地方修改，请复制草稿后刷新文件。'); return false;
+      }
+      this.version = result.version; return true;
+    } catch (error) {
+      if (!this.disposed) { this.message('暂时无法核对，草稿已保留，请稍后重试。'); this.workbench.notify(BridgeI18n.t(error.message)); }
+      return false;
+    } finally { this.checking = false; if (!this.disposed) this.update(); }
+  }
   async save() {
     if (this.saveButton.disabled || this.disposed) return !this.dirty && !this.needsCheck;
+    if (!this.version && !await this.prepareVersion()) return false;
+    if (this.disposed || !this.dirty) return !this.disposed;
     if (new TextEncoder().encode(this.input.value).length > 512 * 1024) {
       this.message('Markdown 文件不能超过 512 KB'); return false;
     }
@@ -213,7 +235,7 @@ class MarkdownEditor {
       if (result.outcome === 'conflict') {
         this.conflict = true; this.message('文件已被其他地方修改，请复制草稿后刷新文件。'); return false;
       }
-      if (result.outcome !== 'saved' || typeof result.version !== 'string') throw Error('Unconfirmed save');
+      if (result.outcome !== 'saved' || !this.validVersion(result.version)) throw Error('Unconfirmed save');
       this.original = text; this.version = result.version; this.updateMetadata(result.size); this.message(this.dirty ? '已保存，仍有新的更改' : '已保存'); return true;
     } catch (error) {
       if (!this.disposed) {
@@ -229,7 +251,7 @@ class MarkdownEditor {
     try {
       const result = await this.workbench.request(this.workbench.url(this.session,'preview',this.tab.entry.path));
       if (this.disposed) return;
-      if (result.kind !== 'text' || !result.version) throw Error('No text');
+      if (result.kind !== 'text' || !this.validVersion(result.version)) throw Error('No text');
       if (this.normalize(result.text) === this.submitted) {
         this.original = this.submitted; this.version = result.version; this.updateMetadata(result.size); this.message(this.dirty ? '已保存，仍有新的更改' : '已保存');
       } else if (result.version === this.version) this.message('文件仍是原版本，可再次点击保存。');
@@ -254,7 +276,7 @@ class MarkdownEditor {
         const saved = await this.save(); accepted = saved && !this.dirty;
         dialog.close();
       });
-      save.disabled = !!(this.needsCheck || this.conflict || !this.version);
+      save.disabled = !!(this.needsCheck || this.conflict);
       actions.append(cancel,discard,save); dialog.append(actions);
       dialog.addEventListener('close', () => { this.leaveDialog = null; dialog.remove(); resolve(accepted); }, {once:true});
       document.body.append(dialog); dialog.showModal(); cancel.focus();
