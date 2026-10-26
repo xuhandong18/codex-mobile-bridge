@@ -17,7 +17,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from bridge.features.workspace.uploads import MAX_FILE
-from bridge.features.workspace.workspace import MAX_TRANSFER, Workspace
+from bridge.features.workspace.workspace import MAX_TRANSFER, MAX_PREVIEW, Workspace
 from bridge.features.workspace.preferences import transfer_settings
 from bridge.features.workspace.files import workspace_relative_path
 from bridge.features.notifications.channels import settings as notification_settings, save_settings as save_notification_settings, publish, publish_bark, publish_pushplus
@@ -258,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("登录验证已失效，请刷新页面")
         return session
 
-    def read_json(self):
+    def read_json(self, max_size=512000):
         if self.headers.get("Transfer-Encoding"):
             raise ValueError("不支持分块请求体")
         if self.headers.get_content_type() != "application/json":
@@ -267,7 +267,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(sizes) != 1 or not sizes[0].isdigit():
             raise ValueError("请求长度无效")
         size = int(sizes[0])
-        if not 0 < size <= 512000:
+        if not 0 < size <= max_size:
             raise ValueError("请求过大或为空")
         value = json.loads(self.rfile.read(size))
         if not isinstance(value, dict):
@@ -849,11 +849,16 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = query.get('id', [''])[0]
                 return self.output(200, bridge.terminal(terminal_match[1], owner, ('poll' if query.get('mode') == ['pty'] else 'read') if identifier else 'info',
                                    {'id': identifier, 'after': int(query.get('after', ['0'])[0])}))
-            workspace_match = re.fullmatch(r"/api/sessions/([0-9a-f-]{36})/workspace(?:/(info|preview|download|upload|git-status|git-diff|git-history|git-commit|git-history-diff|git-branches|git-action))?", path)
+            workspace_match = re.fullmatch(r"/api/sessions/([0-9a-f-]{36})/workspace(?:/(info|preview|download|upload|save|git-status|git-diff|git-history|git-commit|git-history-diff|git-branches|git-action))?", path)
             if workspace_match:
                 thread_id, operation = workspace_match.groups()
                 relative = query.get('path', [''])[0]
                 if write:
+                    if operation == 'save':
+                        body = self.read_json(max_size=MAX_PREVIEW * 6 + 1024)
+                        if set(body) != {'text', 'version'}:
+                            raise ValueError('文件保存请求无效')
+                        return self.output(200, bridge.workspace(thread_id, 'save', {'path': relative, **body}))
                     if operation == 'git-action':
                         body = self.read_json()
                         if set(body) - {'action', 'version', 'path', 'branch', 'message'} or not {'action', 'version'} <= set(body):
@@ -867,6 +872,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(content) != int(sizes[0]): raise ValueError('上传中断，请重试')
                     return self.output(200, bridge.workspace(thread_id, 'upload', {'path': relative, 'encoded': base64.b64encode(content).decode()}))
                 if operation == 'upload': return self.output(405, {'error': '请使用上传操作'})
+                if operation == 'save': return self.output(405, {'error': '文件保存需要 POST 请求'})
                 if operation == 'git-action': return self.output(405, {'error': 'Git 操作需要 POST 请求'})
                 if operation == 'git-history':
                     return self.output(200, bridge.workspace(thread_id, operation, {'limit': int(query.get('limit', ['40'])[0]), 'ref': query.get('ref', ['all'])[0]}))

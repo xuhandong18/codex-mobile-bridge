@@ -22,6 +22,7 @@ SEARCH_MAX_DEPTH = 32
 SEARCH_MAX_SCANNED = 20000
 SEARCH_MAX_SECONDS = 2.0
 IMAGES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp'}
+_EDIT_LOCK = threading.Lock()
 
 
 def _windows_reparse_point(path):
@@ -36,7 +37,7 @@ def _windows_reparse_point(path):
 
 
 @contextmanager
-def _windows_listing_directory(target):
+def _windows_listing_directory(target, writable=False):
     """Pin every ancestor before path-based scandir; no sharing fallback."""
     # Imported only on Windows; the SSH payload remains standalone on POSIX.
     import ctypes
@@ -58,10 +59,10 @@ def _windows_listing_directory(target):
         # Include the drive/UNC anchor and the ancestors above the workspace:
         # locking only the target would still allow an ancestor to be replaced.
         for path in [*reversed(target.parents), target]:
-            handle = kernel.CreateFileW(str(path), 0x81, 1, None, 3, 0x02000000 | 0x00200000, None)
+            handle = kernel.CreateFileW(str(path), 0x81, 3 if writable else 1, None, 3, 0x02000000 | 0x00200000, None)
             # FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY: attribute-only opens
             # do not participate in share checks and would still allow rename.
-            # FILE_SHARE_READ (no WRITE/DELETE);
+            # Share READ; editing also permits WRITE, but never DELETE.
             # OPEN_EXISTING; BACKUP_SEMANTICS | OPEN_REPARSE_POINT.
             if handle in (None, ctypes.c_void_p(-1).value):
                 raise ctypes.WinError(ctypes.get_last_error())
@@ -471,10 +472,94 @@ class Workspace:
             return {**result, 'kind': 'image', 'mime': IMAGES[Path(path).suffix.lower()], 'data': base64.b64encode(data).decode()}
         try:
             text = data.decode('utf-8-sig')
-            if '\x00' not in text: return {**result, 'kind': 'text', 'text': text}
+            if '\x00' not in text:
+                return {**result, 'kind': 'text', 'text': text, 'version': hashlib.sha256(data).hexdigest()}
         except UnicodeDecodeError:
             pass
         return result
+
+    @contextmanager
+    def _edit_directory(self, parts):
+        if os.name == 'nt':
+            # Permit file replacement while denying deletion/rename of ancestors.
+            with _windows_listing_directory(self.root.joinpath(*parts), writable=True) as directory:
+                yield directory, None
+        else:
+            with self._mkdir_directory(parts) as value:
+                yield value
+
+    def save(self, path, text, version):
+        parts = self.parts(path)
+        if (not parts or Path(path).suffix.lower() not in ('.md', '.markdown')
+                or any(part.rstrip(' .').casefold() == '.git' for part in parts)):
+            raise PermissionError('只能编辑项目内的 Markdown 文件')
+        if not isinstance(version, str) or not re.fullmatch('[a-f0-9]{64}', version):
+            raise ValueError('文件版本无效，请重新打开文件')
+        if not isinstance(text, str) or '\x00' in text:
+            raise ValueError('编辑内容必须为 UTF-8 文本')
+        try:
+            data = text.encode('utf-8')
+        except UnicodeEncodeError:
+            raise ValueError('编辑内容包含无效字符') from None
+        if len(data) > MAX_PREVIEW:
+            raise ValueError('Markdown 文件不能超过 512 KB')
+        # Pin ancestors on Windows and walk from the anchor on POSIX. Atomic
+        # replacement never follows a swapped leaf link or writes a hardlink.
+        with _EDIT_LOCK, self._edit_directory(parts[:-1]) as (directory, fd):
+            if fd is not None:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)  # Also serializes separate SSH payloads.
+            handle = self.open_file(directory, fd, parts[-1], os.O_RDONLY)
+            with os.fdopen(handle, 'rb') as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode):
+                    raise ValueError('仅支持普通文件')
+                if not before.st_mode & 0o222:
+                    raise PermissionError('此文件为只读文件')
+                original = stream.read(MAX_PREVIEW + 1)
+            if len(original) > MAX_PREVIEW:
+                raise ValueError('Markdown 文件不能超过 512 KB')
+            try:
+                old_text = original.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                raise ValueError('此文件不是 UTF-8 文本') from None
+            if '\x00' in old_text:
+                raise ValueError('此文件不是 UTF-8 文本')
+            if hashlib.sha256(original).hexdigest() != version:
+                return {'outcome': 'conflict'}
+            # Textareas normalize CRLF. Retain a document's BOM and uniform CRLF.
+            if '\r\n' in old_text and '\n' not in old_text.replace('\r\n', ''):
+                data = text.replace('\r\n', '\n').replace('\n', '\r\n').encode('utf-8')
+            if original.startswith(b'\xef\xbb\xbf'):
+                data = b'\xef\xbb\xbf' + data
+            if len(data) > MAX_PREVIEW:
+                raise ValueError('Markdown 文件不能超过 512 KB')
+            temporary = '.bridge-upload-' + uuid.uuid4().hex
+            handle = self.open_file(directory, fd, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            try:
+                with os.fdopen(handle, 'wb') as stream:
+                    stream.write(data); stream.flush(); os.fsync(stream.fileno())
+                    if fd is not None:
+                        os.fchmod(stream.fileno(), stat.S_IMODE(before.st_mode))
+                # Refuse an intervening rewrite/replacement, even with the same size.
+                handle = self.open_file(directory, fd, parts[-1], os.O_RDONLY)
+                with os.fdopen(handle, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    current = hashlib.sha256(stream.read(MAX_PREVIEW + 1)).hexdigest()
+                stamp = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if stamp(info) != stamp(before) or current != version:
+                    return {'outcome': 'conflict'}
+                if fd is not None:
+                    os.replace(temporary, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
+                else:
+                    os.replace(directory / temporary, directory / parts[-1])
+            finally:
+                try:
+                    if fd is not None: os.unlink(temporary, dir_fd=fd)
+                    else: (directory / temporary).unlink()
+                except FileNotFoundError:
+                    pass
+        return {'outcome': 'saved', 'version': hashlib.sha256(data).hexdigest(), 'size': len(data)}
 
     @contextmanager
     def download(self, path, range_header='', if_range='', limit=MAX_TRANSFER):
@@ -891,6 +976,7 @@ def operate(root, action, params):
         if action == 'download': return workspace.read(params['path'], download=True)
         if action == 'download-stream': return workspace.download(**params)
         if action == 'upload': return workspace.upload(**params)
+        if action == 'save': return workspace.save(**params)
         raise ValueError('不支持的文件操作')
     except PermissionError:
         raise

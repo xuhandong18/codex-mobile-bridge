@@ -278,6 +278,32 @@ class WorkspaceHttpTests(unittest.TestCase):
         self.assertEqual(self.raw(target, b'text', auth)[0], 200)
         self.assertEqual(self.request('GET', self.path + '/preview?path=test.txt', headers=auth)[2]['text'], 'text')
 
+    def test_markdown_save_keeps_auth_csrf_schema_and_version_boundaries(self):
+        target = self.path + '/save?path=readme.md'
+        (self.root / 'readme.md').write_text('# Original', encoding='utf-8')
+        version = Workspace(self.root).read('readme.md')['version']
+        body = {'text': '# Updated', 'version': version}
+        self.assertEqual(self.request('POST', target, body)[0], 401)
+        auth = self.login()
+        self.assertEqual(self.request('POST', target, body, {'Cookie': auth['Cookie']})[0], 403)
+        self.assertEqual(self.raw(target, json.dumps(body).encode(), {**auth, 'Origin': 'https://evil.example', 'Content-Type': 'application/json'})[0], 403)
+        self.assertEqual(self.request('GET', target, headers=auth)[0], 405)
+        self.assertEqual(self.request('POST', target, {**body, 'force': True}, auth)[0], 400)
+        self.assertEqual(self.request('POST', target, body, auth)[2]['outcome'], 'saved')
+        self.assertEqual(self.request('POST', target, body, auth)[2]['outcome'], 'conflict')
+        self.assertEqual(self.request('POST', self.path + '/save?path=../readme.md', body, auth)[0], 403)
+        self.assertEqual((self.root / 'readme.md').read_text(encoding='utf-8'), '# Updated')
+
+    def test_markdown_save_accepts_json_escaping_over_default_body_limit(self):
+        (self.root / 'readme.md').write_text('', encoding='utf-8')
+        version = Workspace(self.root).read('readme.md')['version']
+        text = '中' * 170000  # 510 KB of UTF-8, over 1 MB when JSON-escaped.
+        body = json.dumps({'text': text, 'version': version}).encode('utf-8')
+        status, result = self.raw(self.path + '/save?path=readme.md', body, {**self.login(), 'Content-Type': 'application/json'})
+        self.assertEqual(status, 200)
+        self.assertEqual(result['outcome'], 'saved')
+        self.assertEqual((self.root / 'readme.md').read_bytes(), text.encode('utf-8'))
+
     def test_large_html_preview_requires_login_and_keeps_workspace_boundary(self):
         html = '<h1>通知截图</h1><!--' + 'x' * (MAX_PREVIEW + 1) + '-->'
         (self.root / 'gallery.html').write_bytes(html.encode('utf-8'))
