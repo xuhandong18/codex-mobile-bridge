@@ -43,6 +43,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 ## Node 与浏览器
 
+聊天菜单的手工改名与 AI重命名运行 `python -B scripts/test-backend.py --source-only -p test_title_rename.py`、`node --test tests/deepseek-personal.test.mjs`，以及完整页面的 `node scripts/test-chat-rename-browser.cjs`。浏览器驱动在 320、390、820、1280 像素检查 Codex/DeepSeek 的右键与长按菜单、未打开聊天的手工改名、AI 自动写回、回执丢失只读核对和未知结果；`--screenshots` 只写入 `.tmp/chat-rename/`。需要已有 Playwright/Chromium，可用 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定，不连接真实客户端或模型。
+
 主聊天之间的来信运行 `python -B scripts/test-backend.py --source-only -p test_cross_thread_messages.py`，检查实时/保存记录、目录定位、增量去重、来源标记、禁止编辑来信、子代理通知过滤和独立 SSH 源码执行。`node scripts/test-message-navigation-browser.cjs` 同时在手机、平板和电脑宽度检查来信正文与导航可见、来源标签、历史跳转以及子代理通知仍然隐藏。
 
 ```sh

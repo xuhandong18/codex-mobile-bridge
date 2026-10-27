@@ -47,7 +47,7 @@ from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 LOG = logging.getLogger(__name__)
 from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
-THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|message-index|notifications|uploads|message-action|rename|auto-title|record-path|archive|unarchive|delete|read-state))?$")
+THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|message-index|notifications|uploads|message-action|rename|auto-title|ai-rename|record-path|archive|unarchive|delete|read-state))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
 UPLOAD_THUMB_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/thumb$")
 DESKTOP_IMAGE_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/desktop-images/([0-9a-f]{64})$")
@@ -547,7 +547,8 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) != 4 or parts[2] not in ('deepseek', 'claude') or parts[3] in ('side-read', 'side-write') or parts[3] not in (WRITES if write else READS):
                     return self.output(404, {'error': '接口不存在'})
                 manager.require_enabled(parts[2])
-                body = self.read_json() if write else {key: query[key][0] for key in ('childId',) if key in query}
+                read_fields = ('requestId',) if parts[3] == 'title-status' else ('childId',)
+                body = self.read_json() if write else {key: query[key][0] for key in read_fields if key in query}
                 sid = body.pop('sessionId', None) if write else query.get('sessionId', [None])[0]
                 if write and any(key in body for key in ('resolvedImages', 'resolvedFiles')):
                     raise ValueError('附件格式无效')
@@ -963,6 +964,9 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.read_json() if write else {}
                 return self.output(200, self.server.notifications.policy(thread_id, bridge.host, body if write else None))
             if not write:
+                if action == 'ai-rename':
+                    options = {'request_id': query['requestId'][0]} if 'requestId' in query else {}
+                    return self.output(200, bridge.title_renames.status(thread_id, **options))
                 if action == 'auto-title':
                     return self.output(200, bridge.title_summary_status(thread_id))
                 if action == 'record-path':
@@ -1016,6 +1020,10 @@ class Handler(BaseHTTPRequestHandler):
                                      attachments=body.get('attachments'), ui_locale=body.get("uiLocale"))
             elif action == "rename":
                 result = bridge.rename(thread_id, body.get("title"))
+            elif action == 'ai-rename':
+                if set(body) != {'id'}:
+                    raise ValueError('AI重命名参数无效')
+                result = bridge.ai_rename(thread_id, body['id'])
             elif action == 'auto-title':
                 if body:
                     raise ValueError('标题生成参数无效')

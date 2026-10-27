@@ -41,6 +41,10 @@ PREVIOUS_MODE_SOURCES = ('35963e66d411a8193d53700776e0eab7fdaa1ed4fff936ea8c61d8
 PREVIOUS_READ_STATE_SOURCES = ('0796b25a30de7b51b0e3ffbeb36dcc0e01ddfa96647ed9dc81ca7cf8dbaddbbf',
                                'e10e29e4bc015d85732547fff01c4f3a6527d3f2b077be8351bd5a85889e86bc')
 
+# Revision 7 before explicit conversation AI renaming, release LF and Windows CRLF.
+PREVIOUS_AI_RENAME_SOURCES = ('e33bf65c7f651b195f286a9d86a713157f097fc068927c4afcc27953aefe858f',
+                              '6884a6f3c7ea4b2c570168902b3d5cbacd7d0f48de10f2de3fe2a72e50da779b')
+
 
 def client_assets():
     base = Path(__file__).parent
@@ -166,7 +170,7 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES):
             return None
         if digest in current_sources:
             for name, content in client_assets().items():

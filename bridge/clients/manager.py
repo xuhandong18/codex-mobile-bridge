@@ -22,7 +22,7 @@ from bridge.clients.errors import BridgeUnavailable
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
-READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access', 'side-read', 'subagents'}
+READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access', 'side-read', 'subagents', 'title-status'}
 WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume', 'manage', 'side-write', 'read-state'}
 
 
@@ -232,7 +232,7 @@ class DesktopSessions:
         codex_read = provider == 'codex' and action == 'read-state'
         if (provider not in self.adapters and not codex_read) or action not in READS | WRITES:
             raise ValueError('不支持的桌面操作')
-        if (action in ('manage', 'side-read', 'side-write', 'subagents') and provider != 'deepseek'
+        if (action in ('manage', 'side-read', 'side-write', 'subagents', 'title-status') and provider != 'deepseek'
                 or action == 'read-state' and provider not in ('codex', 'deepseek')):
             raise ValueError('当前客户端尚未提供此能力')
         if provider == 'deepseek' and self.deepseek_restore_error:

@@ -99,6 +99,13 @@ enabled=false
         assert (home / 'config.toml').read_text(encoding='utf-8') == config
         assert result['usage'], 'Native token usage was not captured'
         print('PASS: one real ephemeral title turn, same provider/model, low effort, JSON output, no execution tools/project instructions, usage captured, no rollout/config mutation, workspace/process cleanup.')
+        generate_title(Catalog.find_runtime(), home, 'EARLY_TOPIC_MARKER ' + '字' * 3000 + ' LATEST_TOPIC_MARKER',
+                       'fixture-model', 'fixture', root, conversation=True)
+        conversation = json.dumps(captured[-1], ensure_ascii=False)
+        assert len(captured) == 2 and 'EARLY_TOPIC_MARKER' in conversation and 'LATEST_TOPIC_MARKER' in conversation
+        assert 'conversation' in conversation and 'FIRST_MESSAGE_MARKER' not in conversation
+        assert set(home.rglob('rollout-*.jsonl')) == before and not list(root.glob('title-task-*'))
+        print('PASS: explicit conversation title retains later messages beyond 2000 characters in an independent ephemeral request.')
         processes = []
         popen = subprocess.Popen
 
@@ -128,7 +135,7 @@ enabled=false
             finally:
                 release_request.set()
                 canceller.join(timeout=1)
-        assert cancel.is_set() and len(captured) == 3, 'Cancellation did not reach an actual model request'
+        assert cancel.is_set() and len(captured) == 4, 'Cancellation did not reach an actual model request'
         assert processes and all(process.poll() is not None for process in processes), 'A title process leaked'
         assert not list(root.glob('title-task-*')) and set(home.rglob('rollout-*.jsonl')) == before
         print('PASS: invalid output and in-flight cancellation never retry or leak runtime/history/workspace.')

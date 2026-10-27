@@ -27,7 +27,7 @@ files, search, or ask questions. Return only the JSON object required by the sch
 '''
 TITLE_SCHEMA = {'type': 'object', 'properties': {'title': {'type': 'string'}},
                 'required': ['title'], 'additionalProperties': False}
-DISABLED_FEATURES = ('shell_tool', 'multi_agent', 'apps', 'plugins', 'remote_plugin',
+DISABLED_FEATURES = ('shell_tool', 'view_image', 'multi_agent', 'apps', 'plugins', 'remote_plugin',
                      'hooks', 'memories', 'shell_snapshot', 'skill_mcp_dependency_install', 'goals')
 _checked = set()
 _check_lock = threading.Lock()
@@ -103,7 +103,7 @@ def check_title_runtime(executable, directory, cancel=None):
         _checked.add(key)
 
 
-def generate_title(executable, home, text, model, provider, directory, cancel=None, timeout=45, expected_stamp=None):
+def generate_title(executable, home, text, model, provider, directory, cancel=None, timeout=45, expected_stamp=None, *, conversation=False):
     if not executable or not model or not provider or not text.strip():
         raise TitleError('标题任务缺少模型接入或文字')
     cancel = cancel or threading.Event()
@@ -118,7 +118,7 @@ def generate_title(executable, home, text, model, provider, directory, cancel=No
         # Apply before thread/start as well, so hooks/plugins cannot start work.
         for name in DISABLED_FEATURES:
             command += ['-c', 'features.' + name + '=false']
-        command += ['-c', 'project_doc_max_bytes=0', '-c', 'web_search="disabled"',
+        command += ['-c', 'project_doc_max_bytes=0', '-c', 'web_search="disabled"', '-c', 'tools.view_image=false',
                     '-c', 'features.skip_host_skill_discovery=true',
                     'app-server', '--listen', 'stdio://']
         process = subprocess.Popen(command, cwd=folder, env={**os.environ, 'CODEX_HOME': str(home)},
@@ -215,7 +215,7 @@ def generate_title(executable, home, text, model, provider, directory, cancel=No
             if isinstance(definition, dict):
                 config['model_providers'] = {provider: {**definition, 'request_max_retries': 0, 'stream_max_retries': 0}}
             result = request('thread/start', {'cwd': folder, 'model': model, 'modelProvider': provider,
-                'ephemeral': True, 'baseInstructions': INSTRUCTIONS, 'developerInstructions': '',
+                'ephemeral': True, 'baseInstructions': INSTRUCTIONS.replace('first user message', 'conversation transcript') if conversation else INSTRUCTIONS, 'developerInstructions': '',
                 'approvalPolicy': 'never', 'sandbox': 'read-only', 'environments': [],
                 'serviceName': 'codex_mobile_title', 'serviceTier': 'default', 'config': config})
             thread = result.get('thread') or {}
@@ -226,7 +226,7 @@ def generate_title(executable, home, text, model, provider, directory, cancel=No
             if expected_stamp is not None and access_stamp(home) != expected_stamp:
                 raise TitleError('标题任务的账号或配置已变化')
             request('turn/start', {'threadId': child, 'input': [{'type': 'text',
-                'text': json.dumps({'first_user_message': text[:2000]}, ensure_ascii=False)}],
+                'text': json.dumps({'conversation': text[:12000]} if conversation else {'first_user_message': text[:2000]}, ensure_ascii=False)}],
                 'collaborationMode': {'mode': 'default', 'settings': {'model': model,
                     'reasoning_effort': 'low', 'developer_instructions': ''}},
                 'effort': 'low', 'outputSchema': TITLE_SCHEMA, 'environments': [],

@@ -86,6 +86,40 @@ class ChatTitleSummary {
   }
 }
 
+class ChatAIRename {
+  constructor({request,updated,newId}){Object.assign(this,{request,updated,newId});}
+  async open(target){
+    this.dialog?.close();clearTimeout(this.timer);
+    const dialog=document.createElement('dialog');dialog.className='picker ai-rename-dialog';
+    const heading=document.createElement('h2');heading.textContent=actionText('AI重命名');
+    heading.id='ai-rename-heading';dialog.setAttribute('aria-labelledby',heading.id);
+    const name=document.createElement('p');name.textContent=target.title;
+    const help=document.createElement('p');help.className='muted';help.textContent=actionText('根据会话内容生成精炼标题并自动保存，会使用此聊天模型接入的额度。');
+    const status=document.createElement('p');status.setAttribute('role','status');status.textContent=actionText('正在生成聊天标题…');
+    const close=document.createElement('button');close.type='button';close.className='primary';close.textContent=actionText('关闭');close.onclick=()=>dialog.close();
+    dialog.append(heading,name,help,status,close);document.body.append(dialog);
+    const task=this.task={...target,dialog,status,name,requestId:this.newId()};this.dialog=dialog;
+    dialog.addEventListener('close',()=>{dialog.remove();if(this.task===task){this.task=null;clearTimeout(this.timer);}},{once:true});
+    dialog.showModal();
+    try{const result=await this.request(task.writeUrl,{...task.body,id:task.requestId});if(result.requestId)task.requestId=result.requestId;this.render(task,result);}
+    catch(error){if(this.task!==task)return;task.error=actionText(error.message);status.textContent=task.error;this.schedule(task);}
+  }
+  schedule(task){clearTimeout(this.timer);if(this.task===task)this.timer=setTimeout(()=>this.read(task),1500);}
+  async read(task){
+    try{this.render(task,await this.request(task.readUrl+(task.readUrl.includes('?')?'&':'?')+'requestId='+encodeURIComponent(task.requestId)));}
+    catch{if(this.task===task){task.status.textContent=actionText('暂时无法确认生成状态，恢复连接后会继续查询。');this.schedule(task);}}
+  }
+  render(task,result){
+    if(this.task!==task||!task.dialog.open)return;
+    const messages={queued:'标题生成已排队…',running:'正在生成聊天标题…',complete:'聊天标题已生成并保存。',
+      skipped:'聊天名称已变化，已保留当前名称。',manual:'已保留手工设置的聊天名称。',
+      unknown:'生成结果尚未确认，请先检查聊天名称；不会自动重复请求。'};
+    task.status.textContent=(result.message?actionText(result.message)+' ':'')+actionText(messages[result.status]||task.error||'未能开始生成，请关闭窗口后检查连接与聊天内容。');
+    if(['complete','skipped','manual'].includes(result.status)&&result.title){task.name.textContent=result.title;this.updated(task,result.title);}
+    if(['queued','running'].includes(result.status))this.schedule(task);
+  }
+}
+
 class MessageActions {
   constructor({request,openChat,refresh,uuid,notify,busy}){
     Object.assign(this,{request,openChat,refresh,uuid,notify,busy});

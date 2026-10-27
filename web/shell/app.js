@@ -750,6 +750,9 @@ new ChatContextMenu($('sessions'),target=>{
   }
   const row=listRows.find(row=>row.id===button.dataset.id&&row.host===button.dataset.host);if(!row)return [];
   const items=[{label:'复制会话路径',copy:true,run:copy=>window.BridgeClipboard.copy(()=>'codex://threads/'+encodeURIComponent(row.id),copy)}];
+  items.push({label:'AI重命名',disabled:row.host!=='local'||!sessionAccess(row.access).canConfigure||row.archived,run:()=>aiRename.open({...row,
+    writeUrl:sessionUrl(row.id,'ai-rename',row.host),readUrl:sessionUrl(row.id,'ai-rename',row.host)})});
+  items.push({label:'重命名',disabled:!sessionAccess(row.access).canConfigure,run:()=>openRenameChat(row)});
   items.push({label:'标记为未读',run:()=>{sessionActivity.markUnread(chatKey(row.id,row.host));renderActivity();}});
   items.push(...sidebarPlacementActions(sidebarEntry('thread',row)));
   if(button.closest('.project-group')&&row.projectKey!==row.host+'|independent'){
@@ -1297,6 +1300,10 @@ $('phone-language').onchange=()=>{
 BridgeI18n.apply();
 
 let renameTarget=null,renameBusy=false;
+const aiRename=new ChatAIRename({request:api,newId:uuid,updated:(target,title)=>{
+  if(currentId===target.id&&currentHost===target.host){if(state)state.title=title;$('chat-title').textContent=title;$('details-title').textContent=title;}
+  loadList(true).catch(()=>{});
+}});
 const titleSummary=new ChatTitleSummary({dialog:$('rename-dialog'),button:$('rename-summary'),
   input:$('rename-title'),status:$('rename-summary-status'),request:api,updated:(target,title)=>{
     if(currentId===target.id&&currentHost===target.host){
@@ -1305,15 +1312,16 @@ const titleSummary=new ChatTitleSummary({dialog:$('rename-dialog'),button:$('ren
     }
     loadList(true).catch(()=>{});
   }});
-$('rename-chat').onclick=()=>{
-  if(!currentId||renameBusy||!currentAccess().canConfigure)return;
-  renameTarget={id:currentId,host:currentHost};
-  $('rename-title').value=state?.title||$('chat-title').textContent;
+function openRenameChat(row){
+  if(!row?.id||renameBusy||!sessionAccess(row.access).canConfigure)return;
+  renameTarget={id:row.id,host:row.host,canConfigure:true};
+  $('rename-title').value=row.title||'';
   $('rename-error').textContent='';$('chat-details-dialog').close();$('rename-dialog').showModal();
   titleSummary.open(renameTarget,sessionUrl(renameTarget.id,'auto-title',renameTarget.host));
-};
+}
+$('rename-chat').onclick=()=>openRenameChat({id:currentId,host:currentHost,title:state?.title||$('chat-title').textContent,access:currentAccess()});
 $('rename-form').onsubmit=async event=>{
-  event.preventDefault();if(renameBusy||!renameTarget||!currentAccess().canConfigure)return;
+  event.preventDefault();if(renameBusy||!renameTarget?.canConfigure)return;
   const target=renameTarget,title=$('rename-title').value.trim();
   if(!title)return;
   renameBusy=true;$('rename-save').disabled=true;$('rename-error').textContent='';

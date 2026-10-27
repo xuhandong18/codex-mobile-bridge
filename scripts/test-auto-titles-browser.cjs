@@ -14,6 +14,7 @@ function state(id){return states.get(id)||{status:'ready',available:true,title:'
 const setup=`const $=id=>document.getElementById(id),t=x=>x;
 let currentId='${first}',currentHost='local',state={title:'首条消息的临时预览'};
 const currentAccess=()=>({canConfigure:true}),loadList=async()=>{},toast=()=>{};
+const sessionAccess=value=>value||{canConfigure:true},uuid=()=>crypto.randomUUID();
 const sessionUrl=(id,action)=>'/api/sessions/'+id+'/'+action;
 const api=async(url,body)=>{const response=await fetch(url,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error);return result;};
 `;

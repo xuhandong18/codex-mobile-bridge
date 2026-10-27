@@ -20,6 +20,7 @@ from bridge.resources import source_text
 from bridge.features.terminals.manager import TerminalManager
 from bridge.features.sessions.side_chat import SideChats
 from bridge.features.sessions.auto_titles import AutoTitles
+from bridge.features.sessions.title_rename import TitleRenames
 from bridge.clients.codex.title_runtime import generate_title, access_stamp, TitleError
 from bridge.features.sessions.activity import ActivityQueries, SubagentActivity
 from bridge.features.sessions import linux_permissions
@@ -192,6 +193,7 @@ class Bridge:
         self.closed = threading.Event()
         Path(data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         self.auto_titles = AutoTitles(data_dir)
+        self.title_renames = TitleRenames(self)
         self.ledger_path = Path(data_dir) / "submissions.json"
         self.submit_lock = threading.Lock()
         self.create_lock = threading.Lock()
@@ -2318,6 +2320,14 @@ class Bridge:
     def rename(self, thread_id, title):
         return self._rename(thread_id, title, manual=True)
 
+    @operation
+    def ai_rename(self, thread_id, request_id):
+        return self.title_renames.start(thread_id, request_id)
+
+    @operation
+    def apply_title_rename(self, apply, title):
+        return apply(title)
+
     def _rename(self, thread_id, title, *, manual):
         uuid.UUID(thread_id)
         if not isinstance(title, str) or not title.strip() or len(title) > 120 or any(unicodedata.category(c) in ('Cc', 'Zl', 'Zp') for c in title):
@@ -2330,6 +2340,7 @@ class Bridge:
             # outstanding summary before attempting the metadata write.
             if manual:
                 self.auto_titles.protect('main:' + thread_id)
+                self.title_renames.cancel(thread_id)
             if isinstance(self.store, RemoteStore):
                 source = source_text('features/sessions/create.py')
                 source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
@@ -2389,7 +2400,7 @@ class Bridge:
             return status
         return self.title_summary_status(thread_id)
 
-    def _title_generator(self, text, settings, stamp):
+    def _title_generator(self, text, settings, stamp, *, conversation=False):
         def generate(cancel):
             if self.closed.is_set() or stamp != access_stamp(self.codex_home):
                 raise TitleError('标题任务的账号或配置已变化')
@@ -2397,7 +2408,7 @@ class Bridge:
             # history. Only the model/provider/auth route is reused.
             return generate_title(self.catalog_reader.executable, self.codex_home, text,
                                   settings['model'], settings['modelProvider'], self.data_dir, cancel,
-                                  expected_stamp=stamp)
+                                  expected_stamp=stamp, **({'conversation': True} if conversation else {}))
         return generate
 
     def _side_title(self, chat, text):

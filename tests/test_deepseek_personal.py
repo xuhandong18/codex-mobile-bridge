@@ -107,10 +107,10 @@ class PersonalStateTests(unittest.TestCase):
     def test_relay_exposes_only_explicit_harness_feature_routes(self):
         for method, action in [('GET', 'side-chat'), ('POST', 'side-chat'), ('GET', 'subagents'),
                                ('POST', 'manage'), ('GET', 'project-directories'), ('POST', 'project-directories'),
-                               ('GET', 'project-directory-operations')]:
+                               ('GET', 'project-directory-operations'), ('GET', 'title-status')]:
             validate(method, '/api/desktop-sessions/deepseek/'+action)
         for method, action in [('GET', 'manage'), ('POST', 'subagents'), ('POST', 'project-directory-operations'),
-                               ('GET', 'side-read'), ('POST', 'side-write'), ('POST', 'eval')]:
+                               ('GET', 'side-read'), ('POST', 'side-write'), ('POST', 'title-status'), ('POST', 'eval')]:
             with self.assertRaises(PermissionError): validate(method, '/api/desktop-sessions/deepseek/'+action)
         with self.assertRaises(PermissionError): validate('POST', '/api/desktop-sessions/claude/manage')
 
@@ -134,6 +134,22 @@ class PersonalHttpTests(unittest.TestCase):
             self.assertEqual(self.request('POST', route, body, {'Cookie': headers['Cookie']})[0], 403)
             self.assertEqual(self.request('POST', route, body, headers)[0], 200)
             manager.call.assert_called_with('deepseek', action, 'native-session', {key: value for key, value in body.items() if key != 'sessionId'})
+
+    def test_ai_rename_routes_preserve_session_identity_auth_and_csrf(self):
+        manager = self.server.desktop_sessions = Mock()
+        manager.call.return_value = {'status': 'queued'}
+        route = '/api/desktop-sessions/deepseek/manage'
+        status_route = '/api/desktop-sessions/deepseek/title-status?sessionId=native-session'
+        body = {'id': str(uuid.uuid4()), 'sessionId': 'native-session', 'operation': 'ai-rename'}
+        self.assertEqual(self.request('GET', status_route)[0], 401)
+        headers = self.login()
+        self.assertEqual(self.request('POST', route, body, {'Cookie': headers['Cookie']})[0], 403)
+        self.assertEqual(self.request('POST', route, body, headers)[0], 200)
+        manager.call.assert_called_with('deepseek', 'manage', 'native-session', {'id': body['id'], 'operation': 'ai-rename'})
+        self.assertEqual(self.request('GET', status_route, headers=headers)[0], 200)
+        manager.call.assert_called_with('deepseek', 'title-status', 'native-session', {})
+        self.assertEqual(self.request('GET', status_route+'&requestId='+body['id'], headers=headers)[0], 200)
+        manager.call.assert_called_with('deepseek', 'title-status', 'native-session', {'requestId': body['id']})
 
     def test_side_routes_require_auth_csrf_and_preserve_parent_child_slot_and_receipt(self):
         manager = self.server.desktop_sessions = Mock()

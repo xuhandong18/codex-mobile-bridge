@@ -9,13 +9,13 @@ UUID = r'[0-9a-f-]{36}'
 DIAGNOSTIC_UUID = r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 THREAD = re.compile(r'/api/sessions/' + UUID + r'(?:/(.*))?')
 DESKTOP = re.compile(r'/api/desktop-sessions/(?:deepseek|claude)/(.*)')
-READ = {'', 'catalog', 'poll', 'timeline', 'detail', 'changes', 'notifications', 'auto-title',
+READ = {'', 'catalog', 'poll', 'timeline', 'detail', 'changes', 'notifications', 'auto-title', 'ai-rename',
         'side-chat', 'terminal', 'subagents', 'workspace', 'workspace/preview',
         'workspace/download', 'workspace/info', 'workspace/git-status', 'workspace/git-diff',
         'workspace/git-history', 'workspace/git-commit', 'workspace/git-history-diff',
         'workspace/git-branches'}
 WRITE = {'send', 'stop', 'history', 'respond', 'reconnect', 'queue', 'settings', 'read-state',
-         'permissions', 'uploads', 'message-action', 'rename', 'notifications', 'auto-title',
+         'permissions', 'uploads', 'message-action', 'rename', 'notifications', 'auto-title', 'ai-rename',
          'goal/cancel', 'goal/edit', 'goal/status', 'side-chat', 'terminal',
          'workspace/upload', 'workspace/save', 'workspace/git-action'}
 DESKTOP_READ = {'list', 'detail', 'catalog', 'projects', 'account', 'access', 'terminal', 'notifications'} | {action for action in READ if action.startswith('workspace')}
@@ -69,7 +69,7 @@ def validate(method, path, size=0):
     desktop = DESKTOP.fullmatch(p.path)
     if desktop:
         if p.path.startswith('/api/desktop-sessions/deepseek/') and desktop[1] in (
-                {'side-chat', 'subagents', 'project-directories', 'project-directory-operations'} if method == 'GET'
+                {'side-chat', 'subagents', 'project-directories', 'project-directory-operations', 'title-status'} if method == 'GET'
                 else {'side-chat', 'manage', 'project-directories', 'read-state'}):
             return
         if desktop[1] in (DESKTOP_READ if method == 'GET' else DESKTOP_WRITE):

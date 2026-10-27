@@ -188,6 +188,29 @@ class DeepSeekMigrationTests(unittest.TestCase):
         (self.old.directory/'client.js').write_text('// foreign modification')
         with self.assertRaises(ValueError): self.new.discover_existing()
 
+    def test_revision_seven_ai_rename_upgrade_retains_verified_sources_and_credentials(self):
+        from bridge.clients.deepseek import setup
+        from bridge.clients.deepseek.adapter import LIFECYCLE_REVISIONS
+        self.assertEqual(BRIDGE_REVISION, 8)
+        self.assertIn(7, LIFECYCLE_REVISIONS)
+        source = self.old.directory/'mobile-host.mjs'
+        content = b'// known revision 7 before AI rename\n'
+        source.write_bytes(content)
+        credentials = (self.old.directory/'connection.json').read_bytes()
+        original_sha = hashlib.sha256
+        for predecessor in setup.PREVIOUS_AI_RENAME_SOURCES:
+            def digest(value):
+                return Mock(hexdigest=lambda: predecessor) if value == content else original_sha(value)
+            with self.subTest(digest=predecessor), patch.object(setup.hashlib, 'sha256', side_effect=digest):
+                result = self.new.discover_existing()
+                self.assertTrue(result['updateRequired'])
+                self.assertTrue(result['reused'])
+                self.assertEqual(source.read_bytes(), content)
+        with patch.object(setup.hashlib, 'sha256', side_effect=digest):
+            self.new.update_existing()
+        self.assertEqual((self.old.directory/'connection.json').read_bytes(), credentials)
+        self.assertFalse(self.new.discover_existing()['updateRequired'])
+
     def test_restore_saved_directory_is_checked_against_actual_insertion(self):
         self.assertTrue(self.new.use_existing(self.old.directory)['reused'])
         with self.assertRaisesRegex(ValueError, '无法验证'):

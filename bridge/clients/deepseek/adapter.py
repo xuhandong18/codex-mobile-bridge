@@ -13,10 +13,10 @@ from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.deepseek.setup import MARKER, insertion, verified_directory, legacy_account_configured, install_client_assets
 
 PLUGIN_ID = re.compile(r'''["']?id["']?\s*:\s*["']?codex-mobile-desktop(?:["'\s,}]|$)''')
-BRIDGE_REVISION = 7
-# Revisions 3–6 share the complete native-agent lifecycle schema. Older verified
+BRIDGE_REVISION = 8
+# Revisions 3–7 share the complete native-agent lifecycle schema. Older verified
 # hosts can prove a safe restart before the feature protocol is upgraded.
-LIFECYCLE_REVISIONS = (3, 4, 5, 6, BRIDGE_REVISION)
+LIFECYCLE_REVISIONS = (3, 4, 5, 6, 7, BRIDGE_REVISION)
 UPDATE_REASON = 'Harness 接入需要更新，请结束任务后点击“重启并接入”'
 
 

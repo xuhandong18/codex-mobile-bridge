@@ -370,12 +370,23 @@ class DesktopSessionsView {
     const dialog=this.dialog('移动到分区'),sid=project?null:row.id;
     for(const section of [{id:null,title:'默认分区'},{id:'pinned',title:'置顶'},...(this.harnessSidebar?.sections||[])]){const button=this.button(section.title,async()=>{if(await this.manageHarness({operation:'place',sectionId:section.id,...project?{projectKey:row.key}:{}},sid))dialog.close();});if(section.id&&section.id!=='pinned'){button.textContent=section.title;delete button.dataset.i18n;}dialog.append(button);}dialog.showModal();
   }
+  aiRenameChat(row){
+    this.aiRename??=new ChatAIRename({request:this.request,newId:()=>this.requestId(),updated:(target,title)=>{
+      if(this.provider!=='deepseek')return;
+      this.invalidateReads('deepseek');
+      const saved=this.rows.find(chat=>chat.id===target.id);if(saved)saved.title=title;
+      if(this.sid===target.id){this.title.textContent=title;if(this.state)this.state.title=title;}
+      this.refreshList();
+    }});
+    return this.aiRename.open({...row,writeUrl:this.path('manage',null,'deepseek'),readUrl:this.path('title-status',row.id,'deepseek'),body:{operation:'ai-rename',sessionId:row.id}});
+  }
   harnessActions(target){
     if(this.provider!=='deepseek'||this.harnessCapabilities?.sidebar!==true)return [];
     const thread=target.closest?.('[data-id]'),project=target.closest?.('[data-project-key]'),section=target.closest?.('[data-section-id]');
     if(thread){const row=this.rows.find(r=>r.id===thread.dataset.id);if(!row)return [];
       const w=this.harnessProjects.find(p=>p.cwd===row.cwd),ids=w?.sessionIds||[],index=ids.indexOf(row.id);
-      return [{label:'重命名聊天',run:()=>this.editHarnessTitle('重命名聊天',row.title,title=>this.manageHarness({operation:'rename',title},row.id))},
+      return [{label:'AI重命名',disabled:row.archived,run:()=>this.aiRenameChat(row)},
+        {label:'重命名',run:()=>this.editHarnessTitle('重命名聊天',row.title,title=>this.manageHarness({operation:'rename',title},row.id))},
         {label:row.pinned?'取消置顶':'置顶',run:()=>this.manageHarness({operation:'place',sectionId:row.pinned?null:'pinned'},row.id)},
         {label:'移动到分区',run:()=>this.placeHarness(row)},
         {label:'标记未读',run:()=>{this.activity.markUnread('deepseek|'+row.id);this.renderIndicators();}},

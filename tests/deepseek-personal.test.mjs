@@ -37,6 +37,57 @@ async function fixture(t){
   return {ctx,folder,add,append,rows,events,calls,workspace,request,restart:async()=>{await disposers.pop()();await start();}};
 }
 
+test('explicit AI rename summarizes conversation without prompting or creating a native agent',async t=>{
+  const f=await fixture(t),row=f.add('title');row.projections.values.title='用户原先的标题';
+  f.append('title','user/message',{content:[{type:'text',text:'首先修复登录'}]});
+  f.append('title','assistant/message',{message:{content:[{type:'text',text:'登录已修复'},{type:'thinking',thinking:'PRIVATE REASONING'}]}});
+  f.append('title','user/message',{message:{content:[{type:'text',text:'现在增加聊天重命名'}]}});
+  f.append('title','tool/result',{content:'PRIVATE TOOL OUTPUT'});
+  let release;const paused=new Promise(resolve=>release=resolve),requests=[];
+  f.ctx.llm={prepareCall:async options=>({config:options,stream:async function*(request){requests.push(request);await paused;yield {type:'text-delta',text:'完善聊天标题管理'};yield {type:'finish',reason:{kind:'stop'}};}})};
+  assert.equal((await f.request('title-status','title')).status,'ready');assert.equal(requests.length,0);
+  const id=randomUUID();assert.equal((await f.request('manage','title',{operation:'ai-rename',id})).status,'queued');
+  const merged=randomUUID();await f.request('manage','title',{operation:'ai-rename',id});await f.request('manage','title',{operation:'ai-rename',id:merged});
+  release();let status;
+  for(let n=0;n<100;n++){status=await f.request('title-status','title');if(status.status==='complete')break;await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(status.status,'complete');assert.equal(status.title,'完善聊天标题管理');assert.equal(requests.length,1);
+  assert.equal((await f.request('manage','title',{operation:'ai-rename',id:merged})).status,'complete');assert.equal(requests.length,1,'coalesced requests stay deduplicated after completion');
+  await f.restart();assert.equal((await f.request('manage','title',{operation:'ai-rename',id:merged})).status,'complete');assert.equal(requests.length,1,'coalesced requests survive host restart');
+  const text=JSON.stringify(requests[0].messages);assert.match(text,/首先修复登录/);assert.match(text,/现在增加聊天重命名/);assert.match(text,/登录已修复/);assert.doesNotMatch(text,/PRIVATE TOOL OUTPUT|PRIVATE REASONING/);
+  assert.deepEqual(requests[0].tools,[]);assert.equal(requests[0].provider,'fixture');assert.equal(requests[0].model,'chat');
+  assert.deepEqual(f.calls.map(call=>call[0]),['rename']);
+  assert.equal((await f.request('title-status','title',{requestId:randomUUID()})).status,'unknown','a missing request cannot reuse a previous success');
+  const saved=await readFile(join(f.folder,'personal-state.json'),'utf8');assert.doesNotMatch(saved,/现在增加聊天重命名/);
+});
+
+test('explicit AI rename preserves a manual same-name choice and never replays an unknown request',async t=>{
+  const f=await fixture(t),row=f.add('protected');f.append('protected','user/message',{content:[{type:'text',text:'需要精炼的主题'}]});
+  let release,started;const paused=new Promise(resolve=>release=resolve),ready=new Promise(resolve=>started=resolve);let count=0;
+  f.ctx.llm={prepareCall:async options=>{count++;started();return {config:options,stream:async function*(){await paused;yield {type:'text-delta',text:'迟到的标题'};yield {type:'finish',reason:{kind:'stop'}};}};}};
+  await f.request('manage','protected',{operation:'ai-rename',id:randomUUID()});await ready;
+  await f.request('manage','protected',{operation:'rename',title:row.projections.values.title});release();
+  assert.equal((await f.request('title-status','protected')).status,'manual');assert.equal(f.calls.filter(c=>c[0]==='rename').length,1);
+  const id=randomUUID();f.ctx.llm.prepareCall=async()=>{count++;throw Error('unknown provider request');};
+  await f.request('manage','protected',{operation:'ai-rename',id});
+  for(let n=0;n<100;n++){if((await f.request('title-status','protected')).status==='unknown')break;await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal((await f.request('title-status','protected')).status,'unknown');
+  await f.request('manage','protected',{operation:'ai-rename',id});await f.restart();await f.request('manage','protected',{operation:'ai-rename',id});
+  assert.equal(count,2);assert.equal(f.calls.filter(c=>c[0]==='rename').length,1);
+});
+
+test('a failed title ledger save does not poison the shared title queue',async t=>{
+  const f=await fixture(t);f.add('save-failure');f.append('save-failure','user/message',{content:[{type:'text',text:'需要摘要的会话'}]});
+  let count=0;f.ctx.llm={prepareCall:async options=>({config:options,stream:async function*(){count++;yield {type:'text-delta',text:'生成的主题'+count};yield {type:'finish',reason:{kind:'stop'}};}})};
+  const rename=f.ctx.sessionController.rename,blocked=join(f.folder,'personal-state.json.tmp');let failOnce=true;
+  f.ctx.sessionController.rename=async request=>{await rename(request);if(failOnce){failOnce=false;await mkdir(blocked);}};
+  await f.request('manage','save-failure',{operation:'ai-rename',id:randomUUID()});
+  for(let n=0;n<100;n++){if(f.calls.some(call=>call[0]==='rename'))break;await new Promise(resolve=>setTimeout(resolve,10));}
+  await new Promise(resolve=>setTimeout(resolve,30));await rm(blocked,{recursive:true});
+  assert.equal((await f.request('manage','save-failure',{operation:'ai-rename',id:randomUUID()})).status,'queued');
+  for(let n=0;n<100;n++){if((await f.request('title-status','save-failure')).status==='complete')break;await new Promise(resolve=>setTimeout(resolve,10));}
+  assert.equal(count,2);assert.equal((await f.request('title-status','save-failure')).title,'生成的主题2');
+});
+
 test('reading completion clears only that native desktop dot and cannot consume a later turn',async t=>{
   const f=await fixture(t),row=f.add('read-me');f.add('other');
   f.append('read-me','turn/start',{turn:1});f.append('read-me','turn/end',{turn:1,reason:{kind:'completed'}});

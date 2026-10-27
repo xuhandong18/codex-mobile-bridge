@@ -2,6 +2,21 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"AI重命名":"AI rename",
+"根据会话内容生成精炼标题并自动保存，会使用此聊天模型接入的额度。":"Generate and save a concise title from this conversation using its model allowance.",
+"正在生成聊天标题…":"Generating a chat title…",
+"标题生成已排队…":"Title generation is queued…",
+"聊天标题已生成并保存。":"The chat title has been generated and saved.",
+"聊天名称已变化，已保留当前名称。":"The chat name changed. The current name has been kept.",
+"已保留手工设置的聊天名称。":"The manually chosen chat name has been kept.",
+"生成结果尚未确认，请先检查聊天名称；不会自动重复请求。":"The result is unconfirmed. Check the chat name; the request will not be repeated automatically.",
+"暂时无法确认生成状态，恢复连接后会继续查询。":"The generation status is unavailable. Checking will resume when the connection recovers.",
+"未能开始生成，请关闭窗口后检查连接与聊天内容。":"Generation could not start. Close this dialog and check the connection and chat content.",
+"AI重命名暂仅支持本机 Codex 聊天":"AI rename currently supports local Codex desktop chats.",
+"请先取消归档，再使用AI重命名":"Unarchive this chat before using AI rename.",
+"此聊天还没有可用于生成标题的文字":"This chat has no text to generate a title from yet.",
+"标题任务队列已满或此聊天的模型接入不可用":"The title queue is full or this chat's model connection is unavailable.",
+"AI重命名参数无效":"Invalid AI rename parameters.",
 "Markdown 编辑内容":"Markdown source",
 "尚未取得文件版本，保存前将先核对。":"The file version is unavailable. It will be checked before saving.",
 "正在核对文件版本…":"Checking the file version…",
