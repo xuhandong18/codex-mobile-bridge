@@ -3,7 +3,8 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require('playwright'),web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
 const id=n=>'11111111-1111-4111-8111-'+String(n).padStart(12,'0');
-let rows,deepseek,jobs,writes,mode='success';const errors=[],checks=[];
+const unavailableOnly=process.argv.includes('--unavailable-only');
+let rows,deepseek,jobs,writes,mode='success',unavailableAt='preflight',titleReads=0;const errors=[],checks=[];
 function reset(){rows=[1,2].map(n=>({id:id(n),host:'local',title:'原有标题 '+n,cwd:'/fixture',recency:10-n,projectKey:'local|independent',projectName:'独立聊天',access:{source:'desktop'}}));deepseek=[1,2].map(n=>({id:'deepseek-'+n,title:'原有标题 '+n,cwd:'/fixture',projectless:true,status:'idle',model:'fixture/chat'}));jobs=new Map();writes=[];}
 function start(provider,sid,requestId){
   const key=provider+sid,collection=provider==='codex'?rows:deepseek;
@@ -17,6 +18,12 @@ const server=http.createServer(async(req,res)=>{
   if(p.startsWith('/api/')){
     res.setHeader('Content-Type','application/json');let body={},value={};
     if(req.method==='POST'){let raw='';for await(const chunk of req)raw+=chunk;body=JSON.parse(raw||'{}');if(p!=='/api/activity')writes.push({p,body});}
+    if(unavailableOnly&&p.endsWith('/ai-rename')){
+      if(req.method==='GET')titleReads++;
+      const fail=unavailableAt==='preflight'||unavailableAt==='session'||unavailableAt==='submit'&&req.method==='POST'||unavailableAt==='poll'&&url.searchParams.has('requestId');
+      if(fail){res.statusCode=404;res.end(JSON.stringify({error:unavailableAt==='session'?'找不到这个会话':'页面不存在'}));return;}
+      if(unavailableAt==='close'&&req.method==='GET'){setTimeout(()=>res.end(JSON.stringify({status:'ready'})),350);return;}
+    }
     if(p==='/api/auth')value={authenticated:true,csrf:'fixture',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'},uiLanguage:'zh'};
     else if(p==='/api/clients')value={clients:['codex','deepseek'].map(id=>({id,name:id,enabled:true,configured:true,connected:true,installed:true,running:true}))};
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
@@ -50,8 +57,8 @@ const server=http.createServer(async(req,res)=>{
   const check=(value,label)=>{assert.ok(value,label);checks.push(label);};
   try{
     browser=await chromium.launch({headless:true,...process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{}});
-    for(const width of [320,390,820,1280])for(const provider of ['codex','deepseek']){
-      reset();mode='success';const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1000}),page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));
+    for(const failure of unavailableOnly?['preflight','submit','poll','session','close']:['none'])for(const width of unavailableOnly?[820]:[320,390,820,1280])for(const provider of unavailableOnly?['codex']:['codex','deepseek']){
+      reset();mode='success';unavailableAt=failure;titleReads=0;const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1000}),page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));
       await context.addInitScript(()=>{localStorage.setItem('list-mode','recent');localStorage.setItem('navigation:sidebar','open');});
       await page.goto('http://127.0.0.1:'+server.address().port);
       await page.waitForFunction(()=>listReadFinished&&listRows.length===2);
@@ -64,6 +71,19 @@ const server=http.createServer(async(req,res)=>{
         await page.locator('.chat-context-menu[open]').waitFor();
       };
       await menu();check(await page.getByRole('button',{name:'AI重命名',exact:true}).isVisible(),'菜单显示AI重命名 '+label);
+      if(unavailableOnly){
+        await page.getByRole('button',{name:'AI重命名',exact:true}).click();
+        if(failure==='close'){
+          await page.locator('.ai-rename-dialog button').click();await page.waitForTimeout(500);
+          check(writes.length===0,'检查能力期间关闭窗口不会继续提交模型任务');await context.close();continue;
+        }
+        const expected=failure==='session'?'找不到这个会话':'当前网关尚未提供 AI重命名';
+        await page.waitForFunction(text=>document.querySelector('.ai-rename-dialog [role=status]')?.textContent.includes(text),expected,{timeout:4000});
+        const seen=titleReads;await page.waitForTimeout(1700);
+        check(titleReads===seen,'明确的接口或会话错误停止轮询 '+failure);
+        check(writes.filter(write=>write.p.endsWith('/ai-rename')).length===(['preflight','session'].includes(failure)?0:1),'失败后不重复提交模型任务 '+failure);
+        await context.close();continue;
+      }
       await page.getByRole('button',{name:'重命名',exact:true}).click();
       const dialog=provider==='codex'?page.locator('#rename-dialog'):page.locator('dialog[open]');await dialog.locator('input').fill('手工设置的标题');
       await dialog.locator('button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('dialog[open]'));

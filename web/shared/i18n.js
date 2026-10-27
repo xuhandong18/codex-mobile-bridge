@@ -3,6 +3,8 @@
 const BridgeI18n=(()=>{
 const en={
 "AI重命名":"AI rename",
+"正在检查 AI重命名是否可用…":"Checking AI rename availability…",
+"当前网关尚未提供 AI重命名，请更新或重启网关后重试。":"This gateway does not provide AI rename yet. Update or restart the gateway, then try again.",
 "根据会话内容生成精炼标题并自动保存，会使用此聊天模型接入的额度。":"Generate and save a concise title from this conversation using its model allowance.",
 "正在生成聊天标题…":"Generating a chat title…",
 "标题生成已排队…":"Title generation is queued…",

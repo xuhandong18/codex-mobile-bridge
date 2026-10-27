@@ -95,19 +95,34 @@ class ChatAIRename {
     heading.id='ai-rename-heading';dialog.setAttribute('aria-labelledby',heading.id);
     const name=document.createElement('p');name.textContent=target.title;
     const help=document.createElement('p');help.className='muted';help.textContent=actionText('根据会话内容生成精炼标题并自动保存，会使用此聊天模型接入的额度。');
-    const status=document.createElement('p');status.setAttribute('role','status');status.textContent=actionText('正在生成聊天标题…');
+    const status=document.createElement('p');status.setAttribute('role','status');status.textContent=actionText('正在检查 AI重命名是否可用…');
     const close=document.createElement('button');close.type='button';close.className='primary';close.textContent=actionText('关闭');close.onclick=()=>dialog.close();
     dialog.append(heading,name,help,status,close);document.body.append(dialog);
     const task=this.task={...target,dialog,status,name,requestId:this.newId()};this.dialog=dialog;
     dialog.addEventListener('close',()=>{dialog.remove();if(this.task===task){this.task=null;clearTimeout(this.timer);}},{once:true});
     dialog.showModal();
+    // New web assets can be served by a gateway process that still has old routes.
+    // Check the read endpoint before submitting any model work.
+    try{
+      const current=await this.request(task.readUrl);
+      if(this.task!==task||!dialog.open)return;
+      if(['queued','running'].includes(current.status)&&current.requestId){task.requestId=current.requestId;this.render(task,current);return;}
+    }catch(error){if(this.task===task)this.failure(task,error);return;}
+    status.textContent=actionText('正在生成聊天标题…');
     try{const result=await this.request(task.writeUrl,{...task.body,id:task.requestId});if(result.requestId)task.requestId=result.requestId;this.render(task,result);}
-    catch(error){if(this.task!==task)return;task.error=actionText(error.message);status.textContent=task.error;this.schedule(task);}
+    catch(error){if(this.task!==task)return;if(!this.failure(task,error))this.schedule(task);}
+  }
+  failure(task,error){
+    const missingRoute=error.status===404&&['页面不存在','接口不存在','Not Found','请求失败'].includes(error.message);
+    const unsupported=missingRoute||error.status===405||error.status===501;
+    task.error=actionText(unsupported?'当前网关尚未提供 AI重命名，请更新或重启网关后重试。':error.message);
+    task.status.textContent=task.error;
+    return unsupported||error.status>=400&&error.status<500;
   }
   schedule(task){clearTimeout(this.timer);if(this.task===task)this.timer=setTimeout(()=>this.read(task),1500);}
   async read(task){
     try{this.render(task,await this.request(task.readUrl+(task.readUrl.includes('?')?'&':'?')+'requestId='+encodeURIComponent(task.requestId)));}
-    catch{if(this.task===task){task.status.textContent=actionText('暂时无法确认生成状态，恢复连接后会继续查询。');this.schedule(task);}}
+    catch(error){if(this.task===task&&!this.failure(task,error)){task.status.textContent=actionText('暂时无法确认生成状态，恢复连接后会继续查询。');this.schedule(task);}}
   }
   render(task,result){
     if(this.task!==task||!task.dialog.open)return;
