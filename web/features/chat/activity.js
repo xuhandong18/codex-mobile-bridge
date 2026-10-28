@@ -5,7 +5,14 @@ class SessionActivity {
   save(){try{this.storage.setItem(this.key,JSON.stringify(this.rows));}catch{}}
   update(rows,visible=null,{sync=true,save=true}={}){
     for(const row of rows){
-      const key=this.id(row),previous=this.rows[key],parentStatus=row.parentStatus??row.status;
+      const key=this.id(row),parentStatus=row.parentStatus??row.status;
+      let previous=this.rows[key];
+      if(Array.isArray(row.readCompletions)&&row.readCompletions.length){
+        previous={...previous};
+        for(const token of row.readCompletions)if(!previous.readCompletions?.includes(token))this.rememberRead(previous,token);
+        if(previous.readCompletions?.includes(previous.pending))previous.pending=null;
+        this.rows[key]=previous;
+      }
       const running=parentStatus==='active'||row.runningSubagents>0;
       const terminal=parentStatus!=='active'&&['completed','failed','interrupted'].includes(row.turnStatus);
       if(!(row.activityConnected??row.connected)||row.status==='unknown'){
@@ -35,7 +42,7 @@ class SessionActivity {
     const key=this.id(parent),child={...row,turnId:row.turnId??turn?.id,turnStatus:row.turnStatus??turn?.status,host:parent.host,id:parent.id+'/side/'+row.id},childKey=this.id(child);
     this.rows[key]??={};
     this.rows[key].sideKeys=[...new Set([...(this.rows[key].sideKeys||[]),childKey])];
-    this.update([child],visible?childKey:null,{sync:false,save});
+    this.update([child],visible?childKey:null,{sync:visible,save});
     return childKey;
   }
   rememberRead(row,token){if(token)row.readCompletions=[...(row.readCompletions||[]).filter(value=>value!==token),token].slice(-64);}

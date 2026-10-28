@@ -35,6 +35,7 @@ from bridge.clients.codex.ipc import IPCError
 from bridge.features.sessions.goal import GoalError
 from bridge.features.sessions.answer_drafts import AnswerDrafts
 from bridge.features.sessions.chat_display import ChatDisplaySettings
+from bridge.features.sessions.read_state import SharedReadState, validate_read_state
 from bridge.features.sessions.sidebar_preferences import SidebarPreferences
 from bridge.features.sessions.activity import query_activity
 from bridge.clients.codex.catalog import CatalogError
@@ -70,6 +71,7 @@ class GatewayServer(ThreadingHTTPServer):
             self.bridge = bridge
             self.answer_drafts = AnswerDrafts(data_dir)
             self.chat_display = ChatDisplaySettings(data_dir)
+            self.chat_read_state = SharedReadState(data_dir)
             self.sidebar_preferences = SidebarPreferences(data_dir)
             self.notifications = None
             self.harness = Harness(data_dir) if data_dir else None
@@ -90,11 +92,13 @@ class GatewayServer(ThreadingHTTPServer):
             for name in ('bridge', 'answer_drafts', 'sidebar_preferences', 'harness', 'desktop_sessions', 'desktop_uploads', 'notifications', 'instance_id', 'auth', 'origins', 'pairing', 'hosts', 'secure_hosts', 'web_dir', 'slots', 'ui_language_path'):
                 setattr(self, name, getattr(shared, name))
             self.chat_display = shared.chat_display
+            self.chat_read_state = shared.chat_read_state
         try:
             super().__init__(address, Handler)
         except OSError:
             if shared is None:
                 self.answer_drafts.close()
+                self.chat_read_state.close()
                 self.sidebar_preferences.close()
                 if self.harness:
                     self.harness.close()
@@ -114,6 +118,7 @@ class GatewayServer(ThreadingHTTPServer):
             self.mobile_updates.close()
         if self.answer_drafts_owner:
             self.answer_drafts.close()
+            self.chat_read_state.close()
             self.sidebar_preferences.close()
         super().server_close()
 
@@ -738,7 +743,9 @@ class Handler(BaseHTTPRequestHandler):
                 if any(not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(sid, str) for sid in ids)
                        for ids in groups.values()):
                     raise ValueError('会话状态请求无效')
-                return self.output(200, query_activity(self.server.bridge, groups))
+                result = query_activity(self.server.bridge, groups)
+                result['sessions'] = self.server.chat_read_state.activity(result['sessions'])
+                return self.output(200, result)
             if write and path == '/api/sessions':
                 body = self.read_json()
                 fields = (body.get('project'), body.get('title'), body.get('id'))
@@ -1007,11 +1014,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(404, {"error": "接口不存在"})
             body = self.read_json()
             if action == 'read-state':
-                if side is not None or set(body) != {'id', 'turnId', 'turnStatus'}:
-                    raise ValueError('聊天已读参数无效')
-                if self.server.desktop_sessions is None:
-                    return self.output(503, {'error': '桌面已读同步暂不可用'})
-                result = self.server.desktop_sessions.call('codex', 'read-state', thread_id, {**body, 'host': bridge.host})
+                validate_read_state(body)
+                bridge.store.get(thread_id)
+                read_id = thread_id
+                if side is not None:
+                    child = next((row for row in bridge.side_chats.activity(thread_id) if row['id'] == side), None)
+                    if child is None:
+                        raise ValueError('此侧边聊天已关闭或已失效，请刷新标签')
+                    if child.get('turnId') != body['turnId'] or child.get('turnStatus') != body['turnStatus']:
+                        return self.output(200, {'status': 'stale'})
+                    read_id += '/side/' + side
+                if side is not None:
+                    result = {'status': 'accepted'}
+                elif self.server.desktop_sessions is None:
+                    result = {'status': 'unsupported', 'message': '跨设备已读已保存，桌面已读同步暂不可用'}
+                else:
+                    result = self.server.desktop_sessions.call('codex', 'read-state', thread_id, {**body, 'host': bridge.host})
+                receipts = self.server.chat_read_state.remember(bridge.host, read_id, body)
+                result = {**result, 'readCompletions': receipts}
             elif action == "message-action":
                 result = bridge.message_action(thread_id, body)
             elif action == "send":

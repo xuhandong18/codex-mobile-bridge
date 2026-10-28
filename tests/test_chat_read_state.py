@@ -11,6 +11,7 @@ from bridge.clients.codex.activity import ActivityTools
 from bridge.clients.codex.desktop_tools import ToolError
 from bridge.clients.manager import DesktopSessions, READS
 from bridge.features.sessions.timeline import Timeline
+from bridge.features.sessions.read_state import SharedReadState
 from relay.protocol import validate
 import test_bridge
 
@@ -110,7 +111,10 @@ class ReadReceiptTests(unittest.TestCase):
 
 class ReadStateHttpTests(unittest.TestCase):
     setUpClass = classmethod(test_bridge.HttpTests.setUpClass.__func__)
-    setUp = test_bridge.HttpTests.setUp
+    def setUp(self):
+        test_bridge.HttpTests.setUp(self)
+        self.server.bridge.host = 'local'
+        self.server.bridge.store = Mock()
     tearDown = test_bridge.HttpTests.tearDown
     request = test_bridge.HttpTests.request
     login = test_bridge.HttpTests.login
@@ -135,3 +139,75 @@ class ReadStateHttpTests(unittest.TestCase):
                 with self.assertRaises(PermissionError): validate('GET', path)
         self.assertEqual(self.request('POST', f'/api/sessions/{SID}/read-state?host=unknown', body(), headers)[0], 404)
         self.assertEqual(self.request('POST', f'/api/sessions/{SID}/read-state', body(read=True), headers)[0], 400)
+
+    def test_tablet_read_is_returned_to_phone_even_when_native_sync_is_unsupported(self):
+        tablet, phone = self.login(), self.login()
+        manager = self.server.desktop_sessions = Mock()
+        manager.call.return_value = {'status': 'unsupported'}
+        self.server.bridge.activity = Mock(return_value=[{'id': SID, 'host': 'local', 'connected': True,
+            'status': 'idle', 'turnId': 'last', 'turnStatus': 'completed'}])
+        path = f'/api/sessions/{SID}/read-state'
+        self.assertEqual(self.request('POST', path, body(), tablet)[0], 200)
+        result = self.request('POST', '/api/activity', {'hosts': {'local': [SID]}}, phone)
+        self.assertEqual(result[0], 200)
+        self.assertEqual(result[2]['sessions'][0]['readCompletions'], ['last:completed'])
+        self.server.bridge.store.get.assert_called_once_with(SID)
+        self.assertNotIn('readCompletions', self.server.bridge.activity.return_value[0])
+
+    def test_side_read_has_its_own_receipt_and_never_calls_native_main_read(self):
+        headers = self.login()
+        manager = self.server.desktop_sessions = Mock()
+        child = {'id': 'side-one', 'turnId': 'last', 'turnStatus': 'completed'}
+        self.server.bridge.side_chats = SimpleNamespace(activity=Mock(return_value=[child]))
+        path = f'/api/sessions/{SID}/read-state?side=side-one'
+        self.assertEqual(self.request('POST', path, body(), headers)[2]['status'], 'accepted')
+        manager.call.assert_not_called()
+        self.assertEqual(self.server.chat_read_state.read('local', SID), [])
+        self.assertEqual(self.server.chat_read_state.read('local', SID+'/side/side-one'), ['last:completed'])
+        rows = self.server.chat_read_state.activity([{'id': SID, 'host': 'local', 'sideChats': [child]}])
+        self.assertEqual(rows[0]['sideChats'][0]['readCompletions'], ['last:completed'])
+        self.assertEqual(self.request('POST', path, body(turnId='other'), headers)[2]['status'], 'stale')
+        self.assertEqual(self.request('POST', path.replace('side-one', 'missing'), body(), headers)[0], 400)
+
+    def test_invalid_or_invisible_chat_cannot_create_shared_receipts(self):
+        headers = self.login()
+        path = f'/api/sessions/{SID}/read-state'
+        for request in (body(turnStatus='inProgress'), body(turnId=''), body(extra=True)):
+            self.assertEqual(self.request('POST', path, request, headers)[0], 400)
+        self.server.bridge.store.get.side_effect = KeyError(SID)
+        self.assertEqual(self.request('POST', path, body(), headers)[0], 404)
+        self.assertEqual(self.server.chat_read_state.read('local', SID), [])
+
+    def test_rejected_operation_id_does_not_create_a_shared_receipt(self):
+        headers = self.login()
+        manager = self.server.desktop_sessions = Mock()
+        manager.call.side_effect = ValueError('相同请求 ID 不能用于不同操作')
+        self.assertEqual(self.request('POST', f'/api/sessions/{SID}/read-state', body(), headers)[0], 400)
+        self.assertEqual(self.server.chat_read_state.read('local', SID), [])
+
+
+class SharedReadTests(unittest.TestCase):
+    def test_receipts_survive_restart_and_are_isolated_by_host_chat_and_side(self):
+        with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as directory:
+            store = SharedReadState(directory)
+            store.remember('local', SID, body())
+            store.close()
+            store = SharedReadState(directory)
+            try:
+                self.assertEqual(store.read('local', SID), ['last:completed'])
+                for host, chat in [('remote', SID), ('local', 'other'), ('local', SID+'/side/one')]:
+                    self.assertEqual(store.read(host, chat), [])
+            finally:
+                store.close()
+
+    def test_simultaneous_devices_merge_and_keep_only_64_distinct_turns(self):
+        store = SharedReadState(None)
+        self.addCleanup(store.close)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda i: store.remember('local', SID, body(turnId=str(i))), range(70)))
+        receipts = store.read('local', SID)
+        self.assertEqual(len(receipts), 64)
+        token = receipts[-1].removesuffix(':completed')
+        store.remember('local', SID, body(turnId=token))
+        self.assertEqual(store.read('local', SID), receipts)

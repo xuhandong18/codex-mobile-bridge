@@ -4,10 +4,10 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('playwright'),web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
 const parent='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222',project='local|fixture',firstSlot='33333333-3333-4333-8333-333333333333';
 const access={source:'cli',canSend:true,canApprove:true,canUseSideChat:true};
-let sides,mainStatus,mainTurn,recency,sequence;const errors=[],writes=[];
+let sides,mainStatus,mainTurn,recency,sequence;const errors=[],writes=[],receipts=new Map();
 const screenshots=process.argv.includes('--screenshots')?path.resolve(__dirname,'../.tmp/side-chat-activity'):null;
-const reset=()=>{sides=['one','two'].map((id,index)=>({id:'side-'+id,slot:index?'44444444-4444-4444-8444-444444444444':firstSlot,connected:true,status:'active',turns:[{id,status:'inProgress',messages:[]}],requests:[],submissions:[]}));mainStatus='idle';mainTurn='main';recency=1;sequence=1;};
-const summary=()=>({id:parent,host:'local',connected:true,activityConnected:true,parentStatus:mainStatus,status:mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',sideChats:sides.map(({id,connected,status,turns})=>({id,connected,status,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status})),recency});
+const reset=()=>{receipts.clear();sides=['one','two'].map((id,index)=>({id:'side-'+id,slot:index?'44444444-4444-4444-8444-444444444444':firstSlot,connected:true,status:'active',turns:[{id,status:'inProgress',messages:[]}],requests:[],submissions:[]}));mainStatus='idle';mainTurn='main';recency=1;sequence=1;};
+const summary=()=>({id:parent,host:'local',connected:true,activityConnected:true,parentStatus:mainStatus,status:mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',readCompletions:receipts.get('main')||[],sideChats:sides.map(({id,connected,status,turns})=>({id,connected,status,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status,readCompletions:receipts.get(id)||[]})),recency});
 const rows=()=>[{id:other,host:'local',title:'较新的主聊天',recency:100},{id:parent,host:'local',title:'侧边状态测试',recency}].map(row=>({...row,cwd:'/fixture',projectKey:project,projectName:'测试项目',access}));
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -20,6 +20,10 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/accounts')return json({accounts:[],current:{kind:'api'}});
     if(p==='/api/sessions')return json({sessions:rows(),complete:true,sidebar:{sections:[{id:'daily',name:'测试分区',hostSectionIds:{local:'native-daily'},itemKeys:['codex:project:fixture']}],projects:[{key:project,host:'local',name:'测试项目',cwd:'/fixture'}]}});
     if(p==='/api/activity')return json({sessions:(body.hosts.local||[]).map(id=>id===parent?summary():{id,host:'local',connected:true,status:'idle',recency:100})});
+    if(p.endsWith('/read-state')){
+      const key=url.searchParams.get('side')||'main',tokens=[...new Set([...(receipts.get(key)||[]),body.turnId+':'+body.turnStatus])];
+      receipts.set(key,tokens);return json({status:'accepted',readCompletions:tokens});
+    }
     if(p.endsWith('/side-chat')){
       const side=sides.find(s=>s.slot===(url.searchParams.get('slot')||''));
       if(body?.action==='send'){
@@ -86,6 +90,38 @@ const server=http.createServer(async(req,res)=>{
       check(writes.filter(w=>w.body.action==='send').length===1,'仅用户的一次侧边发送产生写入');
       await context.close();
     }
+    reset();mainStatus='active';sides=[];
+    const devices=[];
+    for(const width of [820,390]){
+      const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);
+      page.on('pageerror',e=>errors.push(e.message));
+      page.on('console',message=>{if(['error','warning'].includes(message.type()))errors.push(message.text());});
+      await context.addInitScript(()=>{localStorage.setItem('list-mode','recent');localStorage.setItem('navigation:sidebar','open');});
+      await page.goto('http://127.0.0.1:'+server.address().port+'/');
+      devices.push({context,page});
+      await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.running').waitFor();
+    }
+    const [tablet,phone]=devices.map(device=>device.page);
+    const refresh=page=>page.evaluate(async()=>{sidebarNavigation.set(true);await refreshActivity();});
+    const dot=(page,kind)=>page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator'+(kind?'.'+kind:''));
+    mainStatus='idle';sequence++;
+    for(const page of [tablet,phone]){await refresh(page);await dot(page,'completed').waitFor();}
+    if(screenshots)await phone.screenshot({path:path.join(screenshots,'cross-device-before.png')});
+    const acknowledged=tablet.waitForResponse(response=>response.url().includes('/read-state')&&response.request().method()==='POST');
+    await tablet.locator('#sessions .session[data-id="'+parent+'"]').click();
+    await tablet.waitForFunction(()=>state?.turnStatus==='completed');
+    await tablet.waitForFunction(()=>sessionActivity.readTokens.size>0);
+    assert.equal((await acknowledged).status(),200);
+    await refresh(phone);await dot(phone).waitFor({state:'detached'});
+    checks.push('平板实际打开主聊天后，手机独立存储中的蓝点消失');
+    if(screenshots)await phone.screenshot({path:path.join(screenshots,'cross-device-after.png')});
+    await phone.reload();await phone.waitForFunction(()=>listReadFinished);await refresh(phone);assert.equal(await dot(phone).count(),0);
+    checks.push('手机重新打开页面后已读结果仍保留');
+    await tablet.context().close();
+    mainStatus='active';mainTurn='next-device-turn';sequence++;await refresh(phone);
+    mainStatus='idle';sequence++;await refresh(phone);await dot(phone,'completed').waitFor();
+    checks.push('平板已读不会吞掉下一轮完成提醒');
+    await phone.context().close();
     assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:checks.length,checks},null,2));
   }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

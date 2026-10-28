@@ -30,7 +30,8 @@ const dismissedHostFaults=new Map();
 const submittedRequestIds=new Set();
 const sessionActivity=new SessionActivity({onRead:async(key,row)=>{
   const split=key.indexOf('|'),host=key.slice(0,split),id=key.slice(split+1);
-  try{const result=await api(sessionUrl(id,'read-state',host),{id:uuid(),turnId:row.turnId,turnStatus:row.turnStatus});if(result.status==='unknown'||result.status==='unsupported')toast(result.message||'桌面已读状态尚未同步');}catch(error){toast(error.message);}
+  const [parent,side]=id.split('/side/'),url=sessionUrl(parent,'read-state',host)+(side?'&side='+encodeURIComponent(side):'');
+  try{const result=await api(url,{id:uuid(),turnId:row.turnId,turnStatus:row.turnStatus});if(result.status==='unknown'||result.status==='unsupported')toast(result.message||'桌面已读状态尚未同步');}catch(error){toast(error.message);}
 }});
 const recentInteractions=new Map();
 function bumpRecency(id,host,at=Date.now()){

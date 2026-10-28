@@ -3,6 +3,43 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {SessionActivity}=require('../web/features/chat/activity.js');
 const source=fs.readFileSync(require.resolve('../web/shell/app.js'),'utf8');
 
+test('平板读完后，手机从共享已读记录清除相同轮次的蓝点，刷新不复活',()=>{
+ const storage=()=>{const values=new Map();return {getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};};
+ const receipts=[],saved=storage(),tablet=new SessionActivity({storage:storage(),onRead:(key,row)=>receipts.push(row.turnId+':'+row.turnStatus)});
+ let phone=new SessionActivity({storage:saved});
+ const row={id:'chat',host:'local',connected:true,status:'active',turnId:'one',turnStatus:'inProgress'};
+ for(const device of [tablet,phone])device.update([row]);
+ const done={...row,status:'idle',turnStatus:'completed'};
+ for(const device of [tablet,phone])device.update([done]);
+ assert.equal(phone.indicator('local|chat')?.kind,'completed');
+ tablet.read('local|chat',{explicit:true});
+ assert.deepEqual(receipts,['one:completed']);
+ phone.update([{...done,readCompletions:receipts}]);
+ assert.equal(phone.indicator('local|chat'),null,'平板已读应清除手机上的蓝点');
+ phone=new SessionActivity({storage:saved});phone.update([done]);
+ assert.equal(phone.indicator('local|chat'),null,'刷新或旧响应不能恢复已读蓝点');
+ phone.update([{...row,turnId:'two'}]);phone.update([{...done,turnId:'two',readCompletions:receipts}]);
+ assert.equal(phone.indicator('local|chat')?.kind,'completed','下一轮未读结果仍应提醒');
+});
+
+test('侧边已读上传独立轮次，并清除另一设备的侧边蓝点而保留主聊天未读',()=>{
+ const storage=()=>({getItem:()=>null,setItem(){}}),receipts=[];
+ const tablet=new SessionActivity({storage:storage(),onRead:(key,row)=>receipts.push({key,token:row.turnId+':'+row.turnStatus})});
+ const phone=new SessionActivity({storage:storage()});
+ const parent={id:'chat',host:'local',connected:true,status:'active',turnId:'main',turnStatus:'inProgress'};
+ const child={id:'child',connected:true,status:'active',turnId:'side',turnStatus:'inProgress'};
+ for(const device of [tablet,phone])device.update([{...parent,sideChats:[child]}]);
+ const done={...parent,status:'idle',turnStatus:'completed'},sideDone={...child,status:'idle',turnStatus:'completed'};
+ for(const device of [tablet,phone])device.update([{...done,sideChats:[sideDone]}]);
+ tablet.updateSideChat(parent,{...sideDone,turns:[{id:'side',status:'completed'}]},true);
+ assert.deepEqual(receipts,[{key:'local|chat/side/child',token:'side:completed'}]);
+ phone.update([{...done,sideChats:[{...sideDone,readCompletions:['side:completed']}]}]);
+ assert.equal(phone.ownIndicator('local|chat/side/child'),null);
+ assert.equal(phone.ownIndicator('local|chat')?.kind,'completed');
+ phone.update([{id:'chat',host:'local',connected:false,status:'unknown',readCompletions:['main:completed']}]);
+ assert.equal(phone.indicator('local|chat')?.kind,'unknown','断线时也应吸收已确认的跨设备已读');
+});
+
 test('侧边已读只由当前前台面板触发，并将服务端交互时间用于父聊天排序',()=>{
  const updates=[],bumps=[],mainReads=[],app={hidden:false,classList:{contains:()=>true}},context=vm.createContext({workbench:{},document:{hidden:false},clientNavigation:{provider:'codex'},currentId:'parent',currentHost:'local',
   $:()=>app,sessionActivity:{updateSideChat:(...args)=>updates.push(args)},bumpRecency:(...args)=>bumps.push(args),renderActivity(){},readVisibleChat:()=>mainReads.push(true)});
