@@ -21,11 +21,20 @@ function fixture(provider='codex'){
     {role:'activity',kind:'fileChange',title:'changes',text:'diff'},
     {role:'activity',kind:'reasoning',title:'reasoning',text:'summary'},
     {role:'assistant',phase:'final_answer',text:'answer'},{role:'error',text:'failure'}];
-  Object.assign(panel,{session:{provider},tab:{body:new Element()},workbench:{node:(...args)=>new Element(...args),setSideChatTitle:()=>false},
+  Object.assign(panel,{session:{provider},tab:{body:new Element()},workbench:{node:(...args)=>new Element(...args),setSideChatTitle:()=>false,isVisible:()=>false},
     contextUsage:{update(){}},attachments:{key:'child',ids:()=>[],clear(){},reset(){}},input:{value:''},fileQuotes:{rows:[],clear(){}},references:{close(){}},modelButton:new Element(),permissionsButton:new Element(),workMode:{},status:new Element(),messages:new Element(),
     updateCaption(){},renderApprovals(rows){this.requests=rows;},renderQueue(){},controls(){}});
   return {panel,Panel,context,document,messages};
 }
+
+test('侧边面板渲染后汇报自身状态与可见性，隐藏读取不会被当作已读',()=>{
+  const {panel}=fixture(),updates=[];let visible=false;
+  panel.workbench.isVisible=()=>visible;
+  panel.workbench.onSideChatActivity=(...args)=>updates.push(args);
+  const state={id:'child',connected:true,status:'idle',turnId:'done',turnStatus:'completed',turns:[],requests:[]};
+  panel.apply(state);assert.equal(updates.at(-1)[1],state);assert.equal(updates.at(-1)[2],false);
+  visible=true;panel.apply(state);assert.equal(updates.at(-1)[2],true);
+});
 
 test('侧边聊天从服务端消失后保留已有消息和身份，明确提示只读失效',()=>{
   const {panel,messages}=fixture();

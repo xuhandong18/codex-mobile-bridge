@@ -166,5 +166,5 @@ test('asynchronous historical baseline is not a new completion, observed running
  a.update([{id:'a',host:'claude',connected:true,status:'idle'}]);
  a.update([status('a','claude','idle','old')]);assert.equal(a.indicator('claude|a'),null);
  a.update([status('a','claude','active','old')]);a.update([status('a','claude','idle','new')]);assert.equal(a.indicator('claude|a').kind,'completed');
- a.update([{id:'a',host:'claude',connected:false,status:'idle'}]);assert.equal(a.indicator('claude|a').kind,'unknown');
+ a.update([{id:'a',host:'claude',connected:false,status:'idle'}]);assert.equal(a.indicator('claude|a').kind,'completed','已确认的未读完成不会因断线消失');
 });

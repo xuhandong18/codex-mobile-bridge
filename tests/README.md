@@ -68,6 +68,8 @@ npm run test:updater
 
 导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
+主聊天和侧边聊天的合并提示运行 `node --test tests/side-chat-activity.test.cjs tests/chat-read-state.test.cjs tests/chat-display-panels.test.cjs` 与 `python -B scripts/test-backend.py --source-only -p test_side_chat_activity.py`。真实页面回归为 `node scripts/test-side-chat-activity-browser.cjs`，在 390、820、1280 像素下分别检查最近交互和 Codex 分区列表，覆盖主聊天结束而侧边仍运行、任一完成的蓝点优先、分别已读后恢复绿点、真实侧边详情轮次结构的已读与摘要轮询、切回主标签即时已读、侧边发送更新项目排序及刷新保留。Node 回归另检查断线与锁占用不盖住蓝点、刷新持久和同轮旧摘要不复活未读；后端覆盖分页前纳入旧父聊天、关闭后保留排序、未知发送不重复计时和锁占用不阻塞活动查询。可加 `--screenshots` 将手机尺寸的蓝绿点截图写入 `.tmp/side-chat-activity/`；仅使用隔离合成数据，不操作真实客户端或模型。
+
 灰点首次显示时主动预约读取；`POST /api/activity` 在同一个请求内等待当前桌面状态，请求内的主机和聊天共享五秒截止时间。并发的相同只读查询合并等待；Windows 原生补读重新查询，不用十五秒内的旧快照直接返回。页面按聊天排除在途查询，展开或滚动出现的新条目可以立即查询，五秒更新可刷新已经返回的其他条目；每页面和每主机最多并行四个查询，满额后释放空位时查询最新可见范围。超时响应使用 `timedOut` 和条目的 `activityError: timeout` 标记，灰点说明为“读取运行状态超时”。前端不为未知状态安排短间隔补查，等待中的同一聊天不被普通五秒更新重复排队，网络请求另设十秒保护。
 
 超时回退不再等待会话锁：锁正被其他线程持有时，该条目返回未知状态，其他可读取条目仍返回当前状态。`test_activity_query.py` 用真实线程持有会话锁，验证整个查询能够及时返回。`test_session_maintenance.py` 验证维护异常按聊天隔离、整轮异常记录后仍继续下一轮，以及排队消息发送结果未知后不自动重发；日志只附带主机和聊天标识，不记录消息内容。

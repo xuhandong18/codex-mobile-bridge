@@ -12,6 +12,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -160,6 +161,8 @@ class SideChat:
         self.closed = False
         self.ready = False
         self.error = None
+        self.recency = 0
+        self.on_interaction = None
         self.title = ''
         self.title_revision = 0
         self.title_source = 'placeholder'
@@ -271,6 +274,27 @@ class SideChat:
                 self.error = '侧边聊天执行失败，请检查模型接入后重试'
                 self.state['threadRuntimeStatus']['type'] = 'idle'
 
+    def activity(self):
+        """Read only five scalar fields; never project history or wait for IO."""
+        result = {'id': self.id, 'connected': False, 'status': 'unknown', 'turnId': None, 'turnStatus': None}
+        if not self.lock.acquire(blocking=False):
+            return result
+        try:
+            connected = self.ready and not self.closed and not self.error
+            last = self.state['turns'][-1] if self.state['turns'] else {}
+            return {**result, 'connected': connected,
+                    'status': self.state['threadRuntimeStatus']['type'] if connected else 'unknown',
+                    'turnId': last.get('turnId'), 'turnStatus': last.get('status')}
+        finally:
+            self.lock.release()
+
+    def _record_interaction(self):
+        # Called with the child lock after a successful write, never for a read,
+        # queued intent or unknown receipt. Retries return before reaching here.
+        self.recency = max(self.recency, int(time.time() * 1000))
+        if self.on_interaction:
+            self.on_interaction(self.parent, self.recency)
+
     def view(self):
         with self.lock:
             result = normalize_state(self.state, self.ready and not self.closed and not self.error)
@@ -298,7 +322,7 @@ class SideChat:
                 if not request['supported'] or request['method'] in ('item/plan/requestImplementation', 'bridge/requestUserInputAsync'):
                     request['supported'] = False
                     request['params'] = {'message': '此请求暂不支持在侧边聊天处理，请停止本次回复。'}
-            return {**result, 'parentId': self.parent, 'error': self.error,
+            return {**result, 'parentId': self.parent, 'error': self.error, 'recency': self.recency,
                     'title': self.title, 'titleRevision': self.title_revision, 'titleSource': self.title_source,
                     'submissions': [{'id': k, 'status': v['status'], 'text': v['text'], 'mode': v.get('mode', 'send'), 'workMode': v.get('workMode', 'default'), 'attachments': v.get('attachments', []), 'error': v.get('error')} for k, v in self.submissions.items()]}
 
@@ -468,6 +492,7 @@ class SideChat:
             return {'id': submission, 'status': 'unknown'}
         with self.lock:
             row['status'] = 'accepted'
+            self._record_interaction()
             row['turnId'] = (response.get('turn') or {}).get('id') or row.get('turnId')
             if row['mode'] != 'steer':
                 self.state['latestCollaborationMode'] = params['collaborationMode']
@@ -562,6 +587,7 @@ class SideChat:
                 else:
                     raise ValueError('此请求暂不支持，请停止本次回复')
                 self.runtime.write({'id': request['id'], 'result': result})
+                self._record_interaction()
                 self.state['requests'].remove(request)
                 self.queue_event.set()
             return self.view()
@@ -597,9 +623,26 @@ class SideChats:
         self.factory = factory
         self.lock = threading.RLock()
         self.chats = {}
+        # Publish an immutable index so activity never takes the manager lock,
+        # which creation/closing may hold while waiting for a runtime.
+        self.activity_chats = ()
+        self.recency_lock = threading.Lock()
+        self.parent_recencies = {}
         self.creations = {}
         self.checked = False
         self._checked_executable = executable
+
+    def activity(self, parent):
+        return [chat.activity() for key, chat in self.activity_chats if key[0] == parent]
+
+    def recencies(self):
+        # Copy-on-write publication: readers never wait behind runtime actions.
+        # The existing 1000-creation limit also bounds retained parent entries.
+        return dict(self.parent_recencies)
+
+    def _remember_interaction(self, parent, at):
+        with self.recency_lock:
+            self.parent_recencies = {**self.parent_recencies, parent: max(at, self.parent_recencies.get(parent, 0))}
 
     def operate(self, parent, action, body, snapshot=None, settings=None, catalog_reader=None):
         slot = str(uuid.UUID(body['slot'])) if 'slot' in body else ''
@@ -639,6 +682,7 @@ class SideChats:
                 except OSError:
                     stamp = None  # Optional naming cannot prevent creating a chat.
                 chat = self.factory(executable, self.home, parent, snapshot['cwd'], settings)
+                chat.on_interaction = self._remember_interaction
                 chat.on_first_message = self.on_first_message
                 chat.title_access_stamp = stamp
                 if title:
@@ -646,6 +690,7 @@ class SideChats:
                 chat.file_directory = tempfile.TemporaryDirectory(prefix='side-files-', dir=self.directory)
                 chat.uploads = Uploads(chat.file_directory.name)
                 self.chats[key] = chat
+                self.activity_chats = tuple(self.chats.items())
                 self.creations[token] = (key, chat.id)
                 return chat.view()
             if not chat or chat.id != body.get('id'):
@@ -655,6 +700,7 @@ class SideChats:
             if action == 'close':
                 chat.close()
                 self.chats.pop(key)
+                self.activity_chats = tuple(self.chats.items())
                 return {'closed': True}
         if action == 'skills':
             return catalog_reader.get_kind('skills', chat.state['cwd'], query=body.get('query', ''), offset=body.get('offset', 0), limit=200, refresh=body.get('refresh') is True, ids=body.get('selected', []))
@@ -695,4 +741,5 @@ class SideChats:
             for chat in self.chats.values():
                 chat.close()
             self.chats.clear()
+            self.activity_chats = ()
             self.creations.clear()

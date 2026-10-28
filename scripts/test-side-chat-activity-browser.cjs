@@ -1,0 +1,91 @@
+'use strict';
+// Production page with isolated synthetic APIs; never connects a real client.
+const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
+const {chromium}=require('playwright'),web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
+const parent='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222',project='local|fixture',firstSlot='33333333-3333-4333-8333-333333333333';
+const access={source:'cli',canSend:true,canApprove:true,canUseSideChat:true};
+let sides,mainStatus,mainTurn,recency,sequence;const errors=[],writes=[];
+const screenshots=process.argv.includes('--screenshots')?path.resolve(__dirname,'../.tmp/side-chat-activity'):null;
+const reset=()=>{sides=['one','two'].map((id,index)=>({id:'side-'+id,slot:index?'44444444-4444-4444-8444-444444444444':firstSlot,connected:true,status:'active',turns:[{id,status:'inProgress',messages:[]}],requests:[],submissions:[]}));mainStatus='idle';mainTurn='main';recency=1;sequence=1;};
+const summary=()=>({id:parent,host:'local',connected:true,activityConnected:true,parentStatus:mainStatus,status:mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',sideChats:sides.map(({id,connected,status,turns})=>({id,connected,status,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status})),recency});
+const rows=()=>[{id:other,host:'local',title:'较新的主聊天',recency:100},{id:parent,host:'local',title:'侧边状态测试',recency}].map(row=>({...row,cwd:'/fixture',projectKey:project,projectName:'测试项目',access}));
+const server=http.createServer(async(req,res)=>{
+  const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
+  if(p.startsWith('/api/')){
+    let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):null;
+    const json=value=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));};
+    if(body&&!['/api/activity','/api/sidebar-preferences'].includes(p))writes.push({p,body});
+    if(p==='/api/auth')return json({authenticated:true,csrf:'fixture',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'}});
+    if(p==='/api/clients')return json({clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]});
+    if(p==='/api/accounts')return json({accounts:[],current:{kind:'api'}});
+    if(p==='/api/sessions')return json({sessions:rows(),complete:true,sidebar:{sections:[{id:'daily',name:'测试分区',hostSectionIds:{local:'native-daily'},itemKeys:['codex:project:fixture']}],projects:[{key:project,host:'local',name:'测试项目',cwd:'/fixture'}]}});
+    if(p==='/api/activity')return json({sessions:(body.hosts.local||[]).map(id=>id===parent?summary():{id,host:'local',connected:true,status:'idle',recency:100})});
+    if(p.endsWith('/side-chat')){
+      const side=sides.find(s=>s.slot===(url.searchParams.get('slot')||''));
+      if(body?.action==='send'){
+        assert.equal(body.id,side.id);recency=200;sequence++;
+        Object.assign(side,{status:'active',recency,turns:[{id:'next',status:'inProgress',messages:[{role:'user',text:body.text}]}]});
+        return json({status:'accepted'});
+      }
+      return json({...side||{id:null,connected:false,turns:[]},slots:sides.map(s=>({id:s.id,slot:s.slot}))});
+    }
+    if(p.endsWith('/timeline')||p.endsWith('/updates')){
+      if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,50));
+      return json({epoch:'fixture',sequence,rows:[],files:[],hasMore:false,meta:{...rows()[1],connected:true,status:mainStatus,turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',requests:[],turns:[],queue:[]}});
+    }
+    return json({});
+  }
+  const parts=assets[p]||((p.startsWith('/vendor/')||/^\/client-icons\/(codex|claude|deepseek)\.png$/.test(p))&&!p.includes('..')?p.slice(1):null);
+  if(!parts){res.writeHead(404);return res.end();}
+  res.setHeader('Content-Type',p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':p==='/'?'text/html; charset=utf-8':'application/octet-stream');
+  res.end(Buffer.concat([].concat(parts).map(file=>fs.readFileSync(path.join(web,file)))));
+});
+(async()=>{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;const checks=[];
+  try{
+    if(screenshots)fs.mkdirSync(screenshots,{recursive:true});
+    browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
+    for(const width of [390,820,1280])for(const mode of ['recent','codex']){
+      reset();writes.length=0;
+      const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);
+      page.on('pageerror',e=>errors.push(e.message));
+      page.on('console',message=>{if(['error','warning'].includes(message.type()))errors.push(message.text());});
+      await context.addInitScript(mode=>{localStorage.setItem('list-mode',mode);localStorage.setItem('navigation:sidebar','open');},mode);
+      await page.goto('http://127.0.0.1:'+server.address().port+'/');
+      const indicator=kind=>page.waitForFunction(({parent,kind})=>sessionActivity.indicator('local|'+parent)?.kind===kind,{parent,kind});
+      const refresh=()=>page.evaluate(async()=>{sidebarNavigation.set(true);await refreshActivity();});
+      const label=mode+' '+width,check=(ok,text)=>{assert.ok(ok,label+': '+text);checks.push(label+': '+text);};
+      await indicator('running');
+      check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.running').count()===1,'主聊天已结束而侧边仍工作显示绿点');
+      if(screenshots&&mode==='codex'&&width===390)await page.screenshot({path:path.join(screenshots,'green-390.png')});
+      sides[0].status='idle';sides[0].turns[0].status='completed';await refresh();await indicator('completed');
+      check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.completed').count()===1,'任一侧边完成优先显示蓝点');
+      if(screenshots&&mode==='codex'&&width===390)await page.screenshot({path:path.join(screenshots,'blue-390.png')});
+      await page.locator('#sessions .session[data-id="'+parent+'"]').click();
+      await page.waitForFunction(()=>workbench.current?.files.length===2&&state?.connected);
+      await indicator('completed');check(true,'打开主聊天仍保留侧边未读');
+      await page.locator('#sidebar .sidebar-toggle').click();
+      await page.locator('#chat .wb-tab[data-tab="sidechat:'+firstSlot+'"] [role=tab]').click();
+      await indicator('running');check(true,'阅读完成的侧边后恢复绿点');
+      await refresh();await indicator('running');check(true,'真实详情轮次结构已读后再次查询不复活蓝点');
+      await page.locator('#sidebar .sidebar-toggle').click();
+      await page.locator('.wb-side-composer:visible textarea').fill('更新侧边交互时间');
+      await page.locator('.wb-side-composer:visible button[type=submit]').click();
+      await page.waitForFunction(()=>listRows.find(row=>row.id===currentId)?.recency===200);
+      await refresh();
+      check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'侧边发送更新最近交互和分区项目排序');
+      await page.evaluate(()=>loadList(true));
+      check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'列表刷新保留侧边交互排序');
+      mainStatus='active';mainTurn='next-main';sequence++;await refresh();mainStatus='idle';sequence++;await refresh();await indicator('completed');
+      check(true,'主聊天完成时侧边仍在工作也显示蓝点');
+      await page.locator('#sidebar .sidebar-toggle').click();
+      await page.locator('#chat .wb-tab[data-tab="chat"] [role=tab]').click();
+      await indicator('running');check(true,'读完主聊天后继续显示侧边运行绿点');
+      const before=recency;await page.reload();await page.waitForFunction(()=>listReadFinished&&state?.connected);
+      check(recency===before,'阅读与刷新不更新交互时间');
+      check(writes.filter(w=>w.body.action==='send').length===1,'仅用户的一次侧边发送产生写入');
+      await context.close();
+    }
+    assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:checks.length,checks},null,2));
+  }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
+})().catch(error=>{console.error(error);process.exitCode=1;});

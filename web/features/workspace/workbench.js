@@ -290,6 +290,7 @@ class Workbench {
     }
     if(restoreMain)this.chat.querySelector('.timeline').scrollTop=session.scroll;
     this.refreshThumbnails();
+    this.onViewChange?.();
   }
   back() {
     if (this.previewFullscreen) { this.closePreviewFullscreen(); return true; }

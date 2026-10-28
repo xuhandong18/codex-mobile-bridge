@@ -83,6 +83,14 @@ function clearListSnapshot(){
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
 async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);if(path==='/api/answer-drafts'&&new Blob([options.body]).size<60000)options.keepalive=true;}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
 const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat,loadReferences:loadComposerReferences});
+workbench.onSideChatActivity=(session,view,visible)=>{
+  if(session.provider&&session.provider!=='codex'||!view.id||view.expired)return;
+  const reading=visible&&!document.hidden&&!$('app').hidden&&clientNavigation.provider==='codex'&&currentId===session.id&&currentHost===session.host&&$('app').classList.contains('chat-open');
+  sessionActivity.updateSideChat(session,view,reading);
+  if(view.recency)bumpRecency(session.id,session.host,view.recency);
+  renderActivity();
+};
+workbench.onViewChange=()=>{if(workbench.current?.id===currentId&&workbench.current.host===currentHost)readVisibleChat();};
 workbench.canQuoteMain=()=>!!currentId&&!sending&&currentAccess().canSend;
 workbench.revealMainComposer=()=>{if($('composer-toggle').getAttribute('aria-expanded')==='false')$('composer-toggle').click();};
 const desktopSessions=new DesktopSessionsView({drafts:composerDrafts,root:$('app'),select:$('desktop-backend'),request:api,notify:toast,csrf:()=>csrf,onUnauthorized:authLost,onSelect:provider=>{
@@ -102,6 +110,11 @@ const attachments=new ChatAttachments({root:$('attachment-list'),button:$('attac
   const result=await response.json();if(!response.ok){if(response.status===401)authLost();throw Error(result.error||t('缩略图生成失败'));}return result;
 },upload:uploadAttachmentWithRetry});
 function visibleChat(){return clientNavigation.provider==='codex'&&currentId&&!workbench.isFileVisible&&!document.hidden&&$('app').classList.contains('chat-open')?chatKey():null;}
+function readVisibleChat(view=state){
+  if(!visibleChat()||!view||view.loadingHistory)return;
+  sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus}],chatKey());
+  sessionActivity.read(chatKey(),{sync:false});renderActivity();
+}
 function renderActivity(){let unknownAppeared=false;for(const button of $('sessions').querySelectorAll('.session')){
   const key=chatKey(button.dataset.id,button.dataset.host),previous=button.querySelector('.session-indicator'),indicator=sessionActivity.indicator(key);
   if(indicator?.kind==='unknown'&&!previous?.classList.contains('unknown')&&!activityInFlight.has(key))unknownAppeared=true;
@@ -926,10 +939,7 @@ function renderState(view){
   $('permissions-button').disabled=!view.connected||!access.canChangePermissions;
   $('fork-source').hidden=!view.forkedFrom;$('fork-source').textContent=view.forkedFrom?t('来源会话：')+view.forkedFrom.title:'';
   if($('model-dialog').open&&modelTarget===chatKey())fastModeControl.sync(view);
-  if(visibleChat()){
-    sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus}],chatKey());
-    sessionActivity.read(chatKey(),{sync:false});renderActivity();
-  }
+  readVisibleChat(view);
   $('execution-host').textContent=t('在 ')+(view.host==='local'?t('电脑'):view.hostLabel||t('SSH 主机'))+t(' 运行');
   $('chat-title').textContent=view.loadingHistory?t('正在读取聊天…'):view.title;
   const source=sourceLabel(view.access);

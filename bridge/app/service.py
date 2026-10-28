@@ -1056,6 +1056,17 @@ class Bridge:
                 available = bridge.store.available_sources() if include_sources else []
                 rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source,
                                          **({'ids': ids} if ids is not None else {}))
+                side_recencies = bridge.side_chats.recencies() if bridge.host == 'local' else {}
+                if ids is None and side_recencies:
+                    # An old parent can now rank before the database prefix.
+                    # Fetch only its metadata with exactly the original filters,
+                    # merge before pagination, and never load/activate a chat.
+                    seen = {row['id'] for row in rows}
+                    missing = [sid for sid in side_recencies if sid not in seen]
+                    for start in range(0, len(missing), 50):
+                        batch = missing[start:start + 50]
+                        rows.extend(bridge.store.list(ids=batch, limit=len(batch), archived=archived,
+                                                      query=query, source=source))
                 # Multiple saved projects can contain the same directory. Keep
                 # the confirmed creation choice ahead of cwd inference, without
                 # overriding subsequent explicit desktop membership changes.
@@ -1064,6 +1075,8 @@ class Bridge:
                                     and entry.get('kind', 'desktop') == 'desktop'
                                     and entry.get('host') == bridge.host}
                 rows = self.hosts.decorate(rows, bridge.host, label, created_project_keys=created_projects)
+                for row in rows:
+                    row['recency'] = max(row['recency'], side_recencies.get(row['id'], 0))
                 with bridge.lock:
                     bridge.listed.update(row['id'] for row in rows)
                     for row in rows:
@@ -1101,7 +1114,10 @@ class Bridge:
         with self.lock:
             sessions = [(sid, self.live.get(sid)) for sid in dict.fromkeys(identifiers) if sid in self.listed]
         rows = []
+        side_recencies = self.side_chats.recencies()
         for sid, session in sessions:
+            sides = self.side_chats.activity(sid)
+            side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
             connected = running = False
             # The query deadline has already expired. Its fallback must not
             # wait on the same session lock that may have stalled the query.
@@ -1112,10 +1128,11 @@ class Bridge:
                 finally:
                     session.condition.release()
             row = {'id': sid, 'host': self.host, 'connected': bool(connected),
-                   'activityConnected': bool(running), 'status': 'active' if running else 'unknown',
+                   'recency': max(self.activity_recency_snapshot.get(sid, 0), side_recencies.get(sid, 0)),
+                   'activityConnected': bool(running or side_running), 'status': 'active' if running or side_running else 'unknown',
                    'parentStatus': 'active' if running else 'unknown', 'runningSubagents': 0,
-                   'subagentsKnown': False, 'turnId': None, 'turnStatus': None}
-            if not running:
+                   'subagentsKnown': False, 'turnId': None, 'turnStatus': None, 'sideChats': sides}
+            if not running and not side_running:
                 row['activityError'] = 'timeout'
             rows.append(row)
         return rows
@@ -1172,8 +1189,10 @@ class Bridge:
         by_id = {session.id: session for session in sessions}
         native_status = self.desktop_activity.read([s.id for s in sessions if not s.connected and s.origin == 'desktop'],
                                                    timeout=max(0, deadline-time.monotonic()), live=lambda sid: by_id[sid].connected)
+        side_recencies = self.side_chats.recencies()
         with self.lock:
-            recencies = {session.id: self.activity_recency_snapshot.get(session.id, 0) for session in sessions}
+            recencies = {session.id: max(self.activity_recency_snapshot.get(session.id, 0), side_recencies.get(session.id, 0))
+                         for session in sessions}
 
         def parent_snapshot(session):
             with session.condition:
@@ -1193,20 +1212,25 @@ class Bridge:
                     session.condition.wait_for(lambda: session.connected or session.error or self.closed.is_set(),
                                                timeout=max(0, deadline-time.monotonic()))
             parent_status, last, connected, native = parent_snapshot(session)
+            sides = self.side_chats.activity(session.id)
+            side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
             # A confirmed active parent already determines the aggregate. Idle
             # parents still need confirmed descendants before showing completion.
-            if parent_status == 'active':
+            if parent_status == 'active' or side_running:
                 activity = descendants[session.id]
             else:
                 activity = self.subagent_activity.wait([session.id], deadline, confirmed=lambda:
                     session.connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active')[session.id]
                 parent_status, last, connected, native = parent_snapshot(session)
-            status = 'active' if activity['runningSubagents'] else parent_status
+                sides = self.side_chats.activity(session.id)
+                side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
+            status = 'active' if activity['runningSubagents'] or side_running else parent_status
             if status != 'active' and not activity['subagentsKnown']:
                 status = 'unknown'
             rows.append({'id': session.id, 'host': self.host, 'recency': recencies.get(session.id, 0), 'connected': connected,
                          'status': status, 'parentStatus': parent_status,
-                         'activityConnected': connected or native or bool(activity['runningSubagents']), **activity,
+                         'activityConnected': connected or native or bool(activity['runningSubagents']) or side_running, **activity,
+                         'sideChats': sides,
                          'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
             if status == 'unknown':
                 rows[-1]['activityError'] = 'timeout' if time.monotonic() >= deadline else 'unavailable'

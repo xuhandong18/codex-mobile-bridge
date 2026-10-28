@@ -308,6 +308,7 @@ class SideChatPanel {
       this.following=follow;this.lastMessageTop=this.messages.scrollTop;this.messageMap?.update();
     }
     this.renderApprovals(state.connected?state.requests||[]:[]);this.renderQueue(state.submissions||[]);this.controls();
+    this.workbench.onSideChatActivity?.(this.session,state,this.workbench.isVisible(this.session,this.tab));
   }
   renderQueue(rows){
     const stamp=JSON.stringify([this.state?.connected,rows]);if(stamp===this.queueStamp)return;this.queueStamp=stamp;this.queued.replaceChildren();

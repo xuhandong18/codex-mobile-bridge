@@ -6,7 +6,7 @@ const extract=(start,end)=>app.slice(app.indexOf(start),app.indexOf(end,app.inde
 const accessCode=extract('function sessionAccess(access){','function renderList(){');
 const sourceFilterCode=extract('function renderSourceFilter(){','function sessionAccess(access){');
 const listCode=extract('function renderList(){','async function loadList(');
-const stateCode=extract('function renderState(view){',"$('send-mode').onchange");
+const stateCode=extract('function readVisibleChat(','function renderActivity(')+extract('function renderState(view){',"$('send-mode').onchange");
 const reconnectCode=extract("$('reconnect').onclick=", "document.querySelectorAll('[data-close]')");
 const permissionCode=extract("$('permissions-button').onclick=",'const fileTransferSettings=');
 const newChatTypeCode=extract("$('new-chat-type').onchange=", "$('new-chat-project').onchange=");
