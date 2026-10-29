@@ -231,6 +231,7 @@ const en={
 "会话记录文件不存在，请刷新列表后重试":"The session record file does not exist. Refresh the list and try again.",
 "请确认永久删除此聊天及其子智能体记录":"Confirm permanent deletion of this chat and its subagent records",
 "Codex 分区":"Codex sections",
+"分区":"Sections",
 "置顶":"Pinned",
 "项目":"Projects",
 "未找到对应章节":"The linked section was not found.",

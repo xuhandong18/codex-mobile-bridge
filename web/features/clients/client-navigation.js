@@ -43,12 +43,47 @@ function bindListActions(toolbar,archive,actions=[]){
   label.hidden=true;label.style.display='none';toolbar.append(label);
   return button;
 }
-function bindChatListToolbar(toolbar){
+function bindChatListToolbar(toolbar,modeSelect){
   const selects=[...toolbar.querySelectorAll('select')];
+  let syncMode=()=>{};
+  if(modeSelect){
+    const tabs=document.createElement('div'),buttons=[],panel=document.getElementById('sessions');
+    tabs.className='chat-list-mode-tabs';tabs.setAttribute('role','tablist');
+    modeSelect.closest('label').classList.add('list-mode-select');
+    const choose=button=>{
+      if(button.disabled||modeSelect.value===button.dataset.value)return;
+      modeSelect.value=button.dataset.value;modeSelect.dispatchEvent(new Event('change',{bubbles:true}));
+    };
+    for(const option of modeSelect.options){
+      const button=document.createElement('button');button.type='button';button.setAttribute('role','tab');
+      button.id='list-mode-tab-'+option.value;button.dataset.value=option.value;
+      button.dataset.i18n=option.value==='codex'?'分区':option.value==='project'?'项目':'最近交互';
+      button.setAttribute('aria-controls',panel.id);button.onclick=()=>choose(button);buttons.push(button);tabs.append(button);
+    }
+    tabs.addEventListener('keydown',event=>{
+      if(event.altKey||event.ctrlKey||event.metaKey)return;
+      const available=buttons.filter(button=>!button.disabled),index=available.indexOf(event.target);
+      if(index<0)return;
+      const next=event.key==='Home'?0:event.key==='End'?available.length-1:event.key==='ArrowRight'?(index+1)%available.length:event.key==='ArrowLeft'?(index+available.length-1)%available.length:null;
+      if(next===null)return;
+      event.preventDefault();available[next].focus();choose(available[next]);
+    });
+    syncMode=()=>{
+      tabs.setAttribute('aria-label',BridgeI18n.t('聊天列表显示方式'));panel.setAttribute('role','tabpanel');
+      for(const button of buttons){
+        const selected=button.dataset.value===modeSelect.value;
+        button.textContent=BridgeI18n.t(button.dataset.i18n);button.disabled=[...modeSelect.options].find(option=>option.value===button.dataset.value)?.disabled===true;
+        button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;
+        if(selected)panel.setAttribute('aria-labelledby',button.id);
+      }
+    };
+    toolbar.append(tabs);
+  }
   const measure=document.createElement('span');
   measure.style.cssText='position:absolute;visibility:hidden;white-space:pre;pointer-events:none';
   document.body.append(measure);
   const update=()=>{
+    syncMode();
     for(const select of selects){
       const style=getComputedStyle(select);
       measure.style.font=style.font;
@@ -64,6 +99,7 @@ function bindChatListToolbar(toolbar){
   window.addEventListener('resize',update);
   if(typeof ResizeObserver!=='undefined')new ResizeObserver(update).observe(toolbar);
   later();
+  return syncMode;
 }
 class ClientNavigation {
   constructor({view,request,notify}) {

@@ -26,3 +26,12 @@
 .no-client .chat-list-toolbar{display:none}
 
 .chat-list-toolbar .list-actions-more{margin-left:auto;min-width:36px;min-height:36px;padding:2px 8px;font-size:24px;line-height:1}
+.chat-list-mode-tabs{display:none}
+@media(min-width:721px){
+  .chat-list-toolbar .list-mode-select{display:none}
+  .chat-list-mode-tabs{display:flex;flex:1 0 100%;min-width:0;border-bottom:1px solid var(--line)}
+  .chat-list-mode-tabs>button{flex:1;min-width:0;min-height:36px;padding:8px 2px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-size:12px;white-space:nowrap}
+  .chat-list-mode-tabs>button:hover{background:var(--surface);color:var(--text)}
+  .chat-list-mode-tabs>button[aria-selected="true"]{border-bottom-color:var(--green);color:var(--text);font-weight:600}
+  .chat-list-mode-tabs>button:focus-visible{outline-offset:-2px}
+}

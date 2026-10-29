@@ -254,7 +254,7 @@ function renderSourceFilter(){
   if($('source-filter').value!==listSource)$('source-filter').value=listSource;
   return true;
 }
-if(typeof bindChatListToolbar==='function')bindChatListToolbar(document.querySelector('#sidebar .chat-list-toolbar'));
+const syncListModeTabs=typeof bindChatListToolbar==='function'?bindChatListToolbar(document.querySelector('#sidebar .chat-list-toolbar'),$('list-mode')):null;
 function sessionAccess(access){
   if(!access)return {source:'desktop',runtime:'desktop',canSend:true,canInterrupt:true,canApprove:true,canReconnect:true,canConfigure:true,canChangePermissions:true,canChangeModel:true,canSelectSkills:true,canUseModes:true,canUseGoal:true,canUseSideChat:true,canEditMessages:true,readOnly:false};
   const legacy=access.source==='desktop';
@@ -353,6 +353,7 @@ function collapseSidebarGroups(){
   }
 }
 function renderList(){
+  if(typeof syncListModeTabs==='function')syncListModeTabs();
   const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,listLoading,[...projectChatPages].filter(([,page])=>page.limit!==5||page.loading)]:null;
   const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity();return;}
