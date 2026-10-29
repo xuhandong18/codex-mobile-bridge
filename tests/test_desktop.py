@@ -52,6 +52,18 @@ class DesktopTests(unittest.TestCase):
         self.assertNotIn('hash', snapshot['auth'])
         self.assertTrue((self.directory/'首次登录.txt').is_file())
 
+    def test_codex_recovery_defaults_and_live_setting_save(self):
+        value = self.value()
+        self.assertEqual(value['codexRecovery'], {'enabled': True})
+        self.desktop.save(value)
+        self.desktop.status = lambda: {'running': True, 'portOccupied': False, 'supportsNotifications': False}
+        value['codexRecovery']['enabled'] = False
+        self.assertFalse(self.desktop.save(value)['codexRecovery']['enabled'])
+        value['codexRecovery']['enabled'] = 'yes'
+        with self.assertRaisesRegex(ValueError, '自动继续'):
+            self.desktop.save(value)
+        self.assertFalse(self.desktop.snapshot()['codexRecovery']['enabled'])
+
     def test_save_roundtrip_and_secrets_are_not_returned(self):
         value = self.value()
         old_hash = self.desktop.config()['auth']['hash']

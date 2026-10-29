@@ -2,6 +2,10 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"Codex 自动继续":"Codex auto-continue",
+"Codex 容量错误自动继续":"Automatically continue Codex after capacity errors",
+"仅处理开启后新出现的模型容量错误。首次立即继续，之后每次等待 10 分钟，最多自动发送 3 次；仍失败时请人工处理。":"Only handles new model capacity errors observed after enabling. Continue immediately once, then wait 10 minutes between retries, with at most 3 automatic messages. Handle any remaining failure manually.",
+"Codex 自动继续开关格式不正确":"Invalid Codex auto-continue setting",
 "AI重命名":"AI rename",
 "正在检查 AI重命名是否可用…":"Checking AI rename availability…",
 "当前网关尚未提供 AI重命名，请更新或重启网关后重试。":"This gateway does not provide AI rename yet. Update or restart the gateway, then try again.",

@@ -17,6 +17,7 @@ from bridge.features.auth.auth import Auth, password_record, session_hours
 from bridge.app.lifecycle import read_record, request_stop, request_pairing
 from bridge.features.notifications.channels import Notifications, read_json, write_json, settings, save_settings, publish, publish_bark, publish_pushplus
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
+from bridge.features.sessions.recovery import settings as recovery_settings, save_settings as save_recovery_settings, validate_settings as validate_recovery_settings
 from bridge.clients.codex.remote import AppHosts
 from bridge.clients.codex.catalog import Catalog
 import bridge.features.network.access as access
@@ -185,6 +186,7 @@ class Desktop:
                 'origins': config.get('origins', []), 'notifications': {**notifications, 'token': '', 'hasToken': bool(notifications['token']), 'barkKey': '', 'hasBarkKey': bool(notifications['barkKey']), 'pushplusToken': '', 'hasPushplusToken': bool(notifications['pushplusToken'])},
                 'watches': self.notification_watches({'action': 'list'})['watches'],
                 'notificationUrls': notification_urls,
+                'codexRecovery': recovery_settings(self.data_dir),
                 'securityNotificationStatus': read_json(self.data_dir/'security-notifications.json', {}),
                 'addressNotificationStatus': read_json(self.data_dir/'address-notifications.json', {}),
                 'notificationStatus': read_json(self.data_dir/'notification-status.json', {}),
@@ -234,9 +236,11 @@ class Desktop:
         if any(preferences[k] != old_preferences[k] for k in ('codexHome', 'codexBin', 'ipcPath')):
             self.close_local(check_busy=True)
         # Validate all values before writing any setting.
+        recovery_value = validate_recovery_settings(value.get('codexRecovery', recovery_settings(self.data_dir)))
         notification_value = value.get('notifications', {})
         # save_settings performs the remaining validation; settings files have separate owners.
         save_settings(self.data_dir, notification_value)
+        save_recovery_settings(self.data_dir, recovery_value)
         config['auth'].update(mode=auth['mode'], username=auth['username'].strip(), sessionHours=hours)
         if password:
             config['auth'].update(password_record(password))

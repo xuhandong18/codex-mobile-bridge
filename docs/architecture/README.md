@@ -25,6 +25,7 @@
 | Claude 手动额度与成功查询快照 | `bridge/clients/claude/accounts.py` | `web/features/accounts/client-accounts.js`；[决定与边界](../../.agents/notes/implemented/bug-fix/2026-10-12-keychain-access-and-manual-quota.md) |
 | 终端会话与命令 | `bridge/features/terminals/manager.py` | `bridge/platforms/windows/terminal.py`、`posix/terminal.py` |
 | 通知、后台巡检、事件游标 | `bridge/features/notifications/` | `desktop/features/notifications/`，`mobile/android/`、`mobile/ios/` |
+| Codex 容量错误自动继续、三次上限 | `bridge/features/sessions/recovery.py` | `app/service.py`、`run.py`；[自动继续说明](../codex-recovery.md) |
 | 局域网、域名、SSH、Tailscale、中继连接 | `bridge/features/network/` | `desktop/features/connections/`，独立服务 `relay/` |
 | 网关更新或 Codex 更新 | `bridge/features/updates/` | `desktop/features/updates/`、签名与构建脚本 |
 | 共享聊天功能、应用切换 | `web/features/chat/`、`web/features/clients/` | `web/shell/` |
