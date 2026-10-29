@@ -20,6 +20,19 @@
 
 验证脚本 `scripts/smoke-side-chat.py` 使用真实 Codex 运行时、隔离 CODEX_HOME 与回环假模型服务，验证上下文和边界进入模型请求、流式回复、临时线程不出现在 thread/list、父记录不变及进程回收。不使用真实模型凭证；真实账号与手机设备体验需单独验收。
 
+### 运行中继续发送消息
+
+2026-10-30 核对 [OpenAI 官方 Queue / Steer 说明](https://developers.openai.com/blog/mastering-codex-remote-for-engineering)：Queue 等当前回复结束后发送下一轮，Steer 把补充加入正在执行的任务。官方文章同时介绍侧边聊天，但不单独保证每个桌面版本的侧边输入界面一致；本次没有向真实桌面聊天发送测试消息。
+
+Bridge 原有侧边后端已支持两种行为。现在 Codex/Harness 共享侧边输入区在运行中也保持默认发送按钮可用，点击或使用发送快捷键后，先选择“排队发送”或“补充当前任务”。用户已在发送方式中显式选择排队或补充时，直接按该选择提交。空闲时默认直接发送新消息。
+
+- 排队消息显示在当前侧边标签的队列中，未开始发送时可以撤回；Codex 仍由既有队列等本轮结束、待处理请求解除后派发。
+- 补充通过 Codex `turn/steer` 绑定当前子聊天和执行轮次，沿用原任务模式。任务已结束或正在等待审批、问题回答时，选择框禁用补充；仍可排队。
+- 取消选择不发送，保留文字、文件引用和附件。选择期间文字、引用、附件、聊天身份或当前视图发生变化时，放弃旧提交。
+- 发送前才开始运行而被 Codex 明确拒绝时，先只读刷新，再让用户选择。断线、超时或未知结果继续保留原提交，读取核对，不自动换方式重发。
+
+验证入口：`node --test tests/side-running-send-choice.test.cjs`、`python -B scripts/test-backend.py --source-only -p test_side_chat.py`、`node scripts/test-side-chat-create-browser.cjs --running-send-only`。浏览器驱动使用隔离合成 API，在 390×844、820×1180、844×390、1440×1000 尺寸检查 Codex/Harness 实际按钮、快捷键、取消、队列撤回和补充投递，另覆盖 Codex 发送竞态。去掉 `--running-send-only` 联动创建、恢复、失效与选区等已有回归；加 `--screenshots` 只将截图写入 `.tmp/side-running-send/`。这些验证不代表真实账号或各平台原生客户端已实测。
+
 以下记录保留原生路线的调研证据，不代表当前预览仍需手动创建。
 
 ## 早期原生接管实验（已被替换）

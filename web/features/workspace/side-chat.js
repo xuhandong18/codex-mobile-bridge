@@ -178,7 +178,11 @@ class SideChatPanel {
     this.mutations.delete(key);return value;
   }
   controls(){
-    const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!this.state?.connected;
+    if(this.runningSendChoice){
+      if(!this.state?.connected||this.state.expired)this.runningSendChoice.finish(null);
+      else this.runningSendChoice.steer.disabled=this.state.status!=='active'||!!this.state.requests?.length;
+    }
+    const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!!this.runningSendChoice||!this.state?.connected;
     this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created||!!this.busy;this.head.hidden=false;this.messageArea.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
     this.latestButton.hidden=!created||this.following!==false;
     this.input.readOnly=created&&!this.state.connected;
@@ -196,7 +200,7 @@ class SideChatPanel {
       this.workMode.disabled=this.workMode.disabled||active;this.workMode.querySelector('[value=plan]').disabled=caps.workModes!==true;this.workMode.querySelector('[value=plan]').title=BridgeI18n.t(caps.workModes===true?'':'当前 Harness 会话不支持计划模式，请更新接入或检查智能体配置');
       if(caps.workModes!==true&&this.workMode.value==='plan')this.workMode.value='default';
     }
-    this.sendButton.disabled=locked||((active||!!this.state?.requests?.length)&&this.sendMode.value==='send')||(!!this.state?.requests?.length&&this.sendMode.value==='steer')||(!this.input.value.trim()&&!this.fileQuotes.rows.length&&!this.attachments?.ids().length)||!this.attachments?.ready();
+    this.sendButton.disabled=locked||(!active&&!!this.state?.requests?.length&&this.sendMode.value==='send')||(!!this.state?.requests?.length&&this.sendMode.value==='steer')||(!this.input.value.trim()&&!this.fileQuotes.rows.length&&!this.attachments?.ids().length)||!this.attachments?.ready();
     this.createButton.disabled=!!this.busy||created;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
     this.endButton.hidden=!created;this.endButton.disabled=!!this.busy;
@@ -204,7 +208,7 @@ class SideChatPanel {
     this.newButton.disabled=!!this.busy;this.renameButton.disabled=!!this.busy;
     this.status.hidden=!this.status.textContent;
   }
-  canReceiveQuote(){return !this.disposed&&!this.busy&&!this.pending&&!this.state?.expired&&(!this.state?.id?!this.tab?.titleChild:this.state.connected===true);}
+  canReceiveQuote(){return !this.disposed&&!this.busy&&!this.pending&&!this.runningSendChoice&&!this.state?.expired&&(!this.state?.id?!this.tab?.titleChild:this.state.connected===true);}
   dialog(title){
     const n=(...a)=>this.workbench.node(...a),dialog=n('dialog','picker'),head=n('div','picker-head');
     head.append(n('h2','',BridgeI18n.t(title)),this.workbench.button('×',()=>dialog.close(),BridgeI18n.t('关闭')));dialog.append(head);
@@ -363,17 +367,52 @@ class SideChatPanel {
     clearTimeout(this.timer);if(this.disposed)return;
     this.timer=setTimeout(async()=>{try{if(!this.busy&&this.workbench.isVisible(this.session,this.tab)&&!document.hidden)await this.load();}finally{this.schedule();}},1200);
   }
+  chooseRunningSendMode(){
+    if(this.runningSendChoice)return Promise.resolve(null);
+    return new Promise(resolve=>{
+      const dialog=this.dialog('当前任务正在运行'),n=(...args)=>this.workbench.node(...args);
+      dialog.classList.add('running-send-dialog');dialog.setAttribute('aria-label',BridgeI18n.t('当前任务正在运行'));dialog.dataset.i18nAriaLabel='当前任务正在运行';
+      dialog.append(n('p','muted','这条消息要如何发送？'));
+      const options=n('div','running-send-options');
+      const finish=mode=>{if(this.runningSendChoice?.dialog!==dialog)return;this.runningSendChoice=null;dialog.close();resolve(mode);if(!this.disposed)this.controls();};
+      let steer;
+      for(const [mode,label,help] of [['queue','排队发送','当前任务完成后再发送。'],['steer','补充当前任务','立即补充到正在执行的任务。']]){
+        const button=this.workbench.button('',()=>{if(!button.disabled)finish(mode);},label);button.className='secondary';button.dataset.sendMode=mode;
+        button.append(n('strong','',label),n('small','muted',help));options.append(button);if(mode==='steer')steer=button;
+      }
+      const cancel=this.workbench.button('取消',()=>finish(null));cancel.className='plain';dialog.append(options,cancel);
+      dialog.addEventListener('close',()=>finish(null),{once:true});
+      this.runningSendChoice={dialog,finish,steer};this.controls();cancel.focus();
+    });
+  }
   async send(){
     if(this.sendButton.disabled)return;
     let text;try{text=this.fileQuotes.validate();}catch(error){this.status.textContent=error.message;this.controls();return;}
-    this.readRevision=(this.readRevision||0)+1;
-    this.pendingDraft={raw:this.input.value,quotes:this.fileQuotes.rows.map(row=>row.id)};
-    this.busy=true;this.pending={text,submissionId:uuid(),attachments:this.attachments.ids(),mode:this.sendMode.value,workMode:this.sendMode.value==='steer'||this.nativeModes&&this.state.status==='active'?null:this.workMode.value};const attachmentIds=this.pending.attachments;this.status.textContent=BridgeI18n.t('正在发送…');this.controls();
-    try{const result=await this.request({action:'send',id:this.state.id,...this.pending});if(this.disposed)return;
-      if(['accepted','queued'].includes(result.status)){this.attachments.clear(this.state.id,attachmentIds);this.completeSubmission();this.pending=null;this.references.close();this.resizeInput();await this.load();}
-      else this.status.textContent=BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。');
-    }catch(e){if(!this.disposed){if([400,401,403,404].includes(e.status))this.pending=null;this.status.textContent=BridgeI18n.t(e.message);}}
-    finally{this.busy=false;this.controls();}
+    const child=this.state.id,raw=this.input.value,quoteIds=this.fileQuotes.rows.map(row=>row.id),attachmentIds=this.attachments.ids(),workMode=this.workMode.value;
+    const current=()=>!this.disposed&&this.state?.id===child&&this.state.connected&&!this.state.expired&&this.workbench.isVisible(this.session,this.tab);
+    const unchanged=()=>current()&&this.fileQuotes.text()===text&&JSON.stringify(this.attachments.ids())===JSON.stringify(attachmentIds);
+    let mode=this.sendMode.value;
+    if(this.state.status==='active'&&mode==='send'){
+      mode=await this.chooseRunningSendMode();if(!mode||!unchanged())return;
+    }
+    while(!this.disposed){
+      this.readRevision=(this.readRevision||0)+1;
+      this.pendingDraft={raw,quotes:quoteIds};
+      this.busy=true;this.pending={text,submissionId:uuid(),attachments:attachmentIds,mode,workMode:mode==='steer'||this.nativeModes&&this.state.status==='active'?null:workMode};this.status.textContent=BridgeI18n.t('正在发送…');this.controls();
+      let rejectedBusy=false;
+      try{const result=await this.request({action:'send',id:child,...this.pending});if(this.disposed)return;
+        if(['accepted','queued'].includes(result.status)){this.attachments.clear(child,attachmentIds);this.completeSubmission();this.pending=null;this.references.close();this.resizeInput();await this.load();}
+        else this.status.textContent=BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。');
+      }catch(e){if(!this.disposed){
+        rejectedBusy=mode==='send'&&e.status===400&&e.message==='请先等待回复完成，或选择完成后发送／补充当前任务';
+        if([400,401,403,404].includes(e.status))this.pending=null;
+        this.status.textContent=rejectedBusy?'':BridgeI18n.t(e.message);
+      }}finally{this.busy=false;this.controls();}
+      // Only a definite rejection is safe to resubmit with a newly chosen mode.
+      if(rejectedBusy&&current())await this.load();
+      if(!rejectedBusy||!unchanged())return;
+      mode=await this.chooseRunningSendMode();if(!mode||!unchanged())return;
+    }
   }
   completeSubmission(){
     if(this.nativeModes)this.nativeModes.submitted(this.nativeModes.key,this.pending.workMode);
@@ -390,5 +429,5 @@ class SideChatPanel {
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }
-  dispose(){this.visibilityObserver?.disconnect();this.messageMap?.dispose();this.messages.onscroll=null;this.contextUsage.dispose();this.disposed=true;this.renameDialog?.close();this.selectionAction.dispose();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
+  dispose(){this.visibilityObserver?.disconnect();this.messageMap?.dispose();this.messages.onscroll=null;this.contextUsage.dispose();this.disposed=true;this.runningSendChoice?.finish(null);this.renameDialog?.close();this.selectionAction.dispose();this.references.dispose();this.fileQuotes.close();clearTimeout(this.timer);this.input.value='';this.attachments.reset();this.messages.replaceChildren();}
 }

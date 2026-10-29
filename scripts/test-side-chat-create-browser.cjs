@@ -29,9 +29,18 @@ const server=http.createServer(async(req,res)=>{
         }
         const state=states.get(key);
         if(body?.action==='send'){
-          assert.equal(body.id,state?.id);state.turns.push({messages:[{role:'user',text:body.text},{role:'assistant',text:'可以直接聊天'}]});
+          assert.equal(body.id,state?.id);
+          if(body.mode==='send'&&state.status==='active')return json({error:'请先等待回复完成，或选择完成后发送／补充当前任务'},400);
+          if(body.mode==='queue'){
+            state.submissions.push({id:body.submissionId,text:body.text,status:'queued'});return json({status:'queued'});
+          }
+          if(body.mode==='steer'){
+            assert.equal(state.status,'active');state.turns.at(-1).messages.push({role:'user',text:body.text});return json({status:'accepted'});
+          }
+          state.turns.push({messages:[{role:'user',text:body.text},{role:'assistant',text:'可以直接聊天'}]});
           return json({status:'accepted'});
         }
+        if(body?.action==='cancel-queued')state.submissions.find(row=>row.id===body.submissionId).status='cancelled';
         const slots=[...states].filter(([k])=>k.startsWith(provider+'|')).map(([k,v])=>({slot:k.slice(provider.length+1),id:v.id}));
         return json({...state||{id:null,connected:false,turns:[]},requests:questionRequests(),slots});
       }
@@ -107,6 +116,38 @@ const server=http.createServer(async(req,res)=>{
         await sideInput.press(platform==='MacIntel'?'Meta+Enter':'Control+Enter');await page.waitForFunction(()=>!creationPanel().input.value&&!creationPanel().busy);
         check(writes.filter(write=>write.body.action==='send').length===before+1,'侧边聊天按平台快捷键只发送一次 '+platform);
       }
+      const runningState=states.get(provider+'|'+await page.evaluate(()=>creationPanel().tab.slot||''));
+      const sendWrites=()=>writes.filter(write=>write.body.action==='send');
+      const choice=page.locator('.running-send-dialog[open]');
+      runningState.status='active';await page.evaluate(()=>creationPanel().load());
+      await sideInput.fill('运行中的下一条消息');
+      check(await page.locator('.wb-side-composer:visible button[type=submit]').isEnabled(),'运行中默认发送按钮仍可使用');
+      let beforeRunning=sendWrites().length;
+      await sideInput.press('Control+Enter');await choice.waitFor();
+      check(sendWrites().length===beforeRunning,'运行中快捷键先选择发送方式，不提前发送');
+      check(await choice.getByRole('button',{name:'排队发送',exact:true}).isVisible()&&await choice.getByRole('button',{name:'补充当前任务',exact:true}).isVisible(),'运行中明确展示排队和补充两个入口');
+      if(process.argv.includes('--screenshots')&&width===390){const dir=path.join(root,'.tmp/side-running-send');fs.mkdirSync(dir,{recursive:true});await page.screenshot({path:path.join(dir,provider+'-choice.png')});}
+      await page.keyboard.press('Escape');await choice.waitFor({state:'hidden'});
+      check(sendWrites().length===beforeRunning&&await sideInput.inputValue()==='运行中的下一条消息','取消选择不发送并保留草稿');
+      await page.locator('.wb-side-composer:visible button[type=submit]').click();await choice.waitFor();
+      await choice.getByRole('button',{name:'排队发送',exact:true}).click();await page.waitForFunction(()=>!creationPanel().busy&&!creationPanel().input.value);
+      check(sendWrites().length===beforeRunning+1&&sendWrites().at(-1).body.mode==='queue','选择排队只提交一次排队消息');
+      check(await page.locator('.wb-side-queue:visible .queue-card').count()===1,'待发送消息显示在侧边队列');
+      await page.locator('.wb-side-queue:visible').getByRole('button',{name:'取消',exact:true}).click();await page.waitForFunction(()=>!creationPanel().busy&&!creationPanel().queued.children.length);
+      check(runningState.submissions.at(-1).status==='cancelled','待发送消息可以撤回');
+      await sideInput.fill('纠正当前任务方向');await page.locator('.wb-side-composer:visible button[type=submit]').click();await choice.waitFor();
+      await choice.getByRole('button',{name:'补充当前任务',exact:true}).click();await page.waitForFunction(()=>!creationPanel().busy&&!creationPanel().input.value);
+      check(sendWrites().at(-1).body.mode==='steer'&&sendWrites().at(-1).body.workMode===null&&sendWrites().at(-1).body.id===runningState.id,'补充发给当前侧边聊天，并沿用任务模式');
+      check(runningState.turns.at(-1).messages.at(-1).text==='纠正当前任务方向','补充保留在当前轮次');
+      if(provider==='codex'){
+        runningState.status='idle';await page.evaluate(()=>creationPanel().load());runningState.status='active';
+        await sideInput.fill('发送前才开始运行');const beforeRace=sendWrites().length;await page.locator('.wb-side-composer:visible button[type=submit]').click();await choice.waitFor();
+        check(sendWrites().length===beforeRace+1&&await choice.getByRole('button',{name:'补充当前任务',exact:true}).isEnabled(),'状态变化导致明确拒绝后刷新状态，再允许用户选择');
+        await choice.getByRole('button',{name:'补充当前任务',exact:true}).click();await page.waitForFunction(()=>!creationPanel().busy&&!creationPanel().input.value);
+        check(sendWrites().length===beforeRace+2&&sendWrites().at(-1).body.mode==='steer','竞态后的补充仅在用户选择后发送');
+      }
+      runningState.status='idle';await page.evaluate(()=>creationPanel().load());
+      if(process.argv.includes('--running-send-only')){results.push({width,height,provider,passed:checks.length});await context.close();continue;}
       const first=await page.evaluate(()=>creationPanel().state.id);
       await page.getByRole('button',{name:'新建侧边聊天',exact:true}).click();await ready();
       check(createWrites().length===2&&await page.evaluate(()=>creationPanel().state.id)!==first,'新建侧边聊天按钮同样直接创建独立聊天');
