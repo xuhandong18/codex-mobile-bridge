@@ -154,7 +154,7 @@ export async function apply(ctx,config){
   };
   const permissionState=row=>{const catalog=ctx.permissionPresets.catalog(),mode=values(row).permissions?.currentValue||catalog.defaultPreset,option=catalog.options.find(o=>o.value===mode);return {permissionMode:mode,permissionLabel:localized(option?.label||option?.name)||mode};};
   const permissionOptions=()=>ctx.permissionPresets.catalog().options.map(o=>({...o,label:localized(o.label||o.name)||o.value,description:localized(o.description)}));
-  const normalize=row=>{const v=values(row),m=v.modelSelection?.next||v.modelSelection?.lastUsed||ctx.get?.('agentDefaultModel')?.currentSelection()||{};return {id:row.sessionId,title:v.title||'新会话',cwd:row.cwd||'',backend:'deepseek',mode:'desktop',status:typeof row.running==='boolean'?(row.running?'active':'idle'):'unknown',runtimeKnown:typeof row.running==='boolean',updatedAt:row.updatedAt,model:m.provider&&m.model?m.provider+'/'+m.model:'',effort:m.reasoningEffort||'',...permissionState(row),contextUsage:contextUsage(row),requests:[...questions.values()].filter(q=>q.sid===row.sessionId).map(q=>q.public)};};
+  const normalize=row=>{const v=values(row),m=v.modelSelection?.next||v.modelSelection?.lastUsed||ctx.get?.('agentDefaultModel')?.currentSelection()||{};return {id:row.sessionId,title:v.title||'新会话',cwd:row.cwd||'',backend:'deepseek',mode:'desktop',status:typeof row.running==='boolean'?(row.running?'active':'idle'):'unknown',runtimeKnown:typeof row.running==='boolean',updatedAt:row.updatedAt,model:m.provider&&m.model?m.provider+'/'+m.model:'',effort:m.reasoningEffort||'',...permissionState(row),contextUsage:contextUsage(row),requests:[...questions.values()].filter(q=>q.sid===row.sessionId).map(q=>q.public),waitingForUser:[...questions.values()].some(q=>q.sid===row.sessionId),waitingObservedAt:Date.now()*1000};};
   const records=async row=>{
     const projection=await ctx.sessionController.projections({sessionId:row.sessionId},signal());
     const seq=projection.asOfSeq??row.projections?.asOfSeq??0;
@@ -183,7 +183,12 @@ export async function apply(ctx,config){
   };
   const activity=(row,rows)=>{
     const children=descendants(row.sessionId,rows),v=normalize(row),active=children.filter(c=>c.running===true).length,unknown=children.filter(c=>typeof c.running!=='boolean').length;
-    return {...v,ownStatus:v.status,childActive:active,childUnknown:unknown,status:v.status==='active'||active?'active':unknown?'unknown':v.status};
+    const sideChats=Object.entries(personal.sides).filter(([key,entry])=>JSON.parse(key)[0]===row.sessionId&&!entry.closed).map(([,entry])=>{
+      const child=rows.find(item=>item.sessionId===entry.id),value=child?normalize(child):null;
+      return {id:entry.id,connected:!!value,status:value?.status||'unknown',waitingForUser:value?.waitingForUser??null,waitingObservedAt:value?.waitingObservedAt};
+    });
+    const waiting=children.filter(child=>[...questions.values()].some(q=>q.sid===child.sessionId)).length;
+    return {...v,sideChats,sideChatsObservedAt:Date.now()*1000,waitingSubagents:waiting||(!unknown?0:null),waitingSubagentsObservedAt:Date.now()*1000,ownStatus:v.status,childActive:active,childUnknown:unknown,status:v.status==='active'||active?'active':unknown?'unknown':v.status};
   };
   const publicRecords=items=>{
     let metadata={};const result=[];
@@ -198,7 +203,7 @@ export async function apply(ctx,config){
     const row=await find(entry.id),detail=await nativeDetail(row),nativeTitle=detail.session.title;
     const current=entry.manual?nativeTitle:nativeTitle!==entry.inheritedTitle&&nativeTitle!=='新会话'?nativeTitle:entry.title||'';
     const inbox=values(row).inbox?.['next-turn'],submissions=(entry.submissions||[]).map(s=>({...s,...Array.isArray(inbox)&&s.status==='queued'?{status:inbox.some(m=>m.source?.rpcId===s.id)?'queued':'accepted'}:{}}));
-    return {...detail,id:entry.id,title:current,titleRevision:(entry.revision||0)+(entry.nativeRevision||0),titleSource:entry.manual?'manual':'native',cwd:row.cwd,status:detail.session.status,model:detail.session.model,effort:detail.session.effort,permissionMode:detail.session.permissionMode,contextUsage:detail.session.contextUsage,...modeState(row),requests:detail.session.requests,submissions};
+    return {...detail,id:entry.id,title:current,titleRevision:(entry.revision||0)+(entry.nativeRevision||0),titleSource:entry.manual?'manual':'native',cwd:row.cwd,status:detail.session.status,model:detail.session.model,effort:detail.session.effort,permissionMode:detail.session.permissionMode,contextUsage:detail.session.contextUsage,...modeState(row),requests:detail.session.requests,waitingForUser:detail.session.waitingForUser,waitingObservedAt:detail.session.waitingObservedAt,waitingSubagents:detail.session.waitingSubagents,waitingSubagentsObservedAt:detail.session.waitingSubagentsObservedAt,submissions};
   };
   const side=async(sid,body,write=false)=>{
     await find(sid);
@@ -389,7 +394,7 @@ export async function apply(ctx,config){
       quitting=true;
       return {status:'accepted',pid:process.pid,generation};
     }
-    if(action==='status')return {connected:true,bridgeRevision:8,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
+    if(action==='status')return {connected:true,bridgeRevision:9,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
     if(action==='account')return account(sid);
     if(action==='title-status')return titleStatus(sid,body.requestId);
     if(action==='list'){

@@ -34,8 +34,26 @@ async function fixture(t){
   const start=async()=>{await apply(ctx,{configPath});port=JSON.parse(await readFile(endpoint,'utf8')).port;};await start();
   const request=async(action,sid,body={})=>{const res=await fetch(`http://127.0.0.1:${port}/mobile`,{method:'POST',headers:{Authorization:'Bearer isolated-fixture-token'},body:JSON.stringify({action,sid,body})});const value=await res.json();return {code:res.status,...value};};
   t.after(async()=>{for(const dispose of disposers.reverse())await dispose();await rm(folder,{recursive:true,force:true});});
-  return {ctx,folder,add,append,rows,events,calls,workspace,request,restart:async()=>{await disposers.pop()();await start();}};
+  return {ctx,folder,add,append,rows,events,calls,handlers,workspace,request,restart:async()=>{await disposers.pop()();await start();}};
 }
+
+test('unopened parent lists summarize waiting native agents and side forks without transcripts',async t=>{
+  const f=await fixture(t),r=f.request;f.add('parent');f.add('agent',f.folder,'parent');
+  const child=await r('side-write','parent',{operation:'create',id:randomUUID()});
+  const ask=sid=>f.handlers.get('user-questions/request')({agent:{id:sid},questions:[{id:'q',question:'PRIVATE QUESTION',options:[]}],signal:new AbortController().signal},()=>new Promise(()=>{}));
+  const native=ask('agent'),side=ask(child.id);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const listed=(await r('list')).sessions.find(row=>row.id==='parent');
+  assert.equal(listed.waitingForUser,false);assert.equal(listed.waitingSubagents,1);
+  assert.equal(listed.sideChats[0].waitingForUser,true);
+  assert.ok(!JSON.stringify(listed.sideChats).includes('PRIVATE QUESTION'));
+  const nativeRequest=(await r('detail','agent')).session.requests[0];
+  const sideRequest=(await r('side-read','parent')).requests[0];
+  await r('respond','agent',{requestId:nativeRequest.id,answers:{q:{answers:['yes']}}});await native;
+  assert.equal((await r('list')).sessions.find(row=>row.id==='parent').waitingSubagents,0);
+  await r('respond',child.id,{requestId:sideRequest.id,answers:{q:{answers:['yes']}}});await side;
+  assert.equal((await r('list')).sessions.find(row=>row.id==='parent').sideChats[0].waitingForUser,false);
+});
 
 test('explicit AI rename summarizes conversation without prompting or creating a native agent',async t=>{
   const f=await fixture(t),row=f.add('title');row.projections.values.title='用户原先的标题';

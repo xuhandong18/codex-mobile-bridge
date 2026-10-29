@@ -46,6 +46,9 @@ PREVIOUS_AI_RENAME_SOURCES = ('e33bf65c7f651b195f286a9d86a713157f097fc068927c4af
                               '6884a6f3c7ea4b2c570168902b3d5cbacd7d0f48de10f2de3fe2a72e50da779b')
 
 
+# Revision 8 before waiting-state summaries, release LF and Windows CRLF.
+PREVIOUS_WAITING_SOURCES = ('e96301e720ab5022372c3b3938233d5023de7f219277c6c74ba098ad1879d4c3', '07db7379a1d103ebd0e2df422fbec666e6197d9fda3a01d77ece899331eda558')
+
 def client_assets():
     base = Path(__file__).parent
     return {'package.json': (base/'client-package.json').read_bytes(), 'client.js': (base/'client.js').read_bytes()}
@@ -170,7 +173,7 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES, *PREVIOUS_WAITING_SOURCES):
             return None
         if digest in current_sources:
             for name, content in client_assets().items():

@@ -5,7 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.remote import RemoteUnavailable
-from bridge.features.sessions.model import apply_patches, ordered_turns, pending_requests
+from bridge.features.sessions.model import apply_patches, ordered_turns, pending_requests, waiting_for_user
 from bridge.features.sessions.store import StoreUnavailable
 
 
@@ -140,7 +140,7 @@ class SubagentActivity:
             result = {}
             for identifier in identifiers:
                 tree = self.trees.get(identifier)
-                running, unknown = 0, tree is None or bool(tree.get('limited'))
+                running, waiting, unknown = 0, 0, tree is None or bool(tree.get('limited'))
                 for child in tree.get('agents', []) if tree else []:
                     record = self.records.get(child, {})
                     if record.get('absent'):
@@ -151,14 +151,17 @@ class SubagentActivity:
                     try:
                         state = record['state']
                         runtime = state.get('threadRuntimeStatus', {}).get('type')
+                        awaiting = waiting_for_user(state)
                         busy = runtime in ('active', 'running', 'waiting', 'busy') or pending_requests(state) or any(
                             turn.get('status') == 'inProgress' for turn in ordered_turns(state))
                     except (KeyError, TypeError, AttributeError, ValueError):
                         unknown = True
                         continue
                     running += bool(busy)
+                    waiting += awaiting
                     unknown |= not busy and runtime != 'idle'
-                result[identifier] = {'runningSubagents': running, 'subagentsKnown': not unknown}
+                result[identifier] = {'runningSubagents': running, 'subagentsKnown': not unknown,
+                                      'waitingSubagents': waiting if waiting or not unknown else None}
             return result
 
     def wait(self, identifiers, deadline, *, confirmed=None):
@@ -172,7 +175,7 @@ class SubagentActivity:
                 if self.closed or confirmed():
                     return {sid: {**row, 'subagentsKnown': False} for sid, row in self._summary(identifiers).items()}
                 if done is not None and not done.is_set():
-                    return {sid: {'runningSubagents': 0, 'subagentsKnown': False} for sid in identifiers}
+                    return {sid: {'runningSubagents': 0, 'subagentsKnown': False, 'waitingSubagents': None} for sid in identifiers}
             if covered or attempt or time.monotonic() >= deadline:
                 break
             self.read(identifiers, force=True)

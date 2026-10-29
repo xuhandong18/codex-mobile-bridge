@@ -2348,6 +2348,7 @@ const en={
   "端口已被占用，请检查现有网关；不会自动更换端口": "The port is occupied. Check the existing gateway; the port will not be changed automatically",
   "端口必须为 1–65535": "The port must be 1–65535",
   "等待回应": "Waiting for your reply",
+  "等待你回复或处理": "Waiting for your reply or approval",
   "等待当前任务完成": "Waiting for the current task",
   "简体中文": "简体中文",
   "继续加载正文": "Load more text",

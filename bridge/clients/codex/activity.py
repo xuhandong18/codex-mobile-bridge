@@ -114,7 +114,10 @@ class DesktopActivity:
         turns = value.get('turns') or []
         last = turns[0] if turns else {}
         turn_status = last.get('status')
+        flags = thread['status'].get('activeFlags')
+        waiting = any(flag in ('waitingOnApproval', 'waitingOnUserInput') for flag in flags) if isinstance(flags, list) else False if status == 'idle' else None
         return {'status': status, 'turnId': last.get('id'),
+                'waitingForUser': waiting, 'waitingObservedAt': time.time_ns()//1000,
                 'turnStatus': turn_status if turn_status in ('inProgress', 'completed', 'interrupted', 'failed') else None}
 
     def _refresh(self, identifiers, *, deadline=None, done=None):

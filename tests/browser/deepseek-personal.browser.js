@@ -103,7 +103,7 @@ async function runDeepSeekPersonalBrowserTests(){
   await wait(()=>view.freshDetail&&!view.busy);view.state.status='active';view.mode.value='send';view.input.value='保留未知发送方式';view.input.oninput();globalThis.__dsh.unknownNextSend=true;const unknown=view.submit();await wait(()=>view.sendChoice?.open);[...view.sendChoice.querySelectorAll('button')].find(b=>b.textContent==='补充当前任务').click();await unknown;
   const unknownBody=calls.filter(c=>c.url.includes('/send')).at(-1).body;view.mode.value='queue';await wait(()=>view.freshDetail&&!view.busy);await view.submit();const retried=calls.filter(c=>c.url.includes('/send')).at(-1).body;
   check(unknownBody.id===retried.id&&retried.mode==='steer'&&!view.sendChoice,'an explicit retry keeps the original unknown submission id and send mode');
-  const rowTarget=view.rowsRoot.querySelector('.session');const actions=view.harnessActions(rowTarget);check(actions.some(a=>a.label==='重命名聊天')&&actions.some(a=>a.label==='移动到分区'),'thread menu exposes management');
+  const rowTarget=view.rowsRoot.querySelector('.session');const actions=view.harnessActions(rowTarget);check(actions.some(a=>a.label==='重命名')&&actions.some(a=>a.label==='AI重命名')&&actions.some(a=>a.label==='移动到分区'),'thread menu exposes management');
   await view.manageHarness({operation:'rename',title:'列表改名'},'chat-1');check(calls.some(c=>c.body?.operation==='rename'&&c.body.sessionId==='chat-1'),'list action can rename another row without opening it');
   view.newHarnessProject();let projectDialog=[...document.querySelectorAll('dialog[open]')].at(-1);projectDialog.querySelector('[aria-label="项目名称"]').value='浏览器项目';[...projectDialog.querySelectorAll('button')].find(b=>b.textContent==='选择文件夹').click();await wait(()=>document.querySelector('.project-folder-picker[open] .pf-footer .primary:not(:disabled)'));document.querySelector('.project-folder-picker[open] .pf-footer .primary').click();
   check(projectDialog.querySelector('[aria-label="文件夹完整路径"]').value==='/fixture','project creation reuses the shared directory picker with the DeepSeek route');projectDialog.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await wait(()=>!projectDialog.open);
@@ -114,5 +114,34 @@ async function runDeepSeekPersonalBrowserTests(){
   await view.open('chat-0');await view.workbench.refreshSideChats();check(view.workbench.current.files.filter(t=>t.sideChat).length===2,'parent rediscovery restores all side panels');
   const frame=document.createElement('div');document.body.append(frame);const select=document.createElement('select');const other=new DesktopSessionsView({root:frame,select,request:globalThis.__dsh.request,notify(){},onSelect(){},csrf:()=>'',onUnauthorized(){}});await other.choose('deepseek');await other.open('chat-0');await other.workbench.refreshSideChats();check(other.workbench.current.files.filter(t=>t.sideChat).length===2,'a second device view discovers both shared children');const disposedSide=other.workbench.current.files.find(t=>t.sideChat).sideChat;other.clear();frame.remove();
   const beforeDisposed=calls.length;let refused=false;try{await disposedSide.request({action:'stop',id:disposedSide.state.id});}catch{refused=true;}check(refused&&calls.length===beforeDisposed,'a disposed view cannot mutate the child after logout or account changes');
+  return {passed:checks.length,checks};
+}
+
+async function runWaitingActivityBrowserTests(){
+  const {view,rows}=globalThis.__dsh,checks=[];
+  const check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
+  for(const provider of ['claude','deepseek']){
+    await view.choose(provider);
+    for(const mode of provider==='deepseek'?['recent','project','native']:['recent','project']){
+      const row=rows.find(row=>row.id==='chat-3');
+      row.status='active';row.requests=[{id:'q',needsInput:true,tool:'AskUserQuestion',input:{questions:[{id:'q',question:'Choose'}]}}];
+      view.listMode.value=mode;view.listStamp='';await view.refreshList();
+      const key=provider+'|'+row.id,dot=()=>view.rowsRoot.querySelector('.session[data-id="'+row.id+'"] .session-indicator');
+      check(dot()?.classList.contains('awaiting'),provider+' '+mode+': unopened request shows waiting');
+      check(getComputedStyle(dot()).backgroundColor==='rgb(239, 68, 68)',provider+' '+mode+': waiting is red');
+      check(dot().getAttribute('aria-label')==='等待你回复或处理',provider+' '+mode+': waiting has accessible text');
+      await view.open(row.id);
+      check(view.activity.indicator(key)?.kind==='awaiting',provider+' '+mode+': opening does not clear waiting');
+      row.requests=[];await view.detail(view.generation);view.renderIndicators();
+      check(view.activity.indicator(key)?.kind==='running',provider+' '+mode+': confirmed response restores green');
+      if(provider==='deepseek'){
+        row.sideChats=[{id:'waiting-side',connected:true,status:'active',waitingForUser:true}];
+        await view.refreshList();
+        check(view.activity.indicator(key)?.kind==='awaiting',mode+': waiting side overrides running parent');
+        row.sideChats[0].waitingForUser=false;await view.refreshList();
+        check(view.activity.indicator(key)?.kind==='running',mode+': side resolution restores parent green');
+      }
+    }
+  }
   return {passed:checks.length,checks};
 }

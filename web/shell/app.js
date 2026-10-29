@@ -118,7 +118,7 @@ const attachments=new ChatAttachments({root:$('attachment-list'),button:$('attac
 function visibleChat(){return clientNavigation.provider==='codex'&&currentId&&!workbench.isFileVisible&&!document.hidden&&$('app').classList.contains('chat-open')?chatKey():null;}
 function readVisibleChat(view=state){
   if(!visibleChat()||!view||view.loadingHistory)return;
-  sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus}],chatKey());
+  sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus,waitingForUser:view.waitingForUser,requests:view.requests,waitingObservedAt:view.waitingObservedAt}],chatKey());
   sessionActivity.read(chatKey(),{sync:false});renderActivity();
 }
 function renderActivity(){let unknownAppeared=false;for(const button of $('sessions').querySelectorAll('.session')){

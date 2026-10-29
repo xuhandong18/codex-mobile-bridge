@@ -31,7 +31,7 @@ from bridge.clients.codex.activity import DesktopActivity
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
-from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, normalize_item, ordered_turns, pending_requests, async_requests, request_id, user_display_text, session_title, session_title_source, embedded_image_id
+from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, normalize_item, ordered_turns, pending_requests, async_requests, waiting_for_user, request_id, user_display_text, session_title, session_title_source, embedded_image_id
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
@@ -69,6 +69,7 @@ class LiveSession:
         self.navigation_windows = OrderedDict()
         self.revision = None
         self.sequence = 0
+        self.waiting_observed_at = time.time_ns()//1000
         self.connected = False
         self.connecting = False
         self.owner_probe_inflight = False
@@ -97,6 +98,7 @@ class LiveSession:
 
     def changed(self):
         self.sequence += 1
+        self.waiting_observed_at = time.time_ns()//1000
         self.condition.notify_all()
 
     def set_history(self, state):
@@ -139,6 +141,8 @@ class LiveSession:
                     result['historyComplete'] = self.saved_view['historyComplete']
             result["savedHistoryMore"] = bool(self.saved_view and not result["historyComplete"] and not self.saved_view["historyComplete"])
             result["sequence"] = self.sequence
+            result['waitingForUser'] = waiting_for_user(state) if self.connected else None
+            result['waitingObservedAt'] = self.waiting_observed_at
             result["connectionError"] = self.error
             result["connecting"] = self.connecting
             result["activating"] = self.activating
@@ -1130,22 +1134,27 @@ class Bridge:
         side_recencies = self.side_chats.recencies()
         content_recencies = self.recency_index.snapshot()
         for sid, session in sessions:
+            sides_observed_at = time.time_ns()//1000
             sides = self.side_chats.activity(sid)
             side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
             connected = running = False
+            waiting, observed = None, None
             # The query deadline has already expired. Its fallback must not
             # wait on the same session lock that may have stalled the query.
             if session is not None and session.condition.acquire(blocking=False):
                 try:
                     connected = session.connected
                     running = connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active'
+                    waiting = waiting_for_user(session.state or {}) if connected else None
+                    observed = session.waiting_observed_at
                 finally:
                     session.condition.release()
             row = {'id': sid, 'host': self.host, 'connected': bool(connected),
                    'recency': max(self.activity_recency_snapshot.get(sid, 0), side_recencies.get(sid, 0), content_recencies.get(sid, 0)),
                    'activityConnected': bool(running or side_running), 'status': 'active' if running or side_running else 'unknown',
                    'parentStatus': 'active' if running else 'unknown', 'runningSubagents': 0,
-                   'subagentsKnown': False, 'turnId': None, 'turnStatus': None, 'sideChats': sides}
+                   'waitingForUser': waiting, 'waitingObservedAt': observed, 'waitingSubagents': None,
+                   'subagentsKnown': False, 'turnId': None, 'turnStatus': None, 'sideChats': sides, 'sideChatsObservedAt': sides_observed_at}
             if not running and not side_running:
                 row['activityError'] = 'timeout'
             rows.append(row)
@@ -1199,6 +1208,7 @@ class Bridge:
                 threading.Thread(target=follow, daemon=True).start()
         # Start independent passive reads before waiting. Each stage shares the
         # caller's deadline; no second HTTP request is needed to collect results.
+        descendants_observed_at = time.time_ns()//1000
         descendants = self.subagent_activity.read([session.id for session in sessions], force=True)
         self._refresh_activity_recencies([session.id for session in sessions])
         by_id = {session.id: session for session in sessions}
@@ -1219,15 +1229,19 @@ class Bridge:
                 parent_status = state.get('threadRuntimeStatus', {}).get('type') if session.connected else native['status'] if native else 'unknown'
                 if native:
                     last = {'turnId': native['turnId'], 'status': native['turnStatus']}
-                return parent_status, last, session.connected, native is not None
+                waiting = waiting_for_user(state) if session.connected else native.get('waitingForUser') if native else None
+                observed = session.waiting_observed_at if session.connected else native.get('waitingObservedAt') if native else None
+                return parent_status, last, session.connected, native is not None, waiting, observed
 
         rows = []
         for session in sessions:
+            subtree_observed_at = descendants_observed_at
             with session.condition:
                 if not session.connected and session.id not in native_status and not session.error:
                     session.condition.wait_for(lambda: session.connected or session.error or self.closed.is_set(),
                                                timeout=max(0, deadline-time.monotonic()))
-            parent_status, last, connected, native = parent_snapshot(session)
+            parent_status, last, connected, native, waiting, observed = parent_snapshot(session)
+            sides_observed_at = time.time_ns()//1000
             sides = self.side_chats.activity(session.id)
             side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
             # A confirmed active parent already determines the aggregate. Idle
@@ -1235,9 +1249,11 @@ class Bridge:
             if parent_status == 'active' or side_running:
                 activity = descendants[session.id]
             else:
+                subtree_observed_at = time.time_ns()//1000
                 activity = self.subagent_activity.wait([session.id], deadline, confirmed=lambda:
                     session.connected and (session.state or {}).get('threadRuntimeStatus', {}).get('type') == 'active')[session.id]
-                parent_status, last, connected, native = parent_snapshot(session)
+                parent_status, last, connected, native, waiting, observed = parent_snapshot(session)
+                sides_observed_at = time.time_ns()//1000
                 sides = self.side_chats.activity(session.id)
                 side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
             status = 'active' if activity['runningSubagents'] or side_running else parent_status
@@ -1245,8 +1261,9 @@ class Bridge:
                 status = 'unknown'
             rows.append({'id': session.id, 'host': self.host, 'recency': recencies.get(session.id, 0), 'connected': connected,
                          'status': status, 'parentStatus': parent_status,
+                         'waitingForUser': waiting, 'waitingObservedAt': observed, 'waitingSubagentsObservedAt': subtree_observed_at,
                          'activityConnected': connected or native or bool(activity['runningSubagents']) or side_running, **activity,
-                         'sideChats': sides,
+                         'sideChats': sides, 'sideChatsObservedAt': sides_observed_at,
                          'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
             if status == 'unknown':
                 rows[-1]['activityError'] = 'timeout' if time.monotonic() >= deadline else 'unavailable'

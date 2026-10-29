@@ -28,7 +28,7 @@ try{
   assert.equal(session.permissionMode,'full-access');assert.equal(session.permissionLabel,'Full access');
   assert.deepEqual(session.contextUsage,{usedTokens:120,contextWindow:1000,estimated:true});
   delete row.projections.values.contextPressure;delete row.projections.values.permissions;
-  const initialStatus=await(await request('status')).json();assert.equal(initialStatus.configured,false);assert.equal(initialStatus.bridgeRevision,8);
+  const initialStatus=await(await request('status')).json();assert.equal(initialStatus.configured,false);assert.equal(initialStatus.bridgeRevision,9);
   const services={settings:{describe:options=>{assert.deepEqual(options,{redactSecrets:true});return [{ns:'provider',value:{apiKeyEnv:'FIXTURE_KEY',private:'DO-NOT-EXPOSE'}}];}},credentials:{describe:async ref=>{assert.equal(ref,'FIXTURE_KEY');return {configured:true};},resolve:()=>{throw Error('Must not resolve credentials');}},llm:{listConfigurableProviders:()=>[{provider:'deepseek',settingsNs:'provider',settingsPath:[]}]}};
   ctx.get=name=>services[name];
   assert.equal((await(await request('status')).json()).configured,true);
@@ -68,9 +68,9 @@ try{
   let desktopAborted=false;
   const req={agent:{id:'session-one'},questions:[{id:'q',question:'Choose',options:[{label:'A'}]}],signal:new AbortController().signal};
   const waiting=handlers.get('user-questions/request')(req,()=>new Promise((resolve,reject)=>req.signal.addEventListener('abort',()=>{desktopAborted=true;reject(Error('cancelled'));})));
-  const question=(await(await request('list')).json()).sessions[0].requests[0];assert.equal(question.input.questions[0].id,'q');
+  const question=(await(await request('list')).json()).sessions[0].requests[0];assert.equal(question.input.questions[0].id,'q');assert.equal((await(await request('list')).json()).sessions[0].waitingForUser,true);
   await request('respond',{requestId:question.id,answers:{q:{answers:['A','custom']}}});
-  const answer=await waiting;assert.deepEqual(answer.answers[0],{id:'q',selected:['A'],custom:'custom'});assert.ok(desktopAborted);
+  const answer=await waiting;assert.deepEqual(answer.answers[0],{id:'q',selected:['A'],custom:'custom'});assert.ok(desktopAborted);assert.equal((await(await request('list')).json()).sessions[0].waitingForUser,false);
   // A native tool approval is distinct from a structured user question.
   let desktopCancelled=false;
   const approvalReq={agent:{id:'session-one'},toolName:'shell',reason:'Run command',signal:new AbortController().signal};

@@ -150,7 +150,14 @@ class DesktopSessions:
                     self.reads[key] = future
         if owner:
             try:
+                observed = time.time_ns()//1000
                 value = adapter.call(action, sid, body)
+                if action in ('detail', 'list') and isinstance(value, dict) and value.get('connected') is not False:
+                    summaries = [value.get('session')] if action == 'detail' else value.get('sessions', [])
+                    for row in summaries:
+                        if isinstance(row, dict) and isinstance(row.get('requests'), list):
+                            row.setdefault('waitingForUser', bool(row['requests']) if row.get('runtimeKnown') is not False and row.get('connectionState') not in ('closed','connecting','unavailable') else None)
+                            row.setdefault('waitingObservedAt', observed)
                 if action == 'detail' and isinstance(value, dict):
                     from bridge.features.workspace.files import workspace_references
                     value['files'] = workspace_references(value.get('messages', []), value.get('session', {}).get('cwd'))
@@ -170,6 +177,12 @@ class DesktopSessions:
         with self.read_lock:
             if self.closed.is_set() or self.binding_epochs[provider] != binding or self.adapters[provider] is not adapter:
                 raise BridgeUnavailable('客户端状态已变化，请重试')
+            if self.read_epochs[provider] != epoch and isinstance(result, dict):
+                summaries = [result.get('session')] if action == 'detail' else result.get('sessions', []) if action == 'list' else []
+                for row in summaries:
+                    if isinstance(row, dict):
+                        row.update(waitingForUser=None, waitingSubagents=None)
+                        row.pop('sideChats', None)
         # Consumers may annotate rows. Sharing a result object crosses requests.
         return result
 
@@ -195,7 +208,9 @@ class DesktopSessions:
                 signature = (row.get('updatedAt'), row.get('status'))
                 cached = self.activity.get(key)
                 if cached:
+                    fresh_waiting = {name:row[name] for name in ('waitingForUser','waitingObservedAt','waitingSubagents','waitingSubagentsObservedAt','sideChats','sideChatsObservedAt') if name in row}
                     row.update(cached[1])
+                    row.update(fresh_waiting)
                 if cached is None or cached[0] != signature or (cached[1].get('turnStatus') == 'inProgress' and row.get('status') != 'active'):
                     candidates.append((key, signature))
             # Keep only current-account/current-list presentation state.
@@ -217,7 +232,7 @@ class DesktopSessions:
                         if detail.get('connected') is False:
                             continue
                         row = detail.get('session') or {}
-                        fields = {name: row[name] for name in ('turnId', 'turnStatus') if name in row}
+                        fields = {name: row[name] for name in ('turnId', 'turnStatus', 'waitingForUser', 'waitingObservedAt', 'waitingSubagents', 'waitingSubagentsObservedAt', 'sideChats', 'sideChatsObservedAt') if name in row}
                         with self.read_lock:
                             if not self.closed.is_set() and self.binding_epochs[provider] == binding:
                                 self.activity[key] = (signature, fields)

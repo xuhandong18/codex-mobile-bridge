@@ -382,6 +382,11 @@ def normalize_state(state, connected=True):
             "historyComplete": history.get("isComplete", state.get("turnsPagination", {}).get("hasLoadedOldest", True))}
 
 
+def waiting_for_user(state):
+    """Match actionable detail requests without projecting history or bodies."""
+    return bool(state.get('requests') or async_requests(state))
+
+
 def pending_requests(state):
     turns = ordered_turns(state)
     requests = []

@@ -83,9 +83,9 @@ class SideActivityTests(unittest.TestCase):
         before = [len(chat.runtime.calls) for chat in (one, two, other)]
         with patch.object(one, 'view', side_effect=AssertionError('No full transcript projection')):
             rows = manager.activity(support.THREAD)
-        self.assertEqual(rows, [
-            {'id': one.id, 'connected': True, 'status': 'active', 'turnId': 'turn', 'turnStatus': 'inProgress'},
-            {'id': two.id, 'connected': True, 'status': 'idle', 'turnId': 'turn', 'turnStatus': 'completed'},
+        self.assertEqual([{key:value for key,value in row.items() if key!='waitingObservedAt'} for row in rows], [
+            {'id': one.id, 'connected': True, 'status': 'active', 'turnId': 'turn', 'turnStatus': 'inProgress', 'waitingForUser': False},
+            {'id': two.id, 'connected': True, 'status': 'idle', 'turnId': 'turn', 'turnStatus': 'completed', 'waitingForUser': False},
         ])
         rows[0]['status'] = 'changed'
         self.assertEqual(manager.activity(support.THREAD)[0]['status'], 'active')
@@ -224,6 +224,7 @@ class SideActivityTests(unittest.TestCase):
             with self.assertRaises(SideChatError):
                 child.respond('approval', {'decision': 'accept'})
         self.assertEqual(child.view()['recency'], 0, 'Request arrival and an unknown response are not confirmed interactions')
+        self.assertTrue(child.activity()['waitingForUser'], '未知回执不能解除待处理请求')
         other = self.create(slot=str(uuid.uuid4()))
         error = SideChatError('rejected')
         error.rpc_error = {'code': -1}

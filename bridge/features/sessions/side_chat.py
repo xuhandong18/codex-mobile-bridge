@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from bridge.features.sessions.model import normalize_state, normalize_request, normalize_item
+from bridge.features.sessions.model import normalize_state, normalize_request, normalize_item, waiting_for_user
 from bridge.features.sessions.message_index import conversation_recency_key, conversation_recency_time
 from bridge.features.workspace.uploads import Uploads
 
@@ -230,6 +230,7 @@ class SideChat:
                     self.runtime.write({'id': message['id'], 'error': {'code': -32601, 'message': 'Unsupported side-chat request'}})
                     return
                 self.state['requests'].append(copy.deepcopy(message))
+                self.waiting_observed_at = time.time_ns()//1000
                 return
             if not self.ready or params.get('threadId') != self.id:
                 return
@@ -295,16 +296,19 @@ class SideChat:
                 content_at = content_at or conversation_recency_time(params, normalize_item)
                 if content_at:
                     self._record_interaction(content_at)
+            self.waiting_observed_at = time.time_ns()//1000
 
     def activity(self):
-        """Read only five scalar fields; never project history or wait for IO."""
-        result = {'id': self.id, 'connected': False, 'status': 'unknown', 'turnId': None, 'turnStatus': None}
+        """Read a small summary; never project history or wait for IO."""
+        result = {'id': self.id, 'connected': False, 'status': 'unknown', 'turnId': None, 'turnStatus': None, 'waitingForUser': None}
         if not self.lock.acquire(blocking=False):
             return result
         try:
             connected = self.ready and not self.closed and not self.error
             last = self.state['turns'][-1] if self.state['turns'] else {}
             return {**result, 'connected': connected,
+                    'waitingForUser': waiting_for_user(self.state) if connected else None,
+                    'waitingObservedAt': getattr(self, 'waiting_observed_at', 0),
                     'status': self.state['threadRuntimeStatus']['type'] if connected else 'unknown',
                     'turnId': last.get('turnId'), 'turnStatus': last.get('status')}
         finally:
@@ -319,6 +323,8 @@ class SideChat:
     def view(self):
         with self.lock:
             result = normalize_state(self.state, self.ready and not self.closed and not self.error)
+            result['waitingForUser'] = waiting_for_user(self.state) if result['connected'] else None
+            result['waitingObservedAt'] = getattr(self, 'waiting_observed_at', 0)
             for turn in result['turns']:
                 submissions = [(key, row) for key, row in self.submissions.items() if row.get('turnId') == turn['id']]
                 primary = next(((key, row) for key, row in submissions if row.get('mode') != 'steer'), None)
@@ -610,6 +616,7 @@ class SideChat:
                 self.runtime.write({'id': request['id'], 'result': result})
                 self._record_interaction()
                 self.state['requests'].remove(request)
+                self.waiting_observed_at = time.time_ns()//1000
                 self.queue_event.set()
             return self.view()
 

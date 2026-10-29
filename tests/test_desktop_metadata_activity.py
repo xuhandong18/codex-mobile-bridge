@@ -32,7 +32,8 @@ class DesktopMetadataActivityTests(unittest.TestCase):
 
     def test_unloaded_snapshot_is_known_without_promoting_it_to_a_writable_connection(self):
         value = self.refresh()['cold']
-        self.assertEqual(value, {'status': 'notLoaded', 'turnId': 'last-turn', 'turnStatus': 'completed'})
+        self.assertEqual({key:row for key,row in value.items() if key!='waitingObservedAt'},
+                         {'status': 'notLoaded', 'turnId': 'last-turn', 'turnStatus': 'completed', 'waitingForUser': None})
         self.assertNotIn('private', str(value))
         self.native.call.assert_called_once_with('read_thread', {'threadId': 'cold', 'hostId': 'local', 'turnLimit': 1,
                                                                'includeOutputs': False, 'maxOutputCharsPerItem': 500}, timeout=2)

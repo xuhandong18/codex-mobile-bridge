@@ -191,14 +191,14 @@ class DeepSeekMigrationTests(unittest.TestCase):
     def test_revision_seven_ai_rename_upgrade_retains_verified_sources_and_credentials(self):
         from bridge.clients.deepseek import setup
         from bridge.clients.deepseek.adapter import LIFECYCLE_REVISIONS
-        self.assertEqual(BRIDGE_REVISION, 8)
+        self.assertEqual(BRIDGE_REVISION, 9)
         self.assertIn(7, LIFECYCLE_REVISIONS)
         source = self.old.directory/'mobile-host.mjs'
         content = b'// known revision 7 before AI rename\n'
         source.write_bytes(content)
         credentials = (self.old.directory/'connection.json').read_bytes()
         original_sha = hashlib.sha256
-        for predecessor in setup.PREVIOUS_AI_RENAME_SOURCES:
+        for predecessor in (*setup.PREVIOUS_AI_RENAME_SOURCES, *setup.PREVIOUS_WAITING_SOURCES):
             def digest(value):
                 return Mock(hexdigest=lambda: predecessor) if value == content else original_sha(value)
             with self.subTest(digest=predecessor), patch.object(setup.hashlib, 'sha256', side_effect=digest):

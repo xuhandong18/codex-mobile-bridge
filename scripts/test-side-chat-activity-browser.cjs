@@ -4,10 +4,10 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('playwright'),web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
 const parent='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222',project='local|fixture',firstSlot='33333333-3333-4333-8333-333333333333';
 const access={source:'cli',canSend:true,canApprove:true,canUseSideChat:true};
-let sides,mainStatus,mainTurn,recency,sequence;const errors=[],writes=[],receipts=new Map();
+let sides,mainStatus,mainTurn,recency,sequence,mainWaiting;const errors=[],writes=[],receipts=new Map();
 const screenshots=process.argv.includes('--screenshots')?path.resolve(__dirname,'../.tmp/side-chat-activity'):null;
-const reset=()=>{receipts.clear();sides=['one','two'].map((id,index)=>({id:'side-'+id,slot:index?'44444444-4444-4444-8444-444444444444':firstSlot,connected:true,status:'active',turns:[{id,status:'inProgress',messages:[]}],requests:[],submissions:[]}));mainStatus='idle';mainTurn='main';recency=1;sequence=1;};
-const summary=()=>({id:parent,host:'local',connected:true,activityConnected:true,parentStatus:mainStatus,status:mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',readCompletions:receipts.get('main')||[],sideChats:sides.map(({id,connected,status,turns})=>({id,connected,status,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status,readCompletions:receipts.get(id)||[]})),recency});
+const reset=()=>{receipts.clear();sides=['one','two'].map((id,index)=>({id:'side-'+id,slot:index?'44444444-4444-4444-8444-444444444444':firstSlot,connected:true,status:'active',turns:[{id,status:'inProgress',messages:[]}],requests:[],submissions:[]}));mainStatus='idle';mainTurn='main';recency=1;sequence=1;mainWaiting=false;};
+const summary=()=>({id:parent,host:'local',connected:true,activityConnected:true,parentStatus:mainStatus,status:mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',readCompletions:receipts.get('main')||[],waitingForUser:mainWaiting,sideChats:sides.map(({id,connected,status,turns,requests})=>({id,connected,status,waitingForUser:!!requests?.length,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status,readCompletions:receipts.get(id)||[]})),recency});
 const rows=()=>[{id:other,host:'local',title:'较新的主聊天',recency:100},{id:parent,host:'local',title:'侧边状态测试',recency}].map(row=>({...row,cwd:'/fixture',projectKey:project,projectName:'测试项目',access}));
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -62,6 +62,15 @@ const server=http.createServer(async(req,res)=>{
       await indicator('running');
       check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.running').count()===1,'主聊天已结束而侧边仍工作显示绿点');
       if(screenshots&&mode==='codex'&&width===390)await page.screenshot({path:path.join(screenshots,'green-390.png')});
+      sides[0].requests=[{id:'waiting',method:'item/tool/requestUserInput',params:{questions:[{id:'q',question:'Choose'}]}}];
+      await refresh();await indicator('awaiting');
+      const red=page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.awaiting');
+      check(await red.evaluate(node=>getComputedStyle(node).backgroundColor)==='rgb(239, 68, 68)','未打开的侧边等待问题显示红色');
+      check(await red.getAttribute('aria-label')==='等待你回复或处理','红色提供无障碍状态说明');
+      sides[0].requests=[];mainWaiting=true;await refresh();await indicator('awaiting');
+      check(recency===1,'主侧等待状态不推进聊天排序时间');
+      mainWaiting=false;await refresh();await indicator('running');
+
       sides[0].status='idle';sides[0].turns[0].status='completed';await refresh();await indicator('completed');
       check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.completed').count()===1,'任一侧边完成优先显示蓝点');
       if(screenshots&&mode==='codex'&&width===390)await page.screenshot({path:path.join(screenshots,'blue-390.png')});

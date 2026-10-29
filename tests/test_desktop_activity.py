@@ -62,6 +62,17 @@ class DesktopActivityTests(unittest.TestCase):
         self.refresh()
         self.assertNotIn('turnStatus', self.manager.list_with_activity('claude')['sessions'][0])
 
+    def test_waiting_request_changes_are_visible_without_opening_or_changing_updated_at(self):
+        self.row.update(status='active',requests=[{'id':'question','tool':'AskUserQuestion','input':{'private':'BODY'}}])
+        self.refresh()
+        value=self.manager.list_with_activity('claude')['sessions'][0]
+        self.assertTrue(value['waitingForUser'])
+        self.adapter.call.reset_mock()
+        self.row['requests']=[]
+        value=self.manager.list_with_activity('claude')['sessions'][0]
+        self.assertFalse(value['waitingForUser'],'旧详情缓存不能盖过本轮列表的请求解除')
+        self.adapter.call.assert_called_once_with('list',None,{})
+
     def test_slow_history_does_not_block_list_and_old_binding_cannot_publish(self):
         entered, release = threading.Event(), threading.Event()
         original = self.read

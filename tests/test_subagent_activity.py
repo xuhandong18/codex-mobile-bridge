@@ -75,7 +75,7 @@ class SubagentActivityTests(unittest.TestCase):
 
     def test_follows_descendants_with_original_host_and_owner_without_writable_sessions(self):
         value = self.refresh()['parent']
-        self.assertEqual(value, {'runningSubagents': 1, 'subagentsKnown': True})
+        self.assertEqual(value, {'runningSubagents': 1, 'subagentsKnown': True, 'waitingSubagents': 0})
         ipc = AgentIPC.instances[0]
         self.assertIn(('follow', 'local', 'child', 'original-owner', True), ipc.calls)
         self.assertTrue(all(call[0] in ('connect', 'owner', 'follow') for call in ipc.calls))
@@ -89,12 +89,13 @@ class SubagentActivityTests(unittest.TestCase):
         AgentIPC.states['child']['requests'] = [{'id': 'approval', 'method': 'item/commandExecution/requestApproval', 'params': {}}]
         AgentIPC.instances[0].publish('child', revision=2)
         self.assertEqual(self.refresh()['parent']['runningSubagents'], 1)
+        self.assertEqual(self.refresh()['parent']['waitingSubagents'], 1)
 
     def test_fresh_absent_owner_is_idle_and_read_failure_is_unknown(self):
         del AgentIPC.states['child']
-        self.assertEqual(self.refresh()['parent'], {'runningSubagents': 0, 'subagentsKnown': True})
+        self.assertEqual(self.refresh()['parent'], {'runningSubagents': 0, 'subagentsKnown': True, 'waitingSubagents': 0})
         self.store.activity_tree.side_effect = StoreUnavailable('fixture')
-        self.assertEqual(self.refresh()['parent'], {'runningSubagents': 0, 'subagentsKnown': False})
+        self.assertEqual(self.refresh()['parent'], {'runningSubagents': 0, 'subagentsKnown': False, 'waitingSubagents': None})
 
     def test_disconnect_or_invalid_revision_never_means_complete(self):
         self.refresh();ipc = AgentIPC.instances[0]
@@ -122,7 +123,10 @@ class SubagentActivityTests(unittest.TestCase):
 
     def test_remote_uses_the_selected_host_and_a_single_metadata_call(self):
         self.monitor.host = 'remote:fixture'
-        self.assertEqual(self.refresh()['parent']['runningSubagents'], 1)
+        AgentIPC.states['child']['requests']=[{'id':'q','method':'tool/requestUserInput','params':{'questions':[]}}]
+        value=self.refresh()['parent']
+        self.assertEqual(value['runningSubagents'], 1)
+        self.assertEqual(value['waitingSubagents'],1)
         self.store.activity_tree.assert_called_once_with(['parent'])
         self.assertIn(('owner', 'remote:fixture', 'child'), AgentIPC.instances[0].calls)
 
@@ -142,7 +146,7 @@ class SubagentActivityTests(unittest.TestCase):
     def test_limited_tree_or_follower_budget_reports_unknown_without_losing_verified_activity(self):
         self.monitor.MAX_FOLLOWERS = 1
         value = self.refresh()['parent']
-        self.assertEqual(value, {'runningSubagents': 1, 'subagentsKnown': False})
+        self.assertEqual(value, {'runningSubagents': 1, 'subagentsKnown': False, 'waitingSubagents': None})
         self.assertEqual(len(self.monitor.records), 1)
 
     def test_inactive_subscriptions_expire_even_without_another_list_request(self):
@@ -159,9 +163,9 @@ class SubagentActivityTests(unittest.TestCase):
         ipc.publish('child',revision=2,type='patches',baseRevision=1,patches=[
             {'op':'replace','path':'/threadRuntimeStatus/type','value':'idle'},
             {'op':'replace','path':'/turns/0/status','value':'completed'}])
-        self.assertEqual(self.refresh()['parent'],{'runningSubagents':0,'subagentsKnown':True})
+        self.assertEqual(self.refresh()['parent'],{'runningSubagents':0,'subagentsKnown':True,'waitingSubagents':0})
         ipc.publish('child',revision=3,conversationState={'id':'child','threadRuntimeStatus':None})
-        self.assertEqual(self.refresh()['parent'],{'runningSubagents':0,'subagentsKnown':False})
+        self.assertEqual(self.refresh()['parent'],{'runningSubagents':0,'subagentsKnown':False,'waitingSubagents':None})
 
     def test_wait_returns_the_initial_descendant_snapshot_without_a_second_metadata_request(self):
         def follow(ipc, identifier, owner, enabled=True, host='local'):
@@ -177,7 +181,7 @@ class SubagentActivityTests(unittest.TestCase):
                 for child in ('child', 'nested'):
                     AgentIPC.instances[0].publish(child)
                 waiter.join(1)
-                self.assertEqual(values[0]['parent'], {'runningSubagents': 1, 'subagentsKnown': True})
+                self.assertEqual(values[0]['parent'], {'runningSubagents': 1, 'subagentsKnown': True, 'waitingSubagents': 0})
                 self.store.activity_tree.assert_called_once_with(['parent'])
             finally:
                 self.monitor.close();waiter.join(1)
@@ -191,7 +195,7 @@ class SubagentActivityTests(unittest.TestCase):
         self.monitor.read(['parent'], force=True)
         self.assertTrue(entered.wait(.3));started=time.monotonic()
         try:
-            self.assertEqual(self.monitor.wait(['parent'], started+.03)['parent'], {'runningSubagents': 0, 'subagentsKnown': False})
+            self.assertEqual(self.monitor.wait(['parent'], started+.03)['parent'], {'runningSubagents': 0, 'subagentsKnown': False, 'waitingSubagents': None})
             self.assertLess(time.monotonic()-started, .3)
         finally:
             release.set();self.monitor.worker.join(1)

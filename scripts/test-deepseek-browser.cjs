@@ -26,7 +26,7 @@ const server=http.createServer((req,res)=>{
       const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage(),errors=[];
       page.on('pageerror',error=>errors.push(error.message));
       await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.evaluate(()=>window.__dshReady);
-      const result=await page.evaluate(()=>runDeepSeekPersonalBrowserTests());assert.deepEqual(errors,[]);results.push({width,height,...result});
+      const result=await page.evaluate(()=>runDeepSeekPersonalBrowserTests()),waiting=await page.evaluate(()=>runWaitingActivityBrowserTests());assert.deepEqual(errors,[]);results.push({width,height,passed:result.passed+waiting.passed,checks:[...result.checks,...waiting.checks]});
       if(process.argv.includes('--screenshots')){fs.mkdirSync(path.join(root,'.tmp'),{recursive:true});await page.screenshot({path:path.join(root,'.tmp',`deepseek-browser-${width}.png`)});}
       await context.close();
     }

@@ -4,6 +4,8 @@
 
 ## Python 后端
 
+等待用户处理的红色提示运行 `python -B scripts/test-backend.py --source-only -p '*activity*.py'`、`node --test tests/waiting-activity.test.cjs` 和 `npm run test:desktop`。覆盖正式请求与异步问题、原生等待输入/批准标记、未打开的聊天、主侧及派生任务独立汇总、红蓝绿优先级、阅读不解除、未知状态和旧回包不清除等待，以及请求到达不推动排序。DeepSeek 第 9 版接入的只读摘要和第 8 版兼容由 `test_deepseek_migration.py`、`deepseek-personal.test.mjs` 验证。真实 DOM 回归运行 `node scripts/test-side-chat-activity-browser.cjs` 与 `node scripts/test-deepseek-browser.cjs`，检查手机、平板、电脑尺寸下各列表的红色、无障碍说明和恢复绿点；均使用隔离合成运行时，不执行真实审批或发送模型任务。
+
 Windows ChatGPT 第一阶段连接器运行 `python -B scripts/test-backend.py --source-only -p 'test_chatgpt_*.py'` 和 `node --test tests/chatgpt-probe.test.cjs`，覆盖安装指纹、进程/监听身份、Store 参数保留、重定向、账号变化、窗口重载、未知响应、后台新查询门槛和断线清理。WebSocket 夹具需项目已有 `aiohttp`，不能将缺依赖导致的跳过算作通过。真实桌面验证单独使用 [受限探针入口](../docs/chatgpt-connector.md)；自动测试不证明普通 ChatGPT 业务动作已接通。
 
 计划消息中的文件链接运行 `python -B scripts/test-backend.py --source-only -p test_bridge.py`，覆盖 `planImplementation.planContent` 与时间线展示一致的文件解析、带行号的路径、项目目录边界，以及打开文件时保留原桌面 owner 且不发送消息。历史消息的文件归属另由 `test_message_index.py` 验证；浏览器点击与标签复用继续使用 `node scripts/test-file-refresh-browser.cjs` 的文件链接夹具。
