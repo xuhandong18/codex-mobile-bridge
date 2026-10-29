@@ -111,7 +111,7 @@ def _model_image_references(state):
             if kind in ('ImageView', 'imageView'):
                 add(item.get('path'), item.get('path'), runtime_view=True)
             elif kind in AGENT_KINDS:
-                text = item.get('text', '')
+                text = item.get('planContent' if kind == 'planImplementation' else 'text', '')
                 if isinstance(text, str):
                     for match in IMAGE_MARKDOWN_PATH.finditer(text):
                         reference = match[1] or match[2]
@@ -133,8 +133,10 @@ def artifact_paths(state, codex_home):
     candidates = set()
     for turn in ordered_turns(state):
         for item in items_array(turn.get('items')):
-            if item.get('type') in ('agentMessage', 'assistantMessage'):
-                for match in MARKDOWN_PATH.finditer(item.get('text', '')):
+            kind = item.get('type')
+            if kind in AGENT_KINDS:
+                text = item.get('planContent' if kind == 'planImplementation' else 'text', '')
+                for match in MARKDOWN_PATH.finditer(text):
                     candidates.add(match[1] or match[2])
             for attachment in item.get('content', []) if isinstance(item.get('content'), list) else []:
                 if isinstance(attachment, dict) and attachment.get('type') in ('localImage', 'image', 'file'):

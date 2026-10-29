@@ -4,6 +4,8 @@
 
 ## Python 后端
 
+计划消息中的文件链接运行 `python -B scripts/test-backend.py --source-only -p test_bridge.py`，覆盖 `planImplementation.planContent` 与时间线展示一致的文件解析、带行号的路径、项目目录边界，以及打开文件时保留原桌面 owner 且不发送消息。历史消息的文件归属另由 `test_message_index.py` 验证；浏览器点击与标签复用继续使用 `node scripts/test-file-refresh-browser.cjs` 的文件链接夹具。
+
 Codex 容量错误自动继续运行 `python -B scripts/test-backend.py --source-only -p test_codex_recovery.py`，以可控时钟和模拟 owner 验证初始基线、精确错误筛选、首次立即与十分钟间隔、三次上限、补丁乱序、自动轮次身份延后到达、人工介入、跨主机隔离、回执未知和重启不重放。桌面设置保存由 `test_desktop.py` 覆盖。`node scripts/test-codex-recovery-browser.cjs` 执行真实桌面设置界面，使用隔离控制器绑定验证默认开启、运行中保存、重载保留、中英文和较小窗口；需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`，截图可用 `--screenshots` 保存在 `.tmp/`。均不操作真实聊天。
 
 Markdown 编辑的专项后端验证为 `python -B scripts/test-backend.py --source-only -p test_markdown_edit.py`，HTTP 保存边界包含在 `test_workspace.py`。真实浏览器验证为 `node scripts/test-markdown-edit-browser.cjs`（可加 `--screenshots` 将截图写入 `.tmp/`），使用隔离 Chromium 和合成文件，覆盖六种尺寸、中英文、格式工具、真实键盘快捷键、草稿保留、并发保存、冲突与回执丢失后的只读核对。需要已有 Playwright，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时；不连接真实客户端或修改用户文件。

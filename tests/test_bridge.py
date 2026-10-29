@@ -14,7 +14,7 @@ from contextlib import closing
 from pathlib import Path, PureWindowsPath
 
 from bridge.features.auth.auth import Auth, password_record
-from bridge.features.workspace.files import artifact_paths
+from bridge.features.workspace.files import artifact_paths, referenced_model_images, path_identity
 from bridge.api.httpd import GatewayServer
 from bridge.api.assets import asset_bytes
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
@@ -256,6 +256,23 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(detail['text'], 'row 130')
         changes = self.bridge.timeline_read(THREAD, 'changes', after=page['sequence'], epoch=page['epoch'], start=older['before'])
         self.assertEqual(changes['rows'], [])
+
+    def test_plan_file_link_from_timeline_can_be_opened_without_changing_owner(self):
+        workspace = self.root / 'workspace';workspace.mkdir()
+        note = workspace / 'AGENTS.md';note.write_text('# Rules', encoding='utf-8')
+        outside = self.root / 'private.md';outside.write_text('private', encoding='utf-8')
+        self.fixture.state['cwd'] = str(workspace)
+        self.fixture.state['turns'] = [{'turnId': 'plan-turn', 'items': [
+            {'id': 'plan', 'type': 'planImplementation',
+             'planContent': f'[AGENTS.md](<{note.as_posix()}>) [private](<{outside.as_posix()}>)'},
+        ]}]
+        session = self.bridge.session(THREAD)
+        page = self.bridge.timeline_read(THREAD)
+        self.assertEqual(page['rows'][0]['kind'], 'planImplementation')
+        self.assertEqual([file['name'] for file in page['files']], ['AGENTS.md'])
+        self.assertEqual(self.bridge.artifact(THREAD, page['files'][0]['id'])['path'], note.resolve())
+        self.assertEqual(session.owner, 'owner')
+        self.assertFalse(any(call['method'] == 'thread-follower-start-turn' for call in self.fixture.requests))
 
     def test_legacy_desktop_threads_visible_but_subagents_excluded(self):
         from bridge.features.sessions.store import SessionStore
@@ -808,6 +825,33 @@ class ModelTests(unittest.TestCase):
             value['turns'] = [{'items': [{'type': 'agentMessage', 'text': f'[report]({allowed}) [private]({outside})'}]}]
             files = artifact_paths(value, root / '.codex')
             self.assertEqual([v['name'] for v in files.values()], ['report.txt'])
+
+    def test_plan_artifacts_share_workspace_boundaries_and_ids_with_assistant_links(self):
+        with tempfile.TemporaryDirectory(dir=str(ROOT / '.tmp')) as directory:
+            root = Path(directory)
+            workspace = root / 'workspace';workspace.mkdir()
+            note = workspace / 'AGENTS.md';note.write_text('rules', encoding='utf-8')
+            outside = root / 'private.md';outside.write_text('private', encoding='utf-8')
+            text = f'[rules](<{note.as_posix()}:1>) [private](<{outside.as_posix()}>)'
+            value = {**state(), 'cwd': str(workspace), 'turns': [{'items': [
+                {'type': 'planImplementation', 'planContent': text},
+            ]}]}
+            files = artifact_paths(value, root / '.codex')
+            self.assertEqual([file['path'] for file in files.values()], [note.resolve()])
+            value['turns'][0]['items'] = [{'type': 'agentMessage', 'text': text}]
+            self.assertEqual(files, artifact_paths(value, root / '.codex'))
+
+    def test_plan_image_references_do_not_grant_outside_workspace_access(self):
+        with tempfile.TemporaryDirectory(dir=str(ROOT / '.tmp')) as directory:
+            root = Path(directory)
+            workspace = root / 'workspace';workspace.mkdir()
+            image = root / 'private.png';image.write_bytes(b'PNG')
+            value = {**state(), 'cwd': str(workspace), 'turns': [{'items': [
+                {'type': 'planImplementation', 'planContent': f'![preview](<{image.as_posix()}>)'},
+            ]}]}
+            self.assertIn(path_identity(image), referenced_model_images(value))
+            self.assertEqual(referenced_model_images(value, image_views_only=True), set())
+            self.assertEqual(artifact_paths(value, root / '.codex'), {})
 
     def test_artifact_symlink_cannot_escape_workspace(self):
         with tempfile.TemporaryDirectory(dir=str(ROOT / '.tmp')) as directory:
