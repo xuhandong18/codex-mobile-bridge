@@ -47,7 +47,7 @@ const server=http.createServer(async(req,res)=>{
     browser=await chromium.launch({headless:true,...process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{}});
     const base='http://127.0.0.1:'+server.address().port;
     for(const [width,height] of [[320,740],[390,844],[820,1180],[844,390],[1440,1000]]){
-      const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
+      const context=await browser.newContext({viewport:{width,height},colorScheme:'light'}),page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
       await page.goto(base);await page.waitForFunction(()=>listComplete&&sidebarPreferences.revision===1);
       const expected=await page.evaluate(()=>[...document.querySelectorAll('#sessions > .sidebar-section')].filter(section=>section.querySelector('.project-group')).map(section=>({id:section.dataset.section,keys:[...section.querySelectorAll(':scope > .project-group')].map(p=>p.dataset.projectKey)})));
       await page.locator('#new-chat').click();await page.locator('#new-chat-project-button').click();
@@ -55,7 +55,36 @@ const server=http.createServer(async(req,res)=>{
       assert.deepEqual(actual,expected);check(true,'分区归属、置顶和项目顺序与导航完全一致 '+width);
       check(await page.locator('.nc-project-option').count()===projects.length+1,'大量项目和独立聊天均可选择 '+width);
       check(await page.locator('.nc-project-list').evaluate(node=>node.scrollHeight>node.clientHeight&&node.getBoundingClientRect().width<=innerWidth),'项目列表有界滚动且没有横向溢出 '+width);
-      const search=page.locator('.nc-project-search');await search.fill('生产主机');
+      const search=page.locator('.nc-project-search');await search.fill('项目');
+      for(const theme of ['dark','light','system']){
+        if(theme==='system')await page.emulateMedia({colorScheme:'dark'});
+        await page.evaluate(theme=>{const control=document.querySelector('#appearance-theme');control.value=theme;control.dispatchEvent(new Event('change'));},theme);
+        await page.waitForFunction(expected=>document.documentElement.dataset.theme===expected,theme==='light'?'light':'dark');
+        const appearance=await page.evaluate(()=>{
+          const rgb=value=>[...value.matchAll(/[\d.]+/g)].map(match=>Number(match[0]));
+          const background=node=>{
+            const parents=[];for(let current=node;current;current=current.parentElement)parents.unshift(current);
+            return parents.reduce((base,parent)=>{const [r,g,b,a=1]=rgb(getComputedStyle(parent).backgroundColor);return [r,g,b].map((v,i)=>v*a+base[i]*(1-a));},[255,255,255]);
+          };
+          const luminance=color=>color.map(value=>value/255).map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4).reduce((total,value,i)=>total+value*[.2126,.7152,.0722][i],0);
+          const contrast=node=>{const a=luminance(rgb(getComputedStyle(node).color)),b=luminance(background(node));return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);};
+          const input=getComputedStyle(document.querySelector('#new-chat-title'));
+          return {raised:input.backgroundColor,surfaces:['.nc-project-trigger','.nc-project-panel','.nc-project-heading'].map(selector=>getComputedStyle(document.querySelector(selector)).backgroundColor),
+            names:[...document.querySelectorAll('.nc-project-trigger>strong,.nc-project-title>strong')].map(contrast),
+            details:[...document.querySelectorAll('.nc-project-heading,.nc-project-path,.nc-project-host')].map(contrast),
+            query:document.querySelector('.nc-project-search').value,selected:document.querySelector('#new-chat-project').value,open:!document.querySelector('.nc-project-panel').hidden};
+        });
+        check(appearance.surfaces.every(color=>color===appearance.raised),'选择按钮、面板和分区标题使用当前主题表面色 '+theme+' '+width);
+        check(Math.min(...appearance.names)>=4.5&&Math.min(...appearance.details)>=3,'普通及选中项目名称、主机和目录在当前主题中清晰可见 '+theme+' '+width);
+        check(appearance.open&&appearance.query==='项目'&&appearance.selected==='local|independent','切换主题保留展开、搜索和项目选择 '+theme+' '+width);
+        const option=page.locator('.nc-project-option[aria-selected=false]').first();await option.hover();
+        const hovered=await option.evaluate(node=>getComputedStyle(node).backgroundColor!=='rgba(0, 0, 0, 0)');
+        await page.mouse.move(0,0);await search.focus();await search.press('ArrowDown');
+        check(hovered&&await page.evaluate(()=>document.activeElement.matches('.nc-project-option:focus-visible')&&getComputedStyle(document.activeElement).outlineStyle!=='none'),'当前主题的悬停和键盘焦点保持可见 '+theme+' '+width);
+        if(theme==='dark'&&process.argv.includes('--screenshots')){const dir=path.resolve(__dirname,'../.tmp/new-chat-projects');fs.mkdirSync(dir,{recursive:true});await page.screenshot({path:path.join(dir,width+'x'+height+'-dark.png')});}
+      }
+      await page.emulateMedia({colorScheme:'light'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');
+      await search.fill('生产主机');
       check(await page.locator('.nc-project-option').count()===1,'按运行主机搜索 '+width);
       await page.locator('.nc-project-option').click();await page.waitForFunction(()=>!newChatSettings.loading);
       check(await page.locator('#new-chat-project').inputValue()==='ssh:prod|remote'&&await page.locator('#new-chat-path').textContent()==='/srv/remote/project','同名项目选中正确主机和目录 '+width);
