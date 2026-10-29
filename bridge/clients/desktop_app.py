@@ -113,11 +113,11 @@ class DesktopApp:
                 raise ValueError('桌面程序尚未退出，请在电脑上关闭后重试；尚未强制结束进程')
             time.sleep(.25)
 
-    def launch(self, *, cancelled=None, **options):
+    def launch(self, *, cancelled=None, arguments=(), **options):
         if sys.platform == 'win32':
             from bridge.platforms.windows.discovery_ext import launch_windows_desktop
-            return launch_windows_desktop(self.executable, cancelled=cancelled, **options)
-        return subprocess.Popen([str(self.executable)], **options)
+            return launch_windows_desktop(self.executable, cancelled=cancelled, arguments=arguments, **options)
+        return subprocess.Popen([str(self.executable), *arguments], **options)
 
     def start(self):
         environment = {'CODEX_HOME': str(self.home)}

@@ -220,14 +220,17 @@ def application_execution_alias(executable):
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-def launch_windows_desktop(executable, *, cancelled=None, **options):
+def launch_windows_desktop(executable, *, cancelled=None, arguments=(), **options):
     """Preserve direct-launch environments, falling back for protected Store apps."""
+    if (not isinstance(arguments, (tuple, list)) or
+            any(not isinstance(value, str) or '\x00' in value for value in arguments)):
+        raise ValueError('桌面程序启动参数无效')
     def check_cancelled():
         if cancelled is not None and cancelled.is_set():
             raise ValueError('已取消桌面程序启动')
     check_cancelled()
     try:
-        return subprocess.Popen([str(executable)], **options)
+        return subprocess.Popen([str(executable), *arguments], **options)
     except OSError as exc:
         if getattr(exc, 'winerror', None) != 5:
             raise
@@ -235,6 +238,9 @@ def launch_windows_desktop(executable, *, cancelled=None, **options):
         if not app_id:
             raise
         check_cancelled()
+        if arguments:
+            from .app_activation import ActivatedDesktop, activate_application
+            return ActivatedDesktop(activate_application(app_id, tuple(arguments)))
         explorer = Path(os.environ.get('WINDIR') or os.environ.get('SystemRoot') or 'C:/Windows')/'explorer.exe'
         return subprocess.Popen([str(explorer), 'shell:AppsFolder\\'+app_id], **options)
 
