@@ -93,7 +93,7 @@ test('spoofable host hints expose no native authorization or privileged bridge',
   assert.equal(host.kind(), 'android');
   assert.equal(host.isNativeApp(), true);
   assert.equal(host.hasNativeLayout(), true);
-  assert.deepEqual(Object.keys(host).sort(), ['hasNativeLayout', 'isNativeApp', 'kind']);
+  assert.deepEqual(Object.keys(host).sort(), ['hasNativeLayout', 'isNativeApp', 'isSendShortcut', 'kind']);
   assert.equal(Object.isFrozen(host), true);
 });
 

@@ -11,6 +11,11 @@ const BridgeHost = (() => {
     // Native injection can finish after deferred page scripts have executed.
     return !!globalThis.document?.documentElement?.classList.contains('bridge-mobile');
   }
-  return Object.freeze({kind, isNativeApp, hasNativeLayout});
+  function isSendShortcut(event) {
+    if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat || event.altKey || event.shiftKey) return false;
+    const platform = globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || globalThis.navigator?.userAgent || '';
+    return /Mac|iPhone|iPad|iPod/i.test(platform) ? !!event.metaKey && !event.ctrlKey : !!event.ctrlKey && !event.metaKey;
+  }
+  return Object.freeze({kind, isNativeApp, hasNativeLayout, isSendShortcut});
 })();
 if (typeof module === 'object' && module.exports) module.exports = BridgeHost;

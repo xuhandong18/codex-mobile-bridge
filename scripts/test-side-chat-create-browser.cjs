@@ -97,6 +97,16 @@ const server=http.createServer(async(req,res)=>{
       await page.locator('.wb-side-composer:visible button[type=submit]').click();
       await page.waitForFunction(()=>creationPanel().messages.textContent.includes('可以直接聊天'));
       check(writes.filter(write=>write.body.action==='send').length===1,'无需再点创建就能发送消息');
+      const sideInput=page.locator('.wb-side-composer:visible textarea');
+      for(const platform of ['MacIntel','Win32']){
+        await page.evaluate(platform=>{Object.defineProperty(navigator,'platform',{value:platform,configurable:true});Object.defineProperty(navigator,'userAgentData',{value:{platform:platform==='MacIntel'?'macOS':'Windows'},configurable:true});},platform);
+        const before=writes.filter(write=>write.body.action==='send').length;
+        await sideInput.fill('侧边聊天快捷键 '+platform);await sideInput.press('Enter');await sideInput.press('Shift+Enter');
+        await sideInput.press(platform==='MacIntel'?'Control+Enter':'Meta+Enter');
+        check(writes.filter(write=>write.body.action==='send').length===before,'侧边聊天普通回车和其他平台组合键不发送 '+platform);
+        await sideInput.press(platform==='MacIntel'?'Meta+Enter':'Control+Enter');await page.waitForFunction(()=>!creationPanel().input.value&&!creationPanel().busy);
+        check(writes.filter(write=>write.body.action==='send').length===before+1,'侧边聊天按平台快捷键只发送一次 '+platform);
+      }
       const first=await page.evaluate(()=>creationPanel().state.id);
       await page.getByRole('button',{name:'新建侧边聊天',exact:true}).click();await ready();
       check(createWrites().length===2&&await page.evaluate(()=>creationPanel().state.id)!==first,'新建侧边聊天按钮同样直接创建独立聊天');

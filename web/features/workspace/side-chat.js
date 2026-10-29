@@ -75,6 +75,7 @@ class SideChatPanel {
       const add=this.attachments.add.bind(this.attachments);this.attachments.add=files=>{if(files.some(file=>!file.type?.startsWith('image/'))){this.attachments.error='此应用的消息附件仅支持图片；其他文件请使用文件传输。';this.attachments.render();return;}add(files);};
     }
     this.form.onsubmit=e=>{e.preventDefault();this.send();};
+    this.input.onkeydown=event=>{if(!this.sendButton.disabled&&BridgeHost.isSendShortcut(event)){event.preventDefault();this.form.requestSubmit();}};
     this.input.oninput=()=>{this.resizeInput();this.controls();};
     tab.body.append(this.head,this.landing,this.status,this.messageArea,this.approvals,this.queued,this.form);
     this.following=true;this.lastMessageTop=0;
