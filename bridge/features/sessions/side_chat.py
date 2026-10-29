@@ -16,7 +16,8 @@ import time
 import uuid
 from pathlib import Path
 
-from bridge.features.sessions.model import normalize_state, normalize_request
+from bridge.features.sessions.model import normalize_state, normalize_request, normalize_item
+from bridge.features.sessions.message_index import conversation_recency_key, conversation_recency_time
 from bridge.features.workspace.uploads import Uploads
 
 
@@ -229,11 +230,11 @@ class SideChat:
                     self.runtime.write({'id': message['id'], 'error': {'code': -32601, 'message': 'Unsupported side-chat request'}})
                     return
                 self.state['requests'].append(copy.deepcopy(message))
-                self._record_interaction()
                 return
             if not self.ready or params.get('threadId') != self.id:
                 return
             progressed = False
+            content_at = 0
             if method == 'thread/closed':
                 self.error = '侧边聊天已关闭或失效'
                 self.state['requests'] = []
@@ -243,9 +244,8 @@ class SideChat:
                 source = params['turn']
                 turn = self._turn(source['id'])
                 runtime = 'active' if method == 'turn/started' else 'idle'
-                progressed = (self.state['threadRuntimeStatus']['type'] != runtime or
-                              any(turn.get(key) != source[key] for key in ('status', 'error') if key in source) or
-                              bool(source.get('items') and source['items'] != turn['items']))
+                before = {key[0]:key[1] for item in turn['items']
+                          if (key := conversation_recency_key(item, normalize_item))}
                 if method == 'turn/started':
                     pending = next((row for row in self.submissions.values() if row['status'] == 'unknown' and row.get('mode') != 'steer' and not row.get('turnId')), None)
                     if pending is not None:
@@ -255,6 +255,10 @@ class SideChat:
                         turn[key] = source[key]
                 if source.get('items'):
                     turn['items'] = copy.deepcopy(source['items'])
+                    changed = [item for item in turn['items'] if (key := conversation_recency_key(item, normalize_item))
+                               and before.get(key[0]) != key[1]]
+                    progressed = bool(changed)
+                    content_at = max((conversation_recency_time(item, normalize_item) for item in changed), default=0)
                 self.state['threadRuntimeStatus']['type'] = runtime
                 if method == 'turn/completed':
                     self.queue_event.set()
@@ -263,7 +267,10 @@ class SideChat:
                 turn = self._turn(params['turnId'])
                 item = copy.deepcopy(params['item'])
                 index = next((i for i, x in enumerate(turn['items']) if x['id'] == item['id']), None)
-                progressed = index is None or turn['items'][index] != item
+                before = conversation_recency_key(turn['items'][index], normalize_item) if index is not None else None
+                after = conversation_recency_key(item, normalize_item)
+                progressed = after is not None and after != before
+                content_at = conversation_recency_time(item, normalize_item)
                 if index is None:
                     turn['items'].append(item)
                 else:
@@ -272,19 +279,22 @@ class SideChat:
                 turn = self._turn(params['turnId'])
                 item = next((i for i in turn['items'] if i['id'] == params['itemId']), None)
                 if item is not None:
+                    before = conversation_recency_key(item, normalize_item)
                     key = 'text' if method == 'item/agentMessage/delta' else 'aggregatedOutput'
                     item[key] = (item.get(key) or '') + (params.get('delta') or '')
-                    progressed = bool(params.get('delta'))
+                    after = conversation_recency_key(item, normalize_item)
+                    progressed = after is not None and after != before
+                    content_at = conversation_recency_time(params, normalize_item) or conversation_recency_time(item, normalize_item)
             elif method == 'serverRequest/resolved':
-                progressed = any(r['id'] == params.get('requestId') for r in self.state['requests'])
                 self.state['requests'] = [r for r in self.state['requests'] if r['id'] != params.get('requestId')]
                 self.queue_event.set()
             elif method == 'error' and not params.get('willRetry'):
-                progressed = not self.error
                 self.error = '侧边聊天执行失败，请检查模型接入后重试'
                 self.state['threadRuntimeStatus']['type'] = 'idle'
             if progressed:
-                self._record_interaction()
+                content_at = content_at or conversation_recency_time(params, normalize_item)
+                if content_at:
+                    self._record_interaction(content_at)
 
     def activity(self):
         """Read only five scalar fields; never project history or wait for IO."""
@@ -300,10 +310,9 @@ class SideChat:
         finally:
             self.lock.release()
 
-    def _record_interaction(self):
-        # Accepted writes and new native progress count as activity. Reads,
-        # usage notifications and unknown write receipts never advance time.
-        self.recency = max(self.recency, int(time.time() * 1000))
+    def _record_interaction(self, at=None):
+        # Only accepted user operations and actual conversation text changes.
+        self.recency = max(self.recency, int(time.time() * 1000) if at is None else at)
         if self.on_interaction:
             self.on_interaction(self.parent, self.recency)
 

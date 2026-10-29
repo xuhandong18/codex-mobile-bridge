@@ -42,7 +42,7 @@ test('侧边已读上传独立轮次，并清除另一设备的侧边蓝点而�
 
 test('侧边已读只由当前前台面板触发，并将服务端交互时间用于父聊天排序',()=>{
  const updates=[],bumps=[],mainReads=[],app={hidden:false,classList:{contains:()=>true}},context=vm.createContext({workbench:{},document:{hidden:false},clientNavigation:{provider:'codex'},currentId:'parent',currentHost:'local',
-  $:()=>app,sessionActivity:{updateSideChat:(...args)=>updates.push(args)},bumpRecency:(...args)=>bumps.push(args),renderActivity(){},readVisibleChat:()=>mainReads.push(true)});
+  $:()=>app,sessionActivity:{updateSideChat:(...args)=>updates.push(args)},syncRecency:(...args)=>bumps.push(args),renderActivity(){},readVisibleChat:()=>mainReads.push(true)});
  const start=source.indexOf('workbench.onSideChatActivity='),end=source.indexOf('workbench.canQuoteMain=',start);
  vm.runInContext(source.slice(start,end),context);
  const session={id:'parent',host:'local',provider:'codex'},view={id:'side',recency:123};
@@ -50,7 +50,7 @@ test('侧边已读只由当前前台面板触发，并将服务端交互时间�
  context.workbench.current={...session,id:'other'};context.workbench.onViewChange();assert.equal(mainReads.length,1,'切换途中不能将旧主聊天标为已读');
  context.workbench.current={...session,host:'remote'};context.workbench.onViewChange();assert.equal(mainReads.length,1,'同 ID 的不同主机不能互相标为已读');
  context.workbench.onSideChatActivity(session,view,true);
- assert.equal(updates.at(-1)[2],true);assert.deepEqual(bumps.at(-1),['parent','local',123]);
+ assert.equal(updates.at(-1)[2],true);assert.deepEqual(bumps.at(-1).slice(0,3),['parent','local',123]);assert.equal(bumps.at(-1)[3].partial,true);
  context.workbench.onSideChatActivity(session,view,false);assert.equal(updates.at(-1)[2],false);
  context.document.hidden=true;context.workbench.onSideChatActivity(session,view,true);assert.equal(updates.at(-1)[2],false);
  context.document.hidden=false;context.currentId='other';context.workbench.onSideChatActivity(session,view,true);assert.equal(updates.at(-1)[2],false);

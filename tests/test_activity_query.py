@@ -157,6 +157,7 @@ class ActivityFallbackTests(unittest.TestCase):
         bridge.lock = threading.RLock()
         bridge.side_chats = SideChats(None, None, None, 'local')
         bridge.activity_recency_snapshot = {}
+        bridge.recency_index = SimpleNamespace(snapshot=lambda:{})
         locked = LiveSession('locked')
         locked.connected = True
         locked.state = {'threadRuntimeStatus': {'type': 'active'}}

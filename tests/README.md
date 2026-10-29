@@ -76,7 +76,7 @@ npm run test:updater
 
 侧栏聊天排序可运行 `node --test tests/sidebar-sync.test.cjs tests/project-thread-order.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-order-browser.cjs`。后者在手机、平板和电脑宽度检查三种列表方式、最新五条与加载更多、分区/置顶/独立聊天、交互更新、折叠展开和刷新，并预置旧的本机聊天顺序以确认其不再覆盖最近交互排序；还实际操作右键/长按菜单，检查手动聊天调序及排序切换入口已移除、项目内多个置顶的独立时间顺序、取消、普通分页额度、搜索过滤，以及冷启动时全局预读行和最近一百条以外的旧置顶。定向元数据读取的登录、主机、数量及原有可见性边界由 `test_bridge.py` 覆盖。仅使用合成数据，需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
-持续执行的进度排序另运行 `python -B scripts/test-backend.py --source-only -p test_session_recency.py`，覆盖较旧的输入时间与较新的执行更新时间、分页前排序、秒与毫秒字段、旧数据库、空值，以及侧边助手与工具进度计时。`node scripts/test-sidebar-order-browser.cjs` 和 `node scripts/test-side-chat-activity-browser.cjs` 实际验证无新发送时活动查询、侧边新回复推动最近与项目排序，以及单纯轮询保持时间不变；均使用隔离合成数据。
+排除执行过程的排序回归运行 `python -B scripts/test-backend.py --source-only -p 'test_*recency*.py'` 和 `node --test tests/recency-policy.test.cjs`：以真实消息结构覆盖正文和独立文字进度计时、工具/思考/纯状态不计时、重复快照、空增量、缺失时间、秒/毫秒字段、旧数据库、后台补齐和分页前提升旧聊天。还检查慢读不阻塞、失败保旧值、关闭后晚到丢弃、文件替换/截断、超长/未完成行、无进展断点、缓存不存正文，以及 SSH 注入独立执行和数据目录边界。前端测试覆盖 v1 快照失效、权威值下调及本机确认操作的独立覆盖。`node scripts/test-sidebar-order-browser.cjs` 和 `node scripts/test-side-chat-activity-browser.cjs` 在手机、平板、电脑真实 DOM 中验证新文字推动最近与项目排序，工具/思考/纯状态不重排而蓝绿提示正常更新；均使用隔离合成数据，不操作真实客户端。
 
 侧栏跨设备同步运行 `node --test tests/sidebar-preferences.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p 'test_sidebar*.py'`；真实页面验证为 `node scripts/test-sidebar-preferences-browser.cjs`。后者使用独立浏览器上下文，在手机、平板和电脑宽度实际操作长按/右键菜单，检查旧设置迁移、前台自动同步、项目上下顺序、原生项目跨分区移动、分区顺序、聊天归属、整页重载及丢失保存回包时不重复提交。后端另验证原生项目完成后无需浏览器轮询即可清除旧显示覆盖、未知原生结果不清除，以及操作期间另一设备的新选择优先。所有数据与原生客户端均为合成夹具，需要已有 Playwright/Chromium，不启动真实聊天或模型。
 

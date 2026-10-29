@@ -12,9 +12,146 @@ import os
 import threading
 import uuid
 from collections import OrderedDict
+from datetime import datetime, timezone
 
 MAX_RECORD = 16 * 1024 * 1024
 CHECKPOINT_EVERY = 32
+
+
+def conversation_recency_key(item, summarize):
+    """Only visible conversation content advances ordering, never process rows."""
+    row = summarize(item)
+    if row.get('role') not in ('user', 'assistant') or row.get('isUserContext'):
+        return None
+    text = (row.get('text') or '').strip()
+    attachments = [part for part in item.get('content') or [] if isinstance(part, dict)
+                   and part.get('type') in ('image', 'input_image', 'localImage', 'file', 'input_file')]
+    if not text and not attachments:
+        return None
+    content = json.dumps([row['role'], text, attachments], sort_keys=True, ensure_ascii=False)
+    return str(item.get('id') or item.get('clientUserMessageId') or ''), _digest(content.encode())
+
+
+def _recency_timestamp(record, item):
+    value = record.get('timestamp', item.get('timestamp'))
+    try:
+        if isinstance(value, bool) or value is None:
+            return 0
+        if isinstance(value, (int, float)) or isinstance(value, str) and value.replace('.', '', 1).isdigit():
+            number = float(value)
+            return max(0, int(number * (1000 if number < 1e11 else 1)))
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        return max(0, int((stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).timestamp()*1000))
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
+
+def conversation_recency_time(item, summarize):
+    return _recency_timestamp({}, summarize(item))
+
+
+def scan_message_recency(path, thread_id, previous, summarize, *, budget=4*1024*1024):
+    """Bounded tail/backfill plus append checkpoints, retaining no message body."""
+    with open(path, 'rb') as stream:
+        stat = os.fstat(stream.fileno())
+        # Always verify identity, including when the first read starts in a tail.
+        try:
+            header = json.loads(stream.readline(MAX_RECORD+1))
+        except (ValueError, UnicodeDecodeError):
+            header = {}
+        if header.get('type') == 'session_meta' and header.get('payload', {}).get('id') != thread_id:
+            raise ValueError('Rollout identity does not belong to this chat')
+        try:
+            reset = previous is None or previous.get('path') != str(path) or not _matches(stream, previous)
+        except (KeyError, TypeError, ValueError):
+            reset = True
+        at = 0 if reset else previous.get('at', 0)
+        seen = OrderedDict() if reset else OrderedDict(previous.get('seen', {}))
+        backfill = None if reset else previous.get('backfill')
+        skip_line = False if reset else previous.get('skipLine', False)
+        offset = max(0, stat.st_size-budget) if reset else previous['offset']
+        stream.seek(offset)
+        if reset and offset:
+            skip_line = not stream.readline(MAX_RECORD+1).endswith(b'\n')
+            backfill = stream.tell()
+        offset = stream.tell()
+
+        def consume(end, allowance):
+            nonlocal at, skip_line
+            spent, partial = 0, False
+            while stream.tell() < end and spent < allowance:
+                begin = stream.tell()
+                if skip_line:
+                    raw = stream.readline(min(65536, end-begin, allowance-spent))
+                    spent += len(raw)
+                    skip_line = not raw.endswith(b'\n')
+                    continue
+                # A backfill boundary may split a valid long message. Finish
+                # the record up to MAX_RECORD, within this file snapshot.
+                raw = stream.readline(min(MAX_RECORD+1, stat.st_size-begin))
+                spent += len(raw)
+                if len(raw) > MAX_RECORD:
+                    # Remember an unfinished oversized row across appends; its
+                    # JSON-shaped suffix must never become a separate message.
+                    skip_line = not raw.endswith(b'\n')
+                    continue
+                if not raw.endswith(b'\n'):
+                    stream.seek(begin)
+                    partial = True
+                    break
+                try:
+                    record = json.loads(raw)
+                    item = _item(record, begin)
+                    payload = record.get('payload') or {}
+                    if item and payload.get('id'):
+                        item['id'] = payload['id']
+                    if item is None and record.get('type') == 'event_msg':
+                        if payload.get('type') in ('agent_message', 'agentMessage'):
+                            item = dict(payload, type='agentMessage', id=payload.get('id', str(begin)),
+                                        text=payload.get('text', payload.get('message', '')))
+                        elif payload.get('type') == 'user_message':
+                            item = {'type':'userMessage', 'id':payload.get('id', str(begin)),
+                                    'content':[{'type':'input_text', 'text':payload.get('message', '')}]}
+                    key = conversation_recency_key(item, summarize) if item else None
+                    stamp = _recency_timestamp(record, item) if key else 0
+                except (ValueError, UnicodeDecodeError, TypeError, AttributeError):
+                    continue
+                if not stamp:
+                    continue
+                identifier, digest = key
+                old = seen.get(identifier)
+                if old and (old['hash'] == digest or old['at'] >= stamp):
+                    continue
+                seen[identifier] = {'hash':digest, 'at':stamp}
+                seen.move_to_end(identifier)
+                while len(seen) > 64:
+                    seen.popitem(last=False)
+                at = max(at, stamp)
+            return spent, partial
+
+        spent, partial = consume(stat.st_size, budget)
+        offset = stream.tell()
+        if at:
+            backfill = None
+        if backfill is not None and spent < budget:
+            forward_skip = skip_line
+            end = backfill
+            lower = max(0, end-(budget-spent))
+            stream.seek(lower)
+            skip_line = False
+            if lower:
+                skip_line = not stream.readline(MAX_RECORD+1).endswith(b'\n')
+            begin = stream.tell()
+            if begin < end:
+                consume(end, budget-spent)
+            backfill = None if not lower or at else begin if begin < end else lower
+            skip_line = forward_skip
+        checkpoint = {'path':str(path), 'identity':_identity(stat), 'size':stat.st_size,
+                      'mtime':stat.st_mtime_ns, 'offset':offset, 'guard':_guard(stream, offset),
+                      'at':at, 'seen':dict(seen), 'backfill':backfill, 'skipLine':skip_line}
+        return {'at':at, 'complete':backfill is None and (offset >= stat.st_size or partial),
+                'pending':partial or skip_line,
+                'checkpoint':checkpoint}
 
 
 def _digest(value):

@@ -182,7 +182,7 @@ class SideActivityTests(unittest.TestCase):
         finally:
             release.set()
 
-    def test_accepted_writes_and_requests_count_but_retries_reads_and_rename_do_not(self):
+    def test_accepted_writes_count_but_request_arrival_retries_reads_and_rename_do_not(self):
         child = self.create()
         manager = self.bridge.side_chats
         self.assertEqual(child.view()['recency'], 0)
@@ -198,7 +198,7 @@ class SideActivityTests(unittest.TestCase):
         with patch('time.time', return_value=20):
             child._event({'id': 'approval', 'method': 'item/commandExecution/requestApproval',
                           'params': {'threadId': child.id, 'turnId': 'turn'}})
-        self.assertEqual(child.view()['recency'], 20000)
+        self.assertEqual(child.view()['recency'], 10000)
         with patch('time.time', return_value=30):
             child.respond('approval', {'decision': 'accept'})
         self.assertEqual(child.view()['recency'], 30000)
@@ -223,7 +223,7 @@ class SideActivityTests(unittest.TestCase):
         with patch.object(child.runtime, 'write', side_effect=SideChatError('unknown write')):
             with self.assertRaises(SideChatError):
                 child.respond('approval', {'decision': 'accept'})
-        self.assertEqual(child.view()['recency'], 20000, 'The request is real activity; the unknown response adds none')
+        self.assertEqual(child.view()['recency'], 0, 'Request arrival and an unknown response are not confirmed interactions')
         other = self.create(slot=str(uuid.uuid4()))
         error = SideChatError('rejected')
         error.rpc_error = {'code': -1}
@@ -231,7 +231,7 @@ class SideActivityTests(unittest.TestCase):
             with self.assertRaises(SideChatError):
                 other.send('rejected', str(uuid.uuid4()))
         self.assertEqual(other.view()['recency'], 0)
-        self.assertEqual(self.bridge.side_chats.recencies(), {support.THREAD: 20000})
+        self.assertEqual(self.bridge.side_chats.recencies(), {})
 
     def test_queued_send_counts_at_dispatch_and_steer_counts_once(self):
         child = self.create()
@@ -280,6 +280,8 @@ class SideActivityTests(unittest.TestCase):
             db.executemany('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)', [
                 (str(uuid.uuid4()), 'Recent', '/workspace', 10+i, 0, 'Codex Desktop', 'vscode', 'unused')
                 for i in range(120)])
+            db.execute('ALTER TABLE threads ADD COLUMN recency_at INT')
+            db.execute('UPDATE threads SET recency_at=updated_at')
         self.assertNotIn(support.THREAD, [row['id'] for row in self.bridge.list(local_only=True)])
         with patch('time.time', return_value=500):
             child.send('promote old parent', str(uuid.uuid4()))
@@ -318,8 +320,9 @@ class SideActivityTests(unittest.TestCase):
         with patch('time.time', return_value=10):
             child.send('local question', str(uuid.uuid4()))
         remote = SimpleNamespace(host='ssh', lock=threading.RLock(), live={}, origins={}, listed=set(),
+                                 recency_index=SimpleNamespace(request=lambda: None, snapshot=lambda: {}),
                                  _access=self.bridge._access, store=SimpleNamespace(list=lambda **kwargs: [
-                                     {'id': support.THREAD, 'title': 'Remote', 'cwd': '/workspace', 'updated_at': 2}]))
+                                     {'id': support.THREAD, 'title': 'Remote', 'cwd': '/workspace', 'recency_at': 2, 'updated_at': 2}]))
         with patch.object(self.bridge.hosts, 'hosts', return_value={'ssh': {'alias': 'fixture'}}), \
                 patch.object(self.bridge, 'for_host', return_value=remote):
             rows = self.bridge.list()

@@ -206,6 +206,7 @@ class IntegrationTests(unittest.TestCase):
             raise StoreUnavailable('Database temporarily unavailable')
         self.bridge.store.list = unavailable
         remote = SimpleNamespace(host='remote:test', lock=threading.RLock(), live={}, listed=set(), origins={}, _access=self.bridge._access,
+                                 recency_index=SimpleNamespace(request=lambda: None, snapshot=lambda: {}),
                                  store=SimpleNamespace(list=lambda **kw: [{'id': THREAD, 'title': 'Remote chat', 'cwd': '/remote', 'updated_at': 1}]))
         self.bridge.hosts.hosts = lambda: {'remote:test': {'alias': 'test'}}
         self.bridge.for_host = lambda host: remote
@@ -225,11 +226,13 @@ class IntegrationTests(unittest.TestCase):
     def test_selected_metadata_reads_old_pins_with_original_visibility_filters_without_loading_chat(self):
         archived, child, cli = (str(uuid.uuid4()) for _ in range(3))
         with closing(sqlite3.connect(str(self.root / 'state_5.sqlite'))) as db, db:
-            db.executemany('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+            db.executemany('INSERT INTO threads(id,title,cwd,updated_at,archived,originator,source,rollout_path) VALUES(?,?,?,?,?,?,?,?)',
                            [(str(uuid.uuid4()), 'Recent', '/workspace', 200+i, 0, 'Codex Desktop', 'vscode', 'unused') for i in range(120)] +
                            [(archived, 'Archive', '/workspace', 2, 1, 'Codex Desktop', 'vscode', 'unused'),
                             (child, 'Child', '/workspace', 2, 0, 'Codex Desktop', '{"subagent":{}}', 'unused'),
                             (cli, 'CLI', '/workspace', 2, 0, 'codex_cli_rs', 'cli', 'unused')])
+            db.execute('ALTER TABLE threads ADD COLUMN recency_at INTEGER')
+            db.execute('UPDATE threads SET recency_at=updated_at')
         self.assertNotIn(THREAD, {row['id'] for row in self.bridge.list(local_only=True)})
         selected = [THREAD, archived, child, cli]
         rows = self.bridge.list(ids=selected, source='desktop', local_only=True)
@@ -679,7 +682,7 @@ class IntegrationTests(unittest.TestCase):
         hosts = AppHosts(self.root)
         hosts.state = lambda: {'remote-projects': [{'id': 'p', 'hostId': 'remote', 'label': 'Work', 'remotePath': '/work'}]}
         rows = hosts.decorate([{'id': THREAD, 'cwd': '/work/sub', 'recency_at': 5, 'updated_at': 20}], 'remote', 'Server')
-        self.assertEqual(rows[0]['recency'], 20000)
+        self.assertEqual(rows[0]['recency'], 5000)
         self.assertEqual(rows[0]['projectKey'], 'remote|p')
         self.assertEqual(rows[0]['projectName'], 'Work')
         with self.assertRaises(KeyError):
@@ -693,8 +696,9 @@ class IntegrationTests(unittest.TestCase):
         remote.lock = threading.RLock()
         remote.live = {}
         remote.origins = {}
+        remote.recency_index.snapshot.return_value = {}
         remote._access = self.bridge._access
-        remote.store.list.return_value = [{'id': 'remote-thread', 'cwd': '/work', 'updated_at': 50}]
+        remote.store.list.return_value = [{'id': 'remote-thread', 'cwd': '/work', 'recency_at': 50, 'updated_at': 50}]
         self.bridge.hosts.hosts = lambda: {'remote': {'alias': 'server'}}
         self.bridge.for_host = lambda host: remote
         rows = self.bridge.list(limit=1)

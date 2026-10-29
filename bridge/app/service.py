@@ -24,13 +24,14 @@ from bridge.features.sessions.title_rename import TitleRenames
 from bridge.clients.codex.title_runtime import generate_title, access_stamp, TitleError
 from bridge.features.sessions.activity import ActivityQueries, SubagentActivity
 from bridge.features.sessions.recovery import capacity_error
+from bridge.features.sessions.recency import RecencyIndex
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.activity import DesktopActivity
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
-from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text, session_title, session_title_source, embedded_image_id
+from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, normalize_item, ordered_turns, pending_requests, async_requests, request_id, user_display_text, session_title, session_title_source, embedded_image_id
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
@@ -38,7 +39,7 @@ from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, manage_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
 from bridge.features.sessions.timeline import Timeline
-from bridge.features.sessions.message_index import MessageNavigation
+from bridge.features.sessions.message_index import MessageNavigation, conversation_recency_key, conversation_recency_time
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
 from bridge.features.accounts.cli_access import CliAccess
@@ -196,6 +197,7 @@ class Bridge:
                                    executable_getter=executable_getter, on_first_message=self._side_title)
         self.closed = threading.Event()
         Path(data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.recency_index = RecencyIndex(self.store, Path(data_dir)/'session-recency-v2.json')
         self.auto_titles = AutoTitles(data_dir)
         self.title_renames = TitleRenames(self)
         self.ledger_path = Path(data_dir) / "submissions.json"
@@ -207,6 +209,9 @@ class Bridge:
         self.creations_path = self.data_dir / 'creations.json'
         self.creations = json.loads(self.creations_path.read_text(encoding='utf-8')) if self.creations_path.exists() else {}
         self.submissions = json.loads(self.ledger_path.read_text(encoding='utf-8')) if self.ledger_path.exists() else {}
+        for key, entry in self.submissions.items():
+            if entry.get('status') == 'accepted' and isinstance(entry.get('at'), (int, float)):
+                self.recency_index.record(key.split(':')[0], entry['at']*1000)
         self.goal_commands_path = self.data_dir / 'goal-commands.json'
         self.goal_commands = json.loads(self.goal_commands_path.read_text(encoding='utf-8')) if self.goal_commands_path.exists() else {}
         self.goal_lock = threading.RLock()
@@ -787,6 +792,7 @@ class Bridge:
                 self._call(target, 'thread-follower-edit-last-user-turn', params, timeout=90)
                 entry['status'] = 'accepted'
                 self._save_actions()
+                self.recency_index.record(target.id, time.time()*1000)
                 return self._action_result(entry)
 
     def _action_result(self, entry):
@@ -1007,7 +1013,9 @@ class Bridge:
                     not session.native_attaching and not (session.runtime == 'cli' and session.connected)):
                 return
             newly_connected = not session.connected or session.runtime != 'cli'
+            before = self._recency_content(session.state) if not newly_connected else None
             session.state = state
+            self._record_text_change(session, before)
             session.runtime = 'cli'
             session.owner = 'cli:' + thread_id
             session.connected = True
@@ -1063,19 +1071,15 @@ class Bridge:
             bridge, label = host_source
             try:
                 available = bridge.store.available_sources() if include_sources else []
-                rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source,
-                                         **({'ids': ids} if ids is not None else {}))
+                bridge.recency_index.request()
+                content_recencies = bridge.recency_index.snapshot()
                 side_recencies = bridge.side_chats.recencies() if bridge.host == 'local' else {}
-                if ids is None and side_recencies:
-                    # An old parent can now rank before the database prefix.
-                    # Fetch only its metadata with exactly the original filters,
-                    # merge before pagination, and never load/activate a chat.
-                    seen = {row['id'] for row in rows}
-                    missing = [sid for sid in side_recencies if sid not in seen]
-                    for start in range(0, len(missing), 50):
-                        batch = missing[start:start + 50]
-                        rows.extend(bridge.store.list(ids=batch, limit=len(batch), archived=archived,
-                                                      query=query, source=source))
+                overlay = dict(content_recencies)
+                for sid, at in side_recencies.items():
+                    overlay[sid] = max(at, overlay.get(sid, 0))
+                rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source,
+                                         **({'ids': ids} if ids is not None else {}),
+                                         **({'recencies':overlay} if overlay else {}))
                 # Multiple saved projects can contain the same directory. Keep
                 # the confirmed creation choice ahead of cwd inference, without
                 # overriding subsequent explicit desktop membership changes.
@@ -1085,7 +1089,7 @@ class Bridge:
                                     and entry.get('host') == bridge.host}
                 rows = self.hosts.decorate(rows, bridge.host, label, created_project_keys=created_projects)
                 for row in rows:
-                    row['recency'] = max(row['recency'], side_recencies.get(row['id'], 0))
+                    row['recency'] = max(row['recency'], overlay.get(row['id'], 0))
                 with bridge.lock:
                     bridge.listed.update(row['id'] for row in rows)
                     for row in rows:
@@ -1124,6 +1128,7 @@ class Bridge:
             sessions = [(sid, self.live.get(sid)) for sid in dict.fromkeys(identifiers) if sid in self.listed]
         rows = []
         side_recencies = self.side_chats.recencies()
+        content_recencies = self.recency_index.snapshot()
         for sid, session in sessions:
             sides = self.side_chats.activity(sid)
             side_running = any(side['connected'] and side['status'] == 'active' for side in sides)
@@ -1137,7 +1142,7 @@ class Bridge:
                 finally:
                     session.condition.release()
             row = {'id': sid, 'host': self.host, 'connected': bool(connected),
-                   'recency': max(self.activity_recency_snapshot.get(sid, 0), side_recencies.get(sid, 0)),
+                   'recency': max(self.activity_recency_snapshot.get(sid, 0), side_recencies.get(sid, 0), content_recencies.get(sid, 0)),
                    'activityConnected': bool(running or side_running), 'status': 'active' if running or side_running else 'unknown',
                    'parentStatus': 'active' if running else 'unknown', 'runningSubagents': 0,
                    'subagentsKnown': False, 'turnId': None, 'turnStatus': None, 'sideChats': sides}
@@ -1149,6 +1154,7 @@ class Bridge:
     def _refresh_activity_recencies(self, identifiers):
         # Sidebar ordering is independent of runtime confirmation. Keep one
         # background read per host; a slow SQLite/SSH read cannot hold badges up.
+        self.recency_index.request(identifiers)
         with self.lock:
             if self.closed.is_set() or self.activity_recency_worker is not None and self.activity_recency_worker.is_alive():
                 return
@@ -1199,8 +1205,9 @@ class Bridge:
         native_status = self.desktop_activity.read([s.id for s in sessions if not s.connected and s.origin == 'desktop'],
                                                    timeout=max(0, deadline-time.monotonic()), live=lambda sid: by_id[sid].connected)
         side_recencies = self.side_chats.recencies()
+        content_recencies = self.recency_index.snapshot()
         with self.lock:
-            recencies = {session.id: max(self.activity_recency_snapshot.get(session.id, 0), side_recencies.get(session.id, 0))
+            recencies = {session.id: max(self.activity_recency_snapshot.get(session.id, 0), side_recencies.get(session.id, 0), content_recencies.get(session.id, 0))
                          for session in sessions}
 
         def parent_snapshot(session):
@@ -1747,6 +1754,29 @@ class Bridge:
                     timings.get('open', 0), timings.get('snapshot', 0), timings.get('runtime', 0),
                     (time.monotonic() - started) * 1000)
 
+    @staticmethod
+    def _recency_content(state):
+        result = []
+        for turn in reversed(ordered_turns(state or {})):
+            for item in reversed(items_array(turn.get('items', []))):
+                key = conversation_recency_key(item, normalize_item)
+                if key:
+                    result.append((turn.get('turnId'), *key, conversation_recency_time(item, normalize_item)))
+        return tuple(reversed(result))
+
+    def _record_text_change(self, session, before):
+        # The initial owner snapshot establishes a baseline; opening a chat is
+        # never an interaction. Saved native timestamps fill it asynchronously.
+        if before is not None:
+            after = self._recency_content(session.state)
+            known = {row[:2]:row[2] for row in before}
+            changed = [row for row in after if row[:2] in known and known[row[:2]] != row[2]]
+            last = next((i for i,row in enumerate(after) if before and row[:2] == before[-1][:2]), None)
+            appended = after if not before else ([row for row in after[last+1:] if row[:2] not in known] if last is not None else [])
+            at = max((row[3] for row in (*changed, *appended)), default=0)
+            if at:
+                self.recency_index.record(session.id, at)
+
     def _event(self, message):
         if message.get("method") == "client-status-changed":
             params = message.get("params", {})
@@ -1786,6 +1816,7 @@ class Bridge:
             if not session.owner or message.get("sourceClientId") != session.owner:
                 return
             reason = 'snapshot_invalid'
+            before = self._recency_content(session.state) if session.connected else None
             try:
                 if change.get("type") == "snapshot":
                     state = change["conversationState"]
@@ -1807,6 +1838,7 @@ class Bridge:
                     raise ValueError("CLI owner identity mismatch")
                 newly_connected = not session.connected or session.runtime != 'desktop'
                 session.state = state
+                self._record_text_change(session, before)
                 session.revision = change["revision"]
                 if change.get('type') == 'snapshot':
                     session.snapshot_sequence += 1
@@ -3123,6 +3155,7 @@ class Bridge:
         with self.submit_lock:
             self.submissions[key]["status"] = "accepted"
             self._save_ledger()
+        self.recency_index.record(session.id, time.time()*1000)
         with session.condition:
             session.changed()
         try:
@@ -3245,11 +3278,14 @@ class Bridge:
                 if action == "accept":
                     validate_form(content, params.get("requestedSchema", {}))
                 payload["response"] = {"action": action, "content": content if action == "accept" else None}
-        return self._call(session, mapping[method], payload)
+        result = self._call(session, mapping[method], payload)
+        self.recency_index.record(session.id, time.time()*1000)
+        return result
 
     def close(self):
         self.activity_queries.close()
         self.closed.set()
+        self.recency_index.close()
         self.auto_titles.close()
         self.subagent_activity.close()
         self.desktop_activity.close()

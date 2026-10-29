@@ -35,6 +35,7 @@ class StoreTests(unittest.TestCase):
     def test_checkpointed_wal_without_sidecars_is_readable_without_source_writes(self):
         before = hashlib.sha256(self.path.read_bytes()).hexdigest()
         self.assertEqual(self.store.list()[0]['title'], 'Saved chat')
+        self.assertEqual(self.store.list(recencies={'test':123})[0]['title'], 'Saved chat')
         self.assertEqual(self.store.get('test')['cwd'], '/project')
         self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), before)
         self.assertEqual([p.name for p in self.root.iterdir()], ['state_5.sqlite'])
@@ -157,6 +158,8 @@ class StoreTests(unittest.TestCase):
                 ('cli-archived', 'Older', '/fixture', 3, 1, 'codex_cli_rs', 'cli'),
                 ('legacy-desktop', 'Legacy App', '/fixture', 4, 0, None, 'vscode'),
             ])
+            db.execute('ALTER TABLE threads ADD COLUMN recency_at INT')
+            db.execute('UPDATE threads SET recency_at=updated_at')
         self.assertEqual(self.store.available_sources(), ['cli', 'desktop'])
         self.assertEqual([row['id'] for row in self.store.list(source='cli', limit=100)], ['cli-deep'])
         self.assertEqual([row['id'] for row in self.store.list(source='cli', query='Find', offset=0)], ['cli-deep'])

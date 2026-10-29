@@ -83,12 +83,12 @@ class RemoteStore:
 
     def call(self, method, args):
         source = source_text('features/sessions/store.py')
-        navigation = method in ('navigation_scan', 'navigation_window')
+        navigation = method in ('navigation_scan', 'navigation_window', 'message_recencies')
         if navigation:
             source = source_text('features/sessions/model.py') + '\n' + source_text('features/sessions/message_index.py') + '\n' + source
         suffix = ('\nimport os\nhome_source = "environment" if os.environ.get("CODEX_HOME") else "default"\n'
                   's = SessionStore(Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))' +
-                  (', navigation_source=__import__("types").SimpleNamespace(scan=scan_rollout, window=read_window, summarize=normalize_item)' if navigation else '') + ')\n')
+                  (', navigation_source=__import__("types").SimpleNamespace(scan=scan_rollout, window=read_window, summarize=normalize_item, recency=scan_message_recency)' if navigation else '') + ')\n')
         call = 'result = s.' + method + '(**' + payload(args) + ')\n'
         if navigation:
             suffix += ('try:\n    ' + call +
@@ -157,6 +157,12 @@ class RemoteStore:
 
     def recencies(self, identifiers):
         return self.call('recencies', {'identifiers': identifiers})
+
+    def recency_inventory(self):
+        return self.call('recency_inventory', {})
+
+    def message_recencies(self, identifiers, checkpoints=None):
+        return self.call('message_recencies', {'identifiers':identifiers, 'checkpoints':checkpoints})
 
     def discovery_diagnostics(self, thread_id=None):
         return self.call('discovery_diagnostics', {'thread_id': thread_id})

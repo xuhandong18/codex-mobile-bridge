@@ -81,11 +81,17 @@ const server=http.createServer(async(req,res)=>{
       await page.evaluate(()=>loadList(true));
       check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'列表刷新保留侧边交互排序');
       recency=250;sides[0].recency=250;
-      sides[0].turns[0].messages.push({id:'progress',role:'assistant',phase:'commentary',text:'有新的执行进度'});
+      sides[0].turns[0].messages.push({id:'progress',role:'assistant',phase:'commentary',text:'有新的文字进度'});
       await page.evaluate(slot=>workbench.current.files.find(tab=>tab.slot===slot).sideChat.load(),firstSlot);
       check(await page.evaluate(()=>listRows.find(row=>row.id===currentId).recency)===250,'没有新发送时，侧边新回复也更新父聊天排序时间');
+      sides[0].turns[0].messages.push({id:'tool',role:'tool',type:'commandExecution',command:'pwd',output:'updated output'});
+      sides[0].turns[0].messages.push({id:'thought',role:'reasoning',type:'reasoning',text:'thinking summary'});
+      await page.evaluate(slot=>workbench.current.files.find(tab=>tab.slot===slot).sideChat.load(),firstSlot);
+      await refresh();
+      check(await page.evaluate(()=>listRows.find(row=>row.id===currentId).recency)===250,'侧边工具与思考更新不推进排序时间');
       mainStatus='active';mainTurn='next-main';sequence++;await refresh();mainStatus='idle';sequence++;await refresh();await indicator('completed');
       check(true,'主聊天完成时侧边仍在工作也显示蓝点');
+      check(await page.evaluate(()=>listRows.find(row=>row.id===currentId).recency)===250,'完成蓝点独立更新且不推进排序时间');
       await page.locator('#sidebar .sidebar-toggle').click();
       await page.locator('#chat .wb-tab[data-tab="chat"] [role=tab]').click();
       await indicator('running');check(true,'读完主聊天后继续显示侧边运行绿点');

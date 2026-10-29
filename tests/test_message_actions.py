@@ -58,14 +58,17 @@ class MessageActionTests(unittest.TestCase):
 
     def test_latest_edit_native_owner_and_durable_deduplication(self):
         body = self.body()
-        result = self.bridge.message_action(self.source, body)
+        with patch('time.time', return_value=5):
+            result = self.bridge.message_action(self.source, body)
         self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(self.bridge.recency_index.snapshot().get(self.source),5000)
         self.assertEqual(self.call.call_args.args[1], 'thread-follower-edit-last-user-turn')
         params = self.call.call_args.args[2]
         self.assertEqual(params, {'turnId': 'last', 'message': 'Edited', 'shouldSendPermissionOverrides': False, 'serviceTier': 'default'})
         self.assertEqual(DesktopIPC.VERSIONS['thread-follower-edit-last-user-turn'], 2)
         self.bridge.message_action(self.source, body)
         self.assertEqual(self.call.call_count, 1)
+        self.assertEqual(self.bridge.recency_index.snapshot().get(self.source),5000)
         self.bridge.close()
         self.bridge = Bridge(self.root, self.root / 'data')
         self.assertEqual(self.bridge.message_action(self.source, body)['status'], 'accepted')

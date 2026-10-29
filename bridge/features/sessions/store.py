@@ -29,9 +29,10 @@ class SessionStore:
     def _navigation_source(self):
         if self.navigation_source is None:
             from types import SimpleNamespace
-            from bridge.features.sessions.message_index import scan_rollout, read_window
+            from bridge.features.sessions.message_index import scan_rollout, read_window, scan_message_recency
             from bridge.features.sessions.model import normalize_item
-            self.navigation_source = SimpleNamespace(scan=scan_rollout, window=read_window, summarize=normalize_item)
+            self.navigation_source = SimpleNamespace(scan=scan_rollout, window=read_window, summarize=normalize_item,
+                                                     recency=scan_message_recency)
         return self.navigation_source
 
     def _navigation_path(self, thread_id):
@@ -146,28 +147,36 @@ class SessionStore:
 
     @staticmethod
     def recency(row):
-        """Use native activity, including progress after the last user input."""
+        """Native user interaction/creation only; generic updates include tools."""
         return max(row.get('recency_at_ms') or (row.get('recency_at') or 0)*1000,
-                   row.get('updated_at_ms') or (row.get('updated_at') or 0)*1000)
+                   row.get('created_at_ms') or (row.get('created_at') or 0)*1000)
 
     @staticmethod
     def _recency_order(columns):
         values = []
-        for prefix in ('recency_at', 'updated_at'):
+        for prefix in ('recency_at', 'created_at'):
             fields = [f'NULLIF({name}, 0)' + ('' if name.endswith('_ms') else '*1000')
                       for name in (prefix+'_ms', prefix) if name in columns]
             values.append('COALESCE(' + ','.join([*fields, '0']) + ')' if fields else '0')
         return 'MAX(' + ','.join(values) + ')'
 
-    def list(self, query="", limit=100, offset=0, archived=False, source='all', ids=None):
+    def list(self, query="", limit=100, offset=0, archived=False, source='all', ids=None, recencies=None):
         if source not in ('all', 'desktop', 'cli'):
             raise ValueError('不支持的会话来源')
         if ids is not None:
             if not isinstance(ids, list) or not 1 <= len(ids) <= 50 or any(not isinstance(value, str) or not re.fullmatch(r'[0-9a-f-]{36}', value) for value in ids):
                 raise ValueError('会话标识列表无效')
         with self._connect() as conn:
+            if recencies:
+                if not isinstance(recencies, dict) or any(not isinstance(sid, str) or type(at) is not int or at < 0
+                                                        for sid, at in recencies.items()):
+                    raise ValueError('会话排序时间无效')
+                # TEMP belongs to this read-only connection, never the native
+                # database. One SSH call can filter and rank the whole inventory.
+                conn.execute('CREATE TEMP TABLE conversation_recency(id TEXT PRIMARY KEY, at INTEGER NOT NULL)')
+                conn.executemany('INSERT INTO conversation_recency VALUES(?,?)', recencies.items())
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
-            fields = [name for name in ("id", "name", "title", "first_user_message", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned", "thread_section_id", "section_position", "project_id") if name in columns]
+            fields = [name for name in ("id", "name", "title", "first_user_message", "cwd", "created_at", "created_at_ms", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned", "thread_section_id", "section_position", "project_id") if name in columns]
             where = ["archived = ?"]
             params = [int(archived)]
             where.append(self._user_origin_filter(columns))
@@ -185,6 +194,8 @@ class SessionStore:
                 where.append("(" + " OR ".join(name + " LIKE ?" for name in search_fields) + ")")
                 params += ["%" + query + "%"] * len(search_fields)
             recency = self._recency_order(columns)
+            if recencies:
+                recency = 'MAX('+recency+',COALESCE((SELECT at FROM conversation_recency WHERE id=threads.id),0))'
             rows = conn.execute("SELECT " + ",".join(fields) + " FROM threads WHERE " + " AND ".join(where) + " ORDER BY " + recency + " DESC, id DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
             return [dict(row, origin=self._origin(dict(row))) for row in rows]
 
@@ -275,9 +286,47 @@ class SessionStore:
             return {}
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
-            fields = [name for name in ('recency_at_ms', 'recency_at', 'updated_at_ms', 'updated_at') if name in columns]
+            fields = [name for name in ('recency_at_ms', 'recency_at', 'created_at_ms', 'created_at') if name in columns]
             rows = conn.execute('SELECT ' + ','.join(['id', *fields]) + ' FROM threads WHERE id IN (' + ','.join('?' for _ in identifiers) + ')', identifiers)
             return {r['id']: self.recency(dict(r)) for r in rows}
+
+    def recency_inventory(self):
+        """All visible metadata for background scheduling, never message bodies."""
+        with self._connect() as conn:
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
+            fields = [name for name in ('id', 'rollout_path', 'recency_at', 'recency_at_ms',
+                                       'created_at', 'created_at_ms', 'updated_at', 'updated_at_ms') if name in columns]
+            where = [self._user_origin_filter(columns)]
+            if 'source' in columns:
+                where.append("COALESCE(source, '') NOT LIKE '%\"subagent\"%'")
+            if 'thread_source' in columns:
+                where.append("COALESCE(thread_source, '') != 'subagent'")
+            rows = [dict(row) for row in conn.execute('SELECT '+','.join(fields)+' FROM threads WHERE '+' AND '.join(where))]
+        for row in rows:
+            try:
+                path = Path(row.get('rollout_path') or '').resolve()
+                if self._rollout_in_home(path):
+                    stat = path.stat()
+                    row.update(rollout_size=stat.st_size, rollout_mtime_ns=stat.st_mtime_ns)
+            except OSError:
+                continue
+        return rows
+
+    def message_recencies(self, identifiers, checkpoints=None):
+        if not identifiers:
+            return {}
+        if len(identifiers) > 64:
+            raise ValueError('Too many recency readers')
+        source, checkpoints, result = self._navigation_source(), checkpoints or {}, {}
+        for identifier in identifiers:
+            try:
+                result[identifier] = source.recency(self._navigation_path(identifier), identifier,
+                                                    checkpoints.get(identifier), source.summarize)
+            except (OSError, ValueError, KeyError, PermissionError):
+                # One unreadable rollout must not stall other conversations or
+                # replace a verified time with a file modification timestamp.
+                continue
+        return result
 
     def get(self, thread_id):
         with self._connect() as conn:

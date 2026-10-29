@@ -36,8 +36,13 @@ const sessionActivity=new SessionActivity({onRead:async(key,row)=>{
 const recentInteractions=new Map();
 function bumpRecency(id,host,at=Date.now()){
   const key=chatKey(id,host);recentInteractions.set(key,Math.max(at,recentInteractions.get(key)||0));
+  syncRecency(id,host,at);
+}
+function syncRecency(id,host,at,{partial=false}={}){
+  if(!Number.isFinite(at)||at<0)return;
+  const key=chatKey(id,host),value=Math.max(at,recentInteractions.get(key)||0);
   const row=listRows.find(row=>row.id===id&&row.host===host);
-  if(row&&at>row.recency){row.recency=at;listRows.sort((a,b)=>b.recency-a.recency);renderList();}
+  if(row&&value!==row.recency&&(!partial||value>row.recency)){row.recency=value;listRows.sort((a,b)=>b.recency-a.recency||b.id.localeCompare(a.id)||b.host.localeCompare(a.host));renderList();}
 }
 let activityBusy=false;
 const activityRequests=new Set(),activityInFlight=new Set();
@@ -77,7 +82,7 @@ function renderHostErrors(hosts){
 }
 function clearListSnapshot(){
   sidebarPreferences.reset();
-  for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:'))sessionStorage.removeItem(key);}
+  for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(/^codex-list-v[12]:/.test(key||''))sessionStorage.removeItem(key);}
   createdChats.clear();projectChatPages.clear();
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
@@ -88,7 +93,7 @@ workbench.onSideChatActivity=(session,view,visible)=>{
   if(session.provider&&session.provider!=='codex'||!view.id||view.expired)return;
   const reading=visible&&!document.hidden&&!$('app').hidden&&clientNavigation.provider==='codex'&&currentId===session.id&&currentHost===session.host&&$('app').classList.contains('chat-open');
   sessionActivity.updateSideChat(session,view,reading);
-  if(view.recency)bumpRecency(session.id,session.host,view.recency);
+  if(view.recency)syncRecency(session.id,session.host,view.recency,{partial:true});
   renderActivity();
 };
 workbench.onViewChange=()=>{if(workbench.current?.id===currentId&&workbench.current.host===currentHost)readVisibleChat();};
@@ -143,7 +148,7 @@ async function refreshActivity(){
     const result=await api('/api/activity',{hosts},controller.signal);
     if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'){
       sessionActivity.update(result.sessions,visibleChat(),{sync:false});
-      for(const row of result.sessions)if(row.recency)bumpRecency(row.id,row.host,row.recency);
+      for(const row of result.sessions)if(Number.isFinite(row.recency))syncRecency(row.id,row.host,row.recency);
       renderActivity();
     }
   }catch{
@@ -221,9 +226,10 @@ $('login-form').addEventListener('submit',async event=>{event.preventDefault();i
 $('logout').onclick=async()=>{await api('/api/logout',{});composerDrafts.forget();document.dispatchEvent(new Event('bridge-logged-out'));csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';clearListSnapshot();sessionStorage.clear();workbench.fileQuotes.forget(()=>true);attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
 function dateText(value){if(!value)return '';return new Date(value*1000).toLocaleDateString(BridgeI18n.locale(),{month:'numeric',day:'numeric'});}
 function listAuthIdentity(auth){return auth?.authenticated&&/^[0-9a-f]{64}$/.test(auth.listCacheIdentity||'')?auth.listCacheIdentity:'';}
-function listSnapshotKey(filter){return listIdentity?'codex-list-v1:'+listIdentity+':'+filter:'';}
+function listSnapshotKey(filter){return listIdentity?'codex-list-v2:'+listIdentity+':'+filter:'';}
 function currentListFilter(){return JSON.stringify([$('search').value,$('archived').checked,listSource]);}
 function restoreListSnapshot(filter=currentListFilter()){
+  for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:'))sessionStorage.removeItem(key);}
   const key=listSnapshotKey(filter);if(!key)return false;
   let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{return false;}
   if(!saved||!Array.isArray(saved.rows)||!Array.isArray(saved.sources)||!Array.isArray(saved.hosts))return false;

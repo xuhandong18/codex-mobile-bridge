@@ -82,11 +82,16 @@ const server=http.createServer(async(req,res)=>{
       }
       await page.locator('#sessions .session[data-id="'+id(2)+'"]').scrollIntoViewIfNeeded();
       await page.waitForFunction(()=>!activityBusy);
+      await page.evaluate(()=>refreshActivity());
+      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(1),'执行过程更新但排序时间不变时不前移 '+label);
       rows[1].recency=150;
       await page.evaluate(()=>refreshActivity());
-      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(2),'没有新发送时，运行进度通过活动查询更新排序 '+label);
+      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(2),'独立文字进度通过活动查询更新排序 '+label);
       await page.evaluate(()=>refreshActivity());
-      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(2),'只有轮询没有新进度时不改变排序 '+label);
+      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(2),'文字后继续执行工具或重复轮询不改变排序 '+label);
+      rows[1].recency=99;
+      await page.evaluate(()=>refreshActivity());
+      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(1),'权威时间下调可纠正旧执行过程时间 '+label);
       rows[7].recency=200;
       await page.evaluate(id=>bumpRecency(id,'local',200),id(8));
       check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(8),'新的交互立即排到最前 '+label);
