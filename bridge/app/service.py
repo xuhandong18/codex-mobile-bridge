@@ -23,6 +23,7 @@ from bridge.features.sessions.auto_titles import AutoTitles
 from bridge.features.sessions.title_rename import TitleRenames
 from bridge.clients.codex.title_runtime import generate_title, access_stamp, TitleError
 from bridge.features.sessions.activity import ActivityQueries, SubagentActivity
+from bridge.features.sessions.recovery import capacity_error
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.activity import DesktopActivity
@@ -78,6 +79,8 @@ class LiveSession:
         self.error = None
         self.viewers = 0
         self.watched = False
+        self.supervised = False
+        self.snapshot_sequence = 0
         self.notification_probe_until = 0
         self.activity_only = False
         self.touched = time.monotonic()
@@ -167,6 +170,7 @@ class Bridge:
         self.notification_dirty = set()
         self.notification_boundary = set()
         self.notification_event = threading.Event()
+        self.recovery = None
         self.store = RemoteStore(alias) if alias else SessionStore(codex_home)
         self.message_navigation = MessageNavigation(self.store.navigation_scan, self.store.navigation_window)
         self.catalog_reader = RemoteCatalog(alias) if alias else Catalog(codex_home, codex_bin)
@@ -799,6 +803,7 @@ class Bridge:
                 folder = self.data_dir / 'hosts' / hashlib.sha256(host.encode()).hexdigest()[:16]
                 self.remote_bridges[host] = Bridge(self.codex_home, folder, host, available[host]['alias'], ipc_path=self.ipc.path)
                 self.remote_bridges[host].accounts = self.accounts
+                self.remote_bridges[host].recovery = self.recovery
             return self.remote_bridges[host]
 
     def assert_desktop_idle(self, timeout=20, *, thread_ids=None):
@@ -1012,6 +1017,8 @@ class Bridge:
             logging.getLogger(__name__).info("Codex connection transition thread=%s cause=native_attached", thread_id)
         self.subagent_activity.wake()
         self.notification_event.set()
+
+        self._notify_recovery(session)
 
     def _cli_disconnected(self, thread_id=None):
         if not self.closed.is_set():
@@ -1288,7 +1295,7 @@ class Bridge:
             with self.submit_lock:
                 queued = any(k.startswith(session.id + ':') and v['status'] == 'queued' for k, v in self.submissions.items())
             with session.condition:
-                if session.viewers or queued or not session.activity_only:
+                if session.viewers or session.supervised or queued or not session.activity_only:
                     return True
                 if (session.connected or session.discovering) and session.runtime != "cli":
                     try:
@@ -1316,6 +1323,129 @@ class Bridge:
             session.retry_at = time.monotonic() + 15
             self._attach(session, timeout=0)
         return session
+
+    def recovery_session(self, thread_id):
+        metadata = self.store.get(thread_id)
+        if metadata.get('archived'):
+            raise KeyError('归档聊天不参与自动继续')
+        with self.lock:
+            session = self.live.get(thread_id)
+            if session is None:
+                session = self.live[thread_id] = LiveSession(thread_id)
+                session.activity_only = True
+            session.supervised = True
+        if not session.connected and time.monotonic() >= session.retry_at:
+            session.retry_at = time.monotonic() + 15
+            self._attach(session, timeout=0)
+        return self.recovery_snapshot(session)
+
+    def release_recovery_session(self, thread_id):
+        with self.lock:
+            session = self.live.get(thread_id)
+        if session is None:
+            return True
+        if not session.attach_lock.acquire(blocking=False):
+            return False
+        try:
+            with session.condition:
+                session.supervised = False
+                if session.watched or session.viewers or not session.activity_only:
+                    return True
+            with self.submit_lock:
+                if any(k.startswith(thread_id + ':') and v['status'] == 'queued' for k, v in self.submissions.items()):
+                    return True
+            with session.condition:
+                if session.watched or session.viewers:
+                    return True
+                if (session.connected or session.discovering) and session.runtime != 'cli':
+                    try:
+                        self.ipc.follow(thread_id, session.owner, False, host=self.host)
+                    except IPCError:
+                        pass
+                session.connected = session.discovering = False
+                session.revision = None
+            return True
+        finally:
+            session.attach_lock.release()
+
+    def recovery_poll(self, thread_id):
+        with self.lock:
+            session = self.live.get(thread_id)
+        return self.recovery_snapshot(session) if session is not None else None
+
+    def recovery_snapshot(self, session):
+        with session.condition:
+            state = session.state or {}
+            last = next((t for t in reversed(ordered_turns(state)) if t.get('turnId')), {})
+            user = next((item for item in reversed(items_array(last.get('items')))
+                         if item.get('type') in ('userMessage', 'steeringUserMessage')), {})
+            return {'host': self.host, 'id': session.id, 'connected': session.connected,
+                    'owner': session.owner, 'cwd': state.get('cwd'), 'provider': state.get('modelProvider'),
+                    'runtime': session.runtime, 'turnId': last.get('turnId'), 'turnStatus': last.get('status'),
+                    'active': state.get('threadRuntimeStatus', {}).get('type') == 'active' or
+                              last.get('status') == 'inProgress',
+                    'waiting': bool(pending_requests(state)), 'requestId': request_id(user),
+                    'inputId': user.get('id') or request_id(user), 'overloaded': capacity_error(last.get('error'))}
+
+    def _notify_recovery(self, session):
+        recovery = getattr(self, 'recovery', None)
+        if recovery is not None:
+            recovery.observe(self.recovery_snapshot(session))
+
+    def _recovery_intervene(self, thread_id):
+        recovery = getattr(self, 'recovery', None)
+        if recovery is not None:
+            recovery.intervene(self.host, thread_id)
+
+    @operation
+    def recovery_send(self, expected, submission_id, claim):
+        """Refresh and write through an existing owner; never activate a cold chat."""
+        uuid.UUID(submission_id)
+        with self.lock:
+            session = self.live.get(expected['id'])
+        if session is None:
+            return {'status': 'unavailable'}
+        with session.action_lock:
+            key = session.id + ':' + submission_id
+            with self.submit_lock:
+                prior = self.submissions.get(key)
+                if prior is not None:
+                    return {'status': prior['status'], 'duplicate': True}
+            if not session.connected or not session.owner:
+                return {'status': 'unavailable'}
+            if self.recovery_snapshot(session) != expected:
+                return {'status': 'cancelled'}
+            if self.store.get(session.id).get('archived'):
+                return {'status': 'cancelled'}
+            if session.runtime == 'cli':
+                self.cli_sessions.refresh(session.id)
+            else:
+                with session.condition:
+                    sequence = session.snapshot_sequence
+                self.ipc.follow(session.id, session.owner, host=self.host)
+                with session.condition:
+                    fresh = session.condition.wait_for(lambda: session.snapshot_sequence > sequence or
+                        not session.connected or self.closed.is_set(), timeout=5)
+                if not fresh:
+                    return {'status': 'unavailable'}
+            current = self.recovery_snapshot(session)
+            if (current != expected or not current['connected'] or not current['overloaded'] or
+                    current['turnStatus'] != 'failed' or current['active'] or current['waiting']):
+                return {'status': 'cancelled'}
+            with self.submit_lock:
+                if any(k.startswith(session.id + ':') and v['status'] in ('queued', 'unknown')
+                       for k, v in self.submissions.items()):
+                    return {'status': 'cancelled'}
+            if not claim():
+                return {'status': 'cancelled'}
+            entry = {'text': '继续执行', 'mode': 'send', 'skills': [], 'status': 'unknown',
+                     'at': time.time(), 'recovery': True}
+            with self.submit_lock:
+                self.submissions[key] = entry
+                self._save_ledger()
+            response = self._dispatch(session, key, entry)
+            native = response.get('result') or {}
+            return {'status': response['status'], 'turnId': (native.get('turn') or {}).get('id') or native.get('turnId')}
 
     def upload(self, thread_id, identifier, name, data):
         self.store.get(thread_id)  # Uploads do not activate a desktop chat.
@@ -1676,6 +1806,8 @@ class Bridge:
                 newly_connected = not session.connected or session.runtime != 'desktop'
                 session.state = state
                 session.revision = change["revision"]
+                if change.get('type') == 'snapshot':
+                    session.snapshot_sequence += 1
                 session.runtime = 'desktop'
                 session.discovering = False
                 session.connected = True
@@ -1697,6 +1829,7 @@ class Bridge:
                 session.changed()
         self.desktop_activity.wake()
         self.subagent_activity.wake()
+        self._notify_recovery(session)
 
     def _invalidate(self, session, message, runtime=None, owner=None, reason=None):
         with session.condition:
@@ -1713,6 +1846,8 @@ class Bridge:
             session.error = message
             session.access = self._access(session.origin, session)
             session.changed()
+
+        self._notify_recovery(session)
 
     def _disconnected(self):
         self.notification_cursor = 0
@@ -1763,16 +1898,16 @@ class Bridge:
                 self._send_queued(session, key, entry)
             except Exception:
                 pass  # Unknown outcomes stay recorded and are never automatically replayed.
-        if (session.viewers > 0 or queued or session.watched) and not session.connected:
+        if (session.viewers > 0 or queued or session.watched or session.supervised) and not session.connected:
             if session.activity_only and session.viewers == 0 and not queued:
                 if time.monotonic() >= session.retry_at:
                     session.retry_at = time.monotonic() + 15
                     self._attach(session, timeout=0)
             else:
                 self._refresh_async(session)
-        elif session.viewers == 0 and not queued and not session.watched and time.monotonic() - session.touched > 300:
+        elif session.viewers == 0 and not queued and not session.watched and not session.supervised and time.monotonic() - session.touched > 300:
             with self.lock:
-                if session.viewers != 0 or session.watched:
+                if session.viewers != 0 or session.watched or session.supervised:
                     return
                 self.live.pop(session.id, None)
             if (session.connected or session.discovering) and session.runtime != 'cli':
@@ -2917,6 +3052,7 @@ class Bridge:
                     entry["goalActivation"] = activation
                 self.submissions[key] = entry
                 self._save_ledger()
+            self._recovery_intervene(thread_id)
             with session.condition:
                 session.changed()
             if mode == "queue":
@@ -2957,7 +3093,7 @@ class Bridge:
     def _dispatch(self, session, key, entry):
         submission_id = key.split(":")[1]
         text = entry["text"]
-        title_candidate = self._title_candidate(session, text, key) if entry['mode'] != 'steer' else None
+        title_candidate = self._title_candidate(session, text, key) if entry['mode'] != 'steer' and not entry.get('recovery') else None
         files = self.uploads.resolve(session.id, entry.get('attachments', []))
         request = {"threadId": session.id, "input": [{"type": "text", "text": text, "text_elements": []}], "clientUserMessageId": submission_id}
         request['input'].extend({'type': 'localImage', 'path': f['path']} for f in files if f['image'])
@@ -3000,6 +3136,7 @@ class Bridge:
             if not active or not active.get("turnId"):
                 raise ValueError("当前没有可停止的任务")
             turn_id = active["turnId"]
+        self._recovery_intervene(thread_id)
         return self._call(session, "thread-follower-interrupt-turn", {"mode": "user-stop", "expectedTurnId": turn_id})
 
     def full_history(self, thread_id):

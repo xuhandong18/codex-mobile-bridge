@@ -24,6 +24,7 @@ from bridge.features.network.tunnel import QuickTunnel
 from bridge.features.network.ssh_tunnel import SSHTunnel
 from bridge.features.notifications.addresses import AddressNotifications, ready_url, gateway_ready, entry_urls
 from bridge.features.notifications.channels import Notifications
+from bridge.features.sessions.recovery import Recovery
 import bridge.features.network.addresses as network
 
 ROOT = Path(__file__).resolve().parent
@@ -183,6 +184,8 @@ def main(connections=None, connection_secrets=None):
         return entry_urls(preferences, hosts, ready_url(tunnel, args.port, server.instance_id), external)
     address_notifications = AddressNotifications(args.config.parent, notification_urls, server.instance_id)
     notifications = Notifications(bridge, args.config.parent, lambda: server.origins, lambda: config.get('publicUrl', ''), desktop_sessions=server.desktop_sessions)
+    recovery = Recovery(bridge, args.config.parent)
+    bridge.recovery = recovery
     def valid_push_session(key):
         with server.auth.lock:
             session = server.auth.sessions.get(key)
@@ -259,6 +262,7 @@ def main(connections=None, connection_secrets=None):
         for listener in servers:
             listener.connection_discovery = discovery
         notifications.start()
+        recovery.start()
         address_notifications.start()
         bridge.accounts.monitor.start()
         control.start(server.shutdown, server.pairing.control, server.instance_id, server.auth, bridge.account.control, server.notifications.control, bridge.accounts.control, server.harness.control, server.desktop_sessions.control, bridge.cli_access.control)
@@ -271,6 +275,7 @@ def main(connections=None, connection_secrets=None):
     except KeyboardInterrupt:
         pass
     finally:
+        recovery.close()
         for listener, thread in listener_threads:
             listener.shutdown()
             thread.join()
