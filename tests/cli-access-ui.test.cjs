@@ -13,6 +13,9 @@ const newChatTypeCode=extract("$('new-chat-type').onchange=", "$('new-chat-proje
 test('CLI creation picker enables only a known CLI folder and uses an accurate action',()=>{
   const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,children:[],replaceChildren(){this.children=[];this.value='';},append(option){this.children.push(option);this.value=option.value;},onchange(){}});return nodes.get(id);};
   const ctx={$,listRows:[],currentId:null,currentHost:'local',newChatProjects:[],newChatSettings:{load(){}},Option:class{constructor(text,value){this.text=text;this.value=value;}},t:key=>({'创建聊天':'Create chat','创建并打开':'Create and open'}[key]||key)};
+  ctx.newChatProjectGroups=kind=>[{name:'项目',projects:ctx.newChatProjects.filter(p=>p.type===kind)}].filter(group=>group.projects.length);
+  ctx.newChatProjectPicker={setGroups(){},close(){}};ctx.SidebarProjectGroups={host:()=> '此电脑'};
+  ctx.document={createElement:()=>({value:'',append(option){if(!this.value)this.value=option.value;}})};
   vm.createContext(ctx);vm.runInContext(newChatTypeCode,ctx);
   $('new-chat-type').value='cli';$('new-chat-type').onchange();
   assert.equal($('new-chat-submit').disabled,true);

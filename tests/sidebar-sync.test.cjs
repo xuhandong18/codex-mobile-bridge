@@ -268,6 +268,9 @@ test('project create dialog selects the clicked project and blocks a removed pro
     replaceChildren(){this.children=[];this.value='';},showModal(){this.open=true;}});return nodes.get(id);};
   const projects=[{key:'local|a',name:'A',host:'local',cwd:'/a',type:'desktop'},{key:'local|b',name:'B',host:'local',cwd:'/b',type:'desktop'}];
   const context={$,t:x=>x,creatingChat:false,newChatSettings:{load(){}},newChatProjects:[],listRows:[],currentId:null,currentHost:'local',api:async()=>({projects}),
+    newChatProjectPicker:null,newChatSidebar:null,newChatProjectRequest:0,sidebarData:{projects},sidebarPreferences:{refresh:async()=>{}},
+    document:{createElement:()=>({append(){}})},newChatProjectGroups:()=>[{id:'projects',name:'项目',projects}],SidebarProjectGroups:{host:()=> '此电脑'},
+    NewChatProjectPicker:class{constructor(){this.button={};}close(){}setGroups(){}sync(){}},
     Option:class{constructor(text,value){this.textContent=text;this.value=value;}}};
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('async function openNewChat('),source.indexOf("$('new-chat-dialog').addEventListener('cancel'")),context);

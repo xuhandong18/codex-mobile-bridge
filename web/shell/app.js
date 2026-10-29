@@ -290,14 +290,14 @@ function mergeCreatedChats(rows,host,query,archived,source){
   }
   return merged;
 }
-function sidebarEntry(kind,row){
+function sidebarEntry(kind,row,metadata=sidebarData){
   const id=kind==='project'?row.key:row.id,host=row.host||'local';
   const itemKey='codex:'+kind+':'+(kind==='project'?id.slice(id.indexOf('|')+1):id);
-  const section=(sidebarData.sections||[]).find(section=>section.itemKeys?.includes(itemKey)||kind==='thread'&&row.thread_section_id&&section.hostSectionIds?.[host]===row.thread_section_id);
-  const pinned=kind==='project'?sidebarData.pinnedProjectIds?.includes(id.slice(id.indexOf('|')+1)):row.is_pinned||sidebarData.pinnedThreadIds?.includes(id);
+  const section=(metadata.sections||[]).find(section=>section.itemKeys?.includes(itemKey)||kind==='thread'&&row.thread_section_id&&section.hostSectionIds?.[host]===row.thread_section_id);
+  const pinned=kind==='project'?metadata.pinnedProjectIds?.includes(id.slice(id.indexOf('|')+1)):row.is_pinned||metadata.pinnedThreadIds?.includes(id);
   return {kind,id,host,name:kind==='project'?row.name:row.title,native:section?'section:'+section.id:pinned?'pinned':'home',projectKey:kind==='project'?row.key:row.projectKey};
 }
-function sidebarTarget(item){return sidebarPlacements.resolve(item,(sidebarData.sections||[]).map(section=>section.id),item.native);}
+function sidebarTarget(item,metadata=sidebarData){return sidebarPlacements.resolve(item,(metadata.sections||[]).map(section=>section.id),item.native);}
 function sectionProjectRows(item){
   const node=[...$('sessions').querySelectorAll('.project-group')].find(node=>node.dataset.projectKey===item.id&&node.dataset.host===item.host);
   const root=node?.parentElement;
@@ -366,8 +366,7 @@ function renderList(){
     details.ontoggle=()=>{if(details.isConnected===false)return;try{localStorage.setItem(key,details.open?'open':'closed');}catch{}scheduleActivityRefresh();};
   };
   if(native){
-    const sections=[{id:'pinned',name:t('置顶')},...sidebarData.sections,{id:'projects',name:t('项目')},{id:'threads',name:t('聊天')}],order=sidebarData.sectionOrder||[];
-    sections.sort((a,b)=>{const rank=section=>{const key=sidebarData.sections.includes(section)?'custom:'+section.id:section.id;const i=order.indexOf(key);return i<0?order.length:i;};return rank(a)-rank(b);});
+    const sections=sidebarSections(sidebarData,t);
     for(const section of sections){
       const details=el('details','sidebar-section');details.dataset.section=section.id;
       rememberGroup(details,'sidebar-section:'+section.id,!(section.collapsed??sidebarData.collapsedSections?.[section.id]));details.append(el('summary','',section.name));
@@ -656,6 +655,7 @@ function openNewProject(){
   }).catch(failure=>{if(dialog.open)error.textContent=t(failure.message);});
 }
 let applyingNewChat=null;
+let newChatProjectPicker=null,newChatSidebar=null,newChatProjectRequest=0;
 const newChatScopes=new Map();
 try{for(const row of JSON.parse(localStorage.getItem('new-chat-scopes')||'[]'))if(Array.isArray(row)&&row.length===2&&row.every(value=>typeof value==='string'))newChatScopes.set(...row);}catch{}
 function newChatPreferencePrefix(){return (window.BridgeRelayBase||location.origin||location.host||'gateway')+'|';}
@@ -664,34 +664,53 @@ function rememberNewChatSetting(id,host,changes){const scope=newChatScopes.get(c
 $('new-chat-title').value=t('新聊天');
 $('new-chat-title').oninput=()=>{$('new-chat-title').dataset.edited='true';};
 $('new-chat').onclick=()=>openNewChat();
+function newChatProjectGroups(kind){
+  const metadata=newChatSidebar||sidebarData;
+  return SidebarProjectGroups.group(newChatProjects.filter(project=>(project.type||'desktop')===kind),metadata,
+    project=>sidebarTarget(sidebarEntry('project',project,metadata),metadata),sectionProjectOrder);
+}
 async function openNewChat(preselected=null){
   if(creatingChat||$('new-chat-dialog').open)return;
+  const revision=++newChatProjectRequest;
   $('new-chat-error').textContent='';$('new-chat-submit').disabled=true;
   $('new-chat-project').replaceChildren();$('new-chat-path').textContent=t('正在读取电脑项目…');
+  $('new-chat-project').disabled=true;
+  newChatProjectPicker??=new NewChatProjectPicker($('new-chat-project'));
+  newChatProjectPicker.close(false);newChatProjectPicker.button.disabled=true;
   $('new-chat-dialog').showModal();
   try{
-    newChatProjects=(await api('/api/projects')).projects;
+    const [result,metadata]=await Promise.all([api('/api/projects'),api('/api/projects?metadata=1').catch(()=>sidebarData),sidebarPreferences.refresh().catch(()=>{})]);
+    if(revision!==newChatProjectRequest||!$('new-chat-dialog').open)return;
+    newChatProjects=result.projects;newChatSidebar=metadata;
     if(preselected)$('new-chat-type').value=preselected.type||'desktop';
-    $('new-chat-type').onchange();
+    let project;
     if(preselected){
-      const project=newChatProjects.find(p=>p.key===preselected.key)||newChatProjects.find(p=>p.host===preselected.host&&p.cwd===preselected.cwd&&(p.type||'desktop')===(preselected.type||'desktop'));
+      project=newChatProjects.find(p=>p.key===preselected.key)||newChatProjects.find(p=>p.host===preselected.host&&p.cwd===preselected.cwd&&(p.type||'desktop')===(preselected.type||'desktop'));
       if(!project)throw Error(t('请选择现有项目'));
-      $('new-chat-project').value=project.key;$('new-chat-project').onchange();
     }
-  }catch(e){$('new-chat-error').textContent=t(e.message);$('new-chat-path').textContent='';$('new-chat-submit').disabled=true;}
+    $('new-chat-type').onchange(project?.key);
+  }catch(e){if(revision!==newChatProjectRequest||!$('new-chat-dialog').open)return;$('new-chat-error').textContent=t(e.message);$('new-chat-path').textContent='';$('new-chat-submit').disabled=true;}
 };
-$('new-chat-type').onchange=()=>{
-  const kind=$('new-chat-type').value,selected=listRows.find(row=>row.id===currentId&&row.host===currentHost)?.projectKey;
+$('new-chat-type').onchange=preferred=>{
+  newChatProjectPicker.close(false);
+  const kind=$('new-chat-type').value,selected=typeof preferred==='string'?preferred:listRows.find(row=>row.id===currentId&&row.host===currentHost)?.projectKey;
   $('new-chat-help').textContent=t(kind==='cli'?'选择已有 CLI 项目目录，在此创建聊天。':'选择已有项目，或不选择项目创建独立聊天。电脑会打开这条聊天。');
   $('new-chat-project').replaceChildren();
+  $('new-chat-project').disabled=false;
   if(kind==='desktop')$('new-chat-project').append(new Option(t('不选择项目'),'local|independent'));
-  for(const project of newChatProjects.filter(p=>(p.type||'desktop')===kind))$('new-chat-project').append(new Option(project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel),project.key));
+  const groups=newChatProjectGroups(kind);
+  for(const group of groups){
+    const options=document.createElement('optgroup');options.label=group.name;
+    for(const project of group.projects)options.append(new Option(project.name+' · '+SidebarProjectGroups.host(project),project.key));
+    $('new-chat-project').append(options);
+  }
   if(newChatProjects.some(p=>p.key===selected&&(p.type||'desktop')===kind))$('new-chat-project').value=selected;
+  newChatProjectPicker.setGroups(groups,kind==='desktop');
   $('new-chat-project').onchange();
   $('new-chat-submit').disabled=!$('new-chat-project').value;
   $('new-chat-submit').textContent=t(kind==='cli'?'创建聊天':'创建并打开');
 };
-$('new-chat-project').onchange=()=>{$('new-chat-path').textContent=$('new-chat-project').value==='local|independent'?t('在此电脑创建独立聊天'):newChatProjects.find(p=>p.key===$('new-chat-project').value)?.cwd||'';newChatSettings.load($('new-chat-project').value,$('new-chat-type').value);};
+$('new-chat-project').onchange=()=>{newChatProjectPicker?.sync();$('new-chat-path').textContent=$('new-chat-project').value==='local|independent'?t('在此电脑创建独立聊天'):newChatProjects.find(p=>p.key===$('new-chat-project').value)?.cwd||'';newChatSettings.load($('new-chat-project').value,$('new-chat-type').value);};
 $('new-chat-dialog').addEventListener('cancel',event=>{if(creatingChat)event.preventDefault();});
 $('new-chat-form').onsubmit=async event=>{
   event.preventDefault();if(creatingChat)return;
@@ -1300,6 +1319,7 @@ $('phone-language').onchange=()=>{
   renderLoginStatus();
   for(const id of ['login-error','send-error','model-error','new-chat-error','notify-error','rename-error','rename-summary-status','pushplus-error','toast'])$(id).textContent=t($(id).textContent);
   for(const option of $('new-chat-project').options){const project=newChatProjects.find(p=>p.key===option.value);if(project)option.textContent=project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel);}
+  newChatProjectPicker?.setGroups(newChatProjectGroups($('new-chat-type').value),$('new-chat-type').value==='desktop');
   if($('model-select').querySelector('[value=__custom__]'))$('model-select').querySelector('[value=__custom__]').textContent=t('自定义模型…');
   if(state){approvalStamp='';renderState(state);[...$('approvals').querySelectorAll('input,textarea,select')].forEach((node,i)=>{if(replies[i]){node.value=replies[i].value;node.checked=replies[i].checked;if(node.tagName==='SELECT')node.dispatchEvent(new Event('change'));}});}
   renderNotificationState();

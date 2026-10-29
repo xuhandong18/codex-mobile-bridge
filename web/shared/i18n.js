@@ -2459,6 +2459,8 @@ const en={
   "附件：": "Attachment: ",
   "图片附件": "Image attachment",
   "项目与运行主机": "Project and host",
+  "搜索项目、目录或主机": "Search projects, folders or hosts",
+  "没有找到项目": "No projects found",
   "额外 HTTPS 地址（高级）": "Additional HTTPS addresses (advanced)",
   "额外 HTTPS 源格式不正确": "Invalid additional HTTPS addresses",
   "首次使用：保存配置 → 导出部署包或复制给部署 Agent → 在服务器 / NAS 完成部署 → 启动网关并检测入口。": "First use: save settings → export a ZIP or copy for your deployment Agent → deploy on the server / NAS → start the gateway and check the entry.",

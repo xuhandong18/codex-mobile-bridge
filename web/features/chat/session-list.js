@@ -1,5 +1,12 @@
 'use strict';
 
+function sidebarSections(metadata,translate){
+  const custom=metadata.sections||[],order=metadata.sectionOrder||[];
+  const sections=[{id:'pinned',name:translate('置顶')},...custom,{id:'projects',name:translate('项目')},{id:'threads',name:translate('聊天')}];
+  const rank=section=>{const index=order.indexOf(custom.includes(section)?'custom:'+section.id:section.id);return index<0?order.length:index;};
+  return sections.sort((a,b)=>rank(a)-rank(b));
+}
+
 // Display preferences; production uses SidebarPreferences.storage below.
 class SidebarItemOrder {
   constructor(storage=localStorage,prefix='sidebar-item-order:'){this.storage=storage;this.prefix=prefix;}

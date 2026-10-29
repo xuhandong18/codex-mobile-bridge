@@ -1,0 +1,22 @@
+.picker .nc-project-label{margin-bottom:8px}
+.nc-project-picker{min-width:0}
+.nc-project-trigger{display:flex;align-items:center;gap:10px;width:100%;min-width:0;min-height:48px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:inherit;text-align:left}
+.nc-project-trigger>strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500}
+.nc-project-host{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;padding:3px 6px;background:var(--soft);color:var(--muted);font-size:11px;font-weight:400}
+.nc-project-chevron{flex:none;color:var(--muted)}
+.nc-project-trigger[aria-expanded=true]{border-color:var(--green)}
+.nc-project-panel{margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:8px;background:#fff;overflow:hidden}
+.picker .nc-project-search{margin:0;width:100%;padding:10px 12px;font-size:12px}
+.nc-project-list{max-height:min(34dvh,300px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;margin-top:6px}
+.nc-project-heading{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0;padding:10px 8px 6px;background:#fff;color:var(--muted);font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.nc-project-heading>span{font-size:10px;font-weight:400}
+.nc-project-group+.nc-project-group{border-top:1px solid var(--line);margin-top:4px}
+.nc-project-option{display:block;width:100%;min-width:0;min-height:52px;padding:8px;text-align:left;background:transparent;color:inherit;border:1px solid transparent;border-radius:7px}
+.nc-project-option:hover,.nc-project-option:focus-visible{background:var(--soft)}
+.nc-project-option[aria-selected=true]{background:var(--soft);border-color:var(--line)}
+.nc-project-title{display:flex;align-items:center;gap:8px;min-width:0}
+.nc-project-title>strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500}
+.nc-project-path{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px;line-height:1.5}
+.picker .nc-project-empty{margin:16px 8px;font-size:12px}
+#new-chat-path{overflow-wrap:anywhere}
+.picker#new-chat-dialog{width:min(94vw,540px)}

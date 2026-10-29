@@ -3,7 +3,7 @@
   "/index.html": "index.html",
   "/icon.png": "icon.png",
   "/manifest.webmanifest": "manifest.webmanifest",
-  "/app.js": ["shared/dialog-dismiss.js", "features/chat/context-menu.js", "features/chat/session-list.js", "features/chat/sidebar-management.js", "features/chat/reference-picker.js", "features/chat/file-quotes.js", "features/chat/selection-targets.js", "features/workspace/file-selection.js", "features/chat/project-folder-browser.js", "features/chat/answer-drafts.js", "shell/app.js"],
+  "/app.js": ["shared/dialog-dismiss.js", "features/chat/context-menu.js", "features/chat/session-list.js", "features/chat/new-chat-projects.js", "features/chat/sidebar-management.js", "features/chat/reference-picker.js", "features/chat/file-quotes.js", "features/chat/selection-targets.js", "features/workspace/file-selection.js", "features/chat/project-folder-browser.js", "features/chat/answer-drafts.js", "shell/app.js"],
   "/bootstrap.js": "shared/bootstrap.js",
   "/style.css": [
     "shell/style.css",
@@ -14,7 +14,8 @@
     "features/chat/message-map.css",
     "features/chat/reference-picker.css",
     "features/chat/file-quotes.css",
-    "features/chat/project-folder-browser.css"
+    "features/chat/project-folder-browser.css",
+    "features/chat/new-chat-projects.css"
   ],
   "/activity.js": "features/chat/activity.js",
   "/answer-drafts.js": "features/chat/answer-drafts.js",
