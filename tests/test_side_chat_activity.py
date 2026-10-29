@@ -182,7 +182,7 @@ class SideActivityTests(unittest.TestCase):
         finally:
             release.set()
 
-    def test_recency_counts_only_new_accepted_sends_and_successful_responses(self):
+    def test_accepted_writes_and_requests_count_but_retries_reads_and_rename_do_not(self):
         child = self.create()
         manager = self.bridge.side_chats
         self.assertEqual(child.view()['recency'], 0)
@@ -195,8 +195,10 @@ class SideActivityTests(unittest.TestCase):
             child.rename('new title')
             manager.operate(support.THREAD, 'read', {})
         self.assertEqual(child.view()['recency'], 10000)
-        child._event({'id': 'approval', 'method': 'item/commandExecution/requestApproval',
-                      'params': {'threadId': child.id, 'turnId': 'turn'}})
+        with patch('time.time', return_value=20):
+            child._event({'id': 'approval', 'method': 'item/commandExecution/requestApproval',
+                          'params': {'threadId': child.id, 'turnId': 'turn'}})
+        self.assertEqual(child.view()['recency'], 20000)
         with patch('time.time', return_value=30):
             child.respond('approval', {'decision': 'accept'})
         self.assertEqual(child.view()['recency'], 30000)
@@ -215,12 +217,13 @@ class SideActivityTests(unittest.TestCase):
             self.assertEqual(child.send('uncertain', token)['status'], 'unknown')
         self.assertEqual(sum(method == 'turn/start' for method, _ in child.runtime.calls), 1)
         self.assertEqual(child.view()['recency'], 0)
-        child._event({'id': 'approval', 'method': 'item/commandExecution/requestApproval',
-                      'params': {'threadId': child.id}})
+        with patch('time.time', return_value=20):
+            child._event({'id': 'approval', 'method': 'item/commandExecution/requestApproval',
+                          'params': {'threadId': child.id}})
         with patch.object(child.runtime, 'write', side_effect=SideChatError('unknown write')):
             with self.assertRaises(SideChatError):
                 child.respond('approval', {'decision': 'accept'})
-        self.assertEqual(child.view()['recency'], 0)
+        self.assertEqual(child.view()['recency'], 20000, 'The request is real activity; the unknown response adds none')
         other = self.create(slot=str(uuid.uuid4()))
         error = SideChatError('rejected')
         error.rpc_error = {'code': -1}
@@ -228,7 +231,7 @@ class SideActivityTests(unittest.TestCase):
             with self.assertRaises(SideChatError):
                 other.send('rejected', str(uuid.uuid4()))
         self.assertEqual(other.view()['recency'], 0)
-        self.assertEqual(self.bridge.side_chats.recencies(), {})
+        self.assertEqual(self.bridge.side_chats.recencies(), {support.THREAD: 20000})
 
     def test_queued_send_counts_at_dispatch_and_steer_counts_once(self):
         child = self.create()
@@ -243,8 +246,9 @@ class SideActivityTests(unittest.TestCase):
         with patch('time.time', return_value=30):
             child.runtime.emit('turn/completed', turn={'id': 'turn', 'status': 'completed'})
             deadline = time.monotonic() + 1
-            while self.bridge.side_chats.recencies().get(support.THREAD) != 30000 and time.monotonic() < deadline:
+            while child.submissions[queued]['status'] != 'accepted' and time.monotonic() < deadline:
                 time.sleep(.005)
+            self.assertEqual(child.submissions[queued]['status'], 'accepted')
             self.assertEqual(child.view()['recency'], 30000)
         steer = str(uuid.uuid4())
         with patch('time.time', return_value=40):

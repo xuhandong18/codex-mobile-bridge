@@ -80,6 +80,10 @@ const server=http.createServer(async(req,res)=>{
       check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'侧边发送更新最近交互和分区项目排序');
       await page.evaluate(()=>loadList(true));
       check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'列表刷新保留侧边交互排序');
+      recency=250;sides[0].recency=250;
+      sides[0].turns[0].messages.push({id:'progress',role:'assistant',phase:'commentary',text:'有新的执行进度'});
+      await page.evaluate(slot=>workbench.current.files.find(tab=>tab.slot===slot).sideChat.load(),firstSlot);
+      check(await page.evaluate(()=>listRows.find(row=>row.id===currentId).recency)===250,'没有新发送时，侧边新回复也更新父聊天排序时间');
       mainStatus='active';mainTurn='next-main';sequence++;await refresh();mainStatus='idle';sequence++;await refresh();await indicator('completed');
       check(true,'主聊天完成时侧边仍在工作也显示蓝点');
       await page.locator('#sidebar .sidebar-toggle').click();

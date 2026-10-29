@@ -229,9 +229,11 @@ class SideChat:
                     self.runtime.write({'id': message['id'], 'error': {'code': -32601, 'message': 'Unsupported side-chat request'}})
                     return
                 self.state['requests'].append(copy.deepcopy(message))
+                self._record_interaction()
                 return
             if not self.ready or params.get('threadId') != self.id:
                 return
+            progressed = False
             if method == 'thread/closed':
                 self.error = '侧边聊天已关闭或失效'
                 self.state['requests'] = []
@@ -240,6 +242,10 @@ class SideChat:
             elif method in ('turn/started', 'turn/completed'):
                 source = params['turn']
                 turn = self._turn(source['id'])
+                runtime = 'active' if method == 'turn/started' else 'idle'
+                progressed = (self.state['threadRuntimeStatus']['type'] != runtime or
+                              any(turn.get(key) != source[key] for key in ('status', 'error') if key in source) or
+                              bool(source.get('items') and source['items'] != turn['items']))
                 if method == 'turn/started':
                     pending = next((row for row in self.submissions.values() if row['status'] == 'unknown' and row.get('mode') != 'steer' and not row.get('turnId')), None)
                     if pending is not None:
@@ -249,7 +255,7 @@ class SideChat:
                         turn[key] = source[key]
                 if source.get('items'):
                     turn['items'] = copy.deepcopy(source['items'])
-                self.state['threadRuntimeStatus']['type'] = 'active' if method == 'turn/started' else 'idle'
+                self.state['threadRuntimeStatus']['type'] = runtime
                 if method == 'turn/completed':
                     self.queue_event.set()
                     self.state['requests'] = [r for r in self.state['requests'] if r['params'].get('turnId') != source['id']]
@@ -257,6 +263,7 @@ class SideChat:
                 turn = self._turn(params['turnId'])
                 item = copy.deepcopy(params['item'])
                 index = next((i for i, x in enumerate(turn['items']) if x['id'] == item['id']), None)
+                progressed = index is None or turn['items'][index] != item
                 if index is None:
                     turn['items'].append(item)
                 else:
@@ -267,12 +274,17 @@ class SideChat:
                 if item is not None:
                     key = 'text' if method == 'item/agentMessage/delta' else 'aggregatedOutput'
                     item[key] = (item.get(key) or '') + (params.get('delta') or '')
+                    progressed = bool(params.get('delta'))
             elif method == 'serverRequest/resolved':
+                progressed = any(r['id'] == params.get('requestId') for r in self.state['requests'])
                 self.state['requests'] = [r for r in self.state['requests'] if r['id'] != params.get('requestId')]
                 self.queue_event.set()
             elif method == 'error' and not params.get('willRetry'):
+                progressed = not self.error
                 self.error = '侧边聊天执行失败，请检查模型接入后重试'
                 self.state['threadRuntimeStatus']['type'] = 'idle'
+            if progressed:
+                self._record_interaction()
 
     def activity(self):
         """Read only five scalar fields; never project history or wait for IO."""
@@ -289,8 +301,8 @@ class SideChat:
             self.lock.release()
 
     def _record_interaction(self):
-        # Called with the child lock after a successful write, never for a read,
-        # queued intent or unknown receipt. Retries return before reaching here.
+        # Accepted writes and new native progress count as activity. Reads,
+        # usage notifications and unknown write receipts never advance time.
         self.recency = max(self.recency, int(time.time() * 1000))
         if self.on_interaction:
             self.on_interaction(self.parent, self.recency)

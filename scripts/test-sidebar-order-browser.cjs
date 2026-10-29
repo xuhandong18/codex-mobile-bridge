@@ -35,7 +35,10 @@ const server=http.createServer(async(req,res)=>{
       const matching=rows.filter(row=>(!ids||ids.includes(row.id))&&(!query.get('q')||row.title.includes(query.get('q'))));
       value={sessions:[...matching].sort((a,b)=>b.recency-a.recency).slice(0,ids?50:Number(query.get('offset')||0)+101),remoteHosts:[],sources:['desktop'],complete:true,sidebar,sidebarPreferences:preferences};
     }
-    else if(p==='/api/activity')value={sessions:[]};
+    else if(p==='/api/activity'){
+      let raw='';for await(const chunk of req)raw+=chunk;
+      value={sessions:Object.entries(JSON.parse(raw).hosts).flatMap(([host,ids])=>ids.map(id=>({id,host,connected:true,status:'idle',recency:rows.find(row=>row.id===id)?.recency||0})))};
+    }
     res.end(JSON.stringify(value));return;
   }
   if(p==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(fs.readFileSync(path.join(web,'index.html')));return;}
@@ -77,6 +80,13 @@ const server=http.createServer(async(req,res)=>{
         check(await ids('#sessions [data-section="pinned"] > .session'),[id(11),id(12)],'置顶聊天从新到旧 '+label);
         check(await ids('#sessions [data-section="threads"] > .session'),[id(13),id(14)],'独立聊天从新到旧 '+label);
       }
+      await page.locator('#sessions .session[data-id="'+id(2)+'"]').scrollIntoViewIfNeeded();
+      await page.waitForFunction(()=>!activityBusy);
+      rows[1].recency=150;
+      await page.evaluate(()=>refreshActivity());
+      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(2),'没有新发送时，运行进度通过活动查询更新排序 '+label);
+      await page.evaluate(()=>refreshActivity());
+      check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(2),'只有轮询没有新进度时不改变排序 '+label);
       rows[7].recency=200;
       await page.evaluate(id=>bumpRecency(id,'local',200),id(8));
       check((await ids(mode==='recent'?'#sessions .session':buttons))[0],id(8),'新的交互立即排到最前 '+label);

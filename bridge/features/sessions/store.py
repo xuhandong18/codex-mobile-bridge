@@ -144,6 +144,21 @@ class SessionStore:
                 bool(database and Path(str(database) + '-shm').exists()), exc)
             raise StoreUnavailable("暂时无法读取 Codex 会话数据库，请稍后重试或重新打开电脑 Codex。") from exc
 
+    @staticmethod
+    def recency(row):
+        """Use native activity, including progress after the last user input."""
+        return max(row.get('recency_at_ms') or (row.get('recency_at') or 0)*1000,
+                   row.get('updated_at_ms') or (row.get('updated_at') or 0)*1000)
+
+    @staticmethod
+    def _recency_order(columns):
+        values = []
+        for prefix in ('recency_at', 'updated_at'):
+            fields = [f'NULLIF({name}, 0)' + ('' if name.endswith('_ms') else '*1000')
+                      for name in (prefix+'_ms', prefix) if name in columns]
+            values.append('COALESCE(' + ','.join([*fields, '0']) + ')' if fields else '0')
+        return 'MAX(' + ','.join(values) + ')'
+
     def list(self, query="", limit=100, offset=0, archived=False, source='all', ids=None):
         if source not in ('all', 'desktop', 'cli'):
             raise ValueError('不支持的会话来源')
@@ -169,7 +184,7 @@ class SessionStore:
                 search_fields = [name for name in ("name", "title", "cwd") if name in columns]
                 where.append("(" + " OR ".join(name + " LIKE ?" for name in search_fields) + ")")
                 params += ["%" + query + "%"] * len(search_fields)
-            recency = "COALESCE(recency_at_ms, recency_at * 1000, updated_at * 1000)" if "recency_at_ms" in columns else "COALESCE(recency_at, updated_at)" if "recency_at" in columns else "updated_at"
+            recency = self._recency_order(columns)
             rows = conn.execute("SELECT " + ",".join(fields) + " FROM threads WHERE " + " AND ".join(where) + " ORDER BY " + recency + " DESC, id DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
             return [dict(row, origin=self._origin(dict(row))) for row in rows]
 
@@ -261,8 +276,8 @@ class SessionStore:
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
             fields = [name for name in ('recency_at_ms', 'recency_at', 'updated_at_ms', 'updated_at') if name in columns]
-            rows = conn.execute('SELECT id,' + ','.join(fields) + ' FROM threads WHERE id IN (' + ','.join('?' for _ in identifiers) + ')', identifiers)
-            return {r['id']: next((r[k] * (1 if k.endswith('_ms') else 1000) for k in fields if r[k]), 0) for r in rows}
+            rows = conn.execute('SELECT ' + ','.join(['id', *fields]) + ' FROM threads WHERE id IN (' + ','.join('?' for _ in identifiers) + ')', identifiers)
+            return {r['id']: self.recency(dict(r)) for r in rows}
 
     def get(self, thread_id):
         with self._connect() as conn:

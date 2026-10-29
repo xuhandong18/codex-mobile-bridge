@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from bridge.clients.codex.catalog import CatalogError
+from bridge.features.sessions.store import SessionStore
 from bridge.resources import source_text
 
 
@@ -360,7 +361,7 @@ class AppHosts:
             row.update(host=host, hostLabel=label,
                        projectKey=host + '|' + ('independent' if independent else project['id'] if project else cwd or 'unassigned'),
                        projectName='独立聊天' if independent else project['name'] if project else (raw_cwd.replace('\\', '/') if host == 'local' and os.name == 'nt' else raw_cwd).rstrip('/').rsplit('/', 1)[-1] or '未归类',
-                       recency=row.get('recency_at_ms') or (row.get('recency_at') or 0) * 1000 or row.get('updated_at_ms') or (row.get('updated_at') or 0) * 1000)
+                       recency=SessionStore.recency(row))
         return rows
 
 
