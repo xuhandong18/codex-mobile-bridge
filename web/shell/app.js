@@ -697,7 +697,6 @@ $('new-chat-form').onsubmit=async event=>{
   event.preventDefault();if(creatingChat)return;
   const project=$('new-chat-project').value,title=$('new-chat-title').value.trim()||t('新聊天'),kind=$('new-chat-type').value;
   const autoTitle=!$('new-chat-title').value.trim()||$('new-chat-title').dataset.edited!=='true'&&title===t('新聊天');
-  if(newChatSettings.loading){$('new-chat-error').textContent=t('正在读取模型设置，请稍候。');return;}
   const preferences=newChatSettings.value(),preferenceScope=newChatSettings.key;
   if(newChatSettings.model.value==='__custom__'&&!preferences.model||preferences.model&&!/^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}$/.test(preferences.model)){$('new-chat-error').textContent=t('模型 ID 格式不正确');return;}
   if(preferences.permission==='full-access'&&!confirm(t('允许新聊天完全访问电脑文件和网络？')) )return;

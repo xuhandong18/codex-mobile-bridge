@@ -627,9 +627,11 @@ class Bridge:
     def new_chat_models(self, project_key, kind='desktop'):
         if kind not in ('desktop', 'cli'):
             raise ValueError('未知聊天类型')
-        project = next((row for row in self.projects() if row['key'] == project_key and row.get('type', 'desktop') == kind), None)
         if kind == 'desktop' and project_key == 'local|independent':
             project = {'host': 'local', 'cwd': str(self.codex_home)}
+        else:
+            available = self.projects() if kind == 'cli' else self.hosts.projects()
+            project = next((row for row in available if row['key'] == project_key and row.get('type', 'desktop') == kind), None)
         if project is None:
             raise ValueError('请选择现有项目')
         bridge = self.for_host(project['host'])

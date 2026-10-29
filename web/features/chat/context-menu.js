@@ -62,19 +62,21 @@ class NewChatSettings {
   async load(project,kind){
     const revision=++this.revision;this.loading=true;this.key=this.scope(project,kind);const saved=this.defaults.read(this.key);
     this.permission.value=saved.permission||'';this.custom.value=saved.model||'';this.rows=[];
-    this.model.replaceChildren(this.option('沿用 Codex 默认设置',''));this.fillEfforts();
-    this.model.disabled=true;this.permission.disabled=true;
+    this.model.replaceChildren(this.option('沿用 Codex 默认设置',''),...(saved.model?[new Option(saved.model,saved.model)]:[]),this.option('自定义模型…','__custom__'));
+    this.model.value=saved.model||'';this.fillEfforts(saved.effort);
+    this.model.disabled=!project;this.permission.disabled=!project;
     if(!project){this.loading=false;return;}
     try{
       const catalog=await this.request('/api/new-chat-models?project='+encodeURIComponent(project)+'&kind='+encodeURIComponent(kind));
       if(revision!==this.revision)return;
+      const selected=this.value(),custom=this.model.value==='__custom__';
       this.rows=Array.isArray(catalog.models)?catalog.models:[];
-      this.model.append(...this.rows.map(row=>new Option(row.name||row.id,row.id)),this.option('自定义模型…','__custom__'));
-      this.model.value=saved.model?(this.rows.some(row=>row.id===saved.model)?saved.model:'__custom__'):'';this.fillEfforts(saved.effort);
+      this.model.replaceChildren(this.option('沿用 Codex 默认设置',''),...this.rows.map(row=>new Option(row.name||row.id,row.id)),this.option('自定义模型…','__custom__'));
+      this.model.value=selected.model?(this.rows.some(row=>row.id===selected.model)?selected.model:'__custom__'):custom?'__custom__':'';
+      this.custom.value=selected.model;this.fillEfforts(selected.effort);
     }catch{
-      if(revision!==this.revision)return;
-      this.model.append(this.option('自定义模型…','__custom__'));this.model.value=saved.model?'__custom__':'';this.fillEfforts(saved.effort);
-    }finally{if(revision===this.revision){this.loading=false;this.model.disabled=false;this.permission.disabled=false;}}
+      // Defaults and explicit model IDs remain usable while the catalog is offline.
+    }finally{if(revision===this.revision)this.loading=false;}
   }
   fillEfforts(preferred=this.effort.value){
     this.custom.parentElement.hidden=this.model.value!=='__custom__';

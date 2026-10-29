@@ -72,6 +72,8 @@ Windows 网页项目创建先由 `list_hosts` 核验聊天目录权限：已在�
 
 登录后的 `GET /api/projects` 返回 App 已保存的本机及 SSH 项目；`POST /api/sessions` 接受项目键、名称和请求 UUID。服务端重新解析已保存项目，不接受客户端任意目录、主机、程序路径或配置覆盖。创建接口沿用 Host、Origin、登录和 CSRF 校验。
 
+新建窗口立即提供沿用默认设置、自定义模型及已记住的模型/推理强度/权限，模型目录后台补齐，读取失败不阻断创建；晚到目录只更新可选模型并保留当前选择。桌面聊天的模型查询仅核对原生项目，不枚举各主机 CLI 聊天；本机独立聊天无需项目发现。实际设置仍在创建后通过原 owner 提交并确认，显示偏好不代表权限已经生效。
+
 `bridge/features/sessions/create.py` 使用所选主机的官方运行时完成 `initialize → thread/start → thread/name/set → thread/read(includeTurns=true)`，随后关闭 stdio 并等待进程退出。读取空历史用于落实持久化：仅设置名称会留下目录元数据，却未必落盘可恢复的 rollout。若运行时明确返回 `list_turns is not supported yet`，只对同一新线程改用 `thread/read(includeTurns=false)`，核对返回 ID 与保存路径，并在进程正常退出后确认保存文件存在；不能只忽略错误就报告成功。其他失败仍保留结果未知、不自动重放的语义。自动标题不设置占位名称。整个辅助进程不调用 `turn/start`，不会发送模型任务。新线程使用该主机、工作目录的运行时默认配置；不克隆已有聊天的临时设置。
 
 创建结果按 UUID 写入网关自己的 `creations.json`，重试复用同一聊天；请求可能提交但结果未知时不自动重放。辅助进程退出后，通过 `codex://threads/<id>?hostId=...` 打开原桌面 App，桌面接管后才允许发送和审批。此步骤会切换桌面当前页面；打开失败保留已创建 ID。SSH 创建借助已有非交互 SSH 通道执行相同辅助代码，不在远端安装网关。

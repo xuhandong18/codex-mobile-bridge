@@ -92,6 +92,32 @@ class CreationTests(unittest.TestCase):
             models.assert_called_once_with(False);activate.assert_not_called()
             with self.assertRaises(ValueError):self.bridge.new_chat_models('local|missing')
 
+    def test_desktop_new_chat_models_does_not_scan_cli_sessions_or_other_hosts(self):
+        with patch.object(self.bridge, 'projects', side_effect=AssertionError('不应扫描全部聊天')), \
+             patch.object(self.bridge.accounts, 'current_models', return_value={'models': [{'id': 'fast'}]}):
+            self.assertEqual(self.bridge.new_chat_models('local|p')['models'][0]['id'], 'fast')
+            with self.assertRaises(ValueError):
+                self.bridge.new_chat_models('local|missing')
+
+    def test_independent_new_chat_models_does_not_require_project_discovery(self):
+        with patch.object(self.bridge.hosts, 'projects', side_effect=AssertionError('独立聊天无需读取项目')), \
+             patch.object(self.bridge, 'projects', side_effect=AssertionError('不应扫描全部聊天')), \
+             patch.object(self.bridge.accounts, 'current_models', return_value={'models': []}):
+            self.assertEqual(self.bridge.new_chat_models('local|independent'), {'models': []})
+
+    def test_cli_new_chat_models_still_validates_project_and_uses_its_host(self):
+        project = {'key': 'cli|remote|fixture', 'type': 'cli', 'host': 'remote', 'cwd': '/remote/project'}
+        with patch.object(self.bridge, 'projects', return_value=[project]), \
+             patch.object(self.bridge, 'for_host') as remote, \
+             patch.object(self.bridge.accounts, 'current_models') as accounts:
+            remote.return_value.catalog_reader.get_kind.return_value = {'models': [{'id': 'remote-model'}]}
+            self.assertEqual(self.bridge.new_chat_models(project['key'], 'cli')['models'][0]['id'], 'remote-model')
+            remote.assert_called_once_with('remote')
+            remote.return_value.catalog_reader.get_kind.assert_called_once_with('models', project['cwd'])
+            accounts.assert_not_called()
+            with self.assertRaises(ValueError):
+                self.bridge.new_chat_models('local|independent', 'cli')
+
     def test_legacy_gateway_projects_are_preserved_but_not_injected_as_native_projects(self):
         path = self.bridge.project_registry.path;path.parent.mkdir(parents=True, exist_ok=True)
         legacy = [{'key':'local|gateway-old', 'host':'local', 'name':'Old gateway project', 'cwd':str(self.root)}]
