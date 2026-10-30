@@ -32,8 +32,15 @@ const server=http.createServer(async(req,res)=>{
    res.writeHead(503);return res.end(JSON.stringify({error:'合成创建失败'}));
   }
   else if(p==='/api/activity'||p==='/api/sessions')value={sessions:[...rows,...(creationFixture?.exists?[{id:created,host:'local',title:'新聊天',projectKey:'local|independent',projectName:'独立聊天',recency:200,access:{source:'desktop'}}]:[])],hosts:[],sources:[],hasMore:false,complete:true};
+  else if(creationFixture&&p==='/api/sessions/'+created&&url.searchParams.get('metadata')==='1'){
+   const fixture=creationFixture;
+   if(++fixture.discoveryReads<=2){res.writeHead(404);return res.end(JSON.stringify({error:'找不到这个会话'}));}
+   await new Promise(resolve=>{fixture.releaseVisibility=resolve;fixture.waitingVisibility();});
+   fixture.visible=true;value={id:created,host:'local'};
+  }
   else if(creationFixture&&p.startsWith('/api/sessions/'+created+'/')&&(p.endsWith('/settings')||p.endsWith('/permissions'))){
    const fixture=creationFixture,action=p.split('/').at(-1);let raw='';for await(const chunk of req)raw+=chunk;
+   if(!fixture.visible){fixture.earlyRequests.push(action);res.writeHead(404);return res.end(JSON.stringify({error:'找不到这个会话'}));}
    const body=JSON.parse(raw);fixture.writes.push({action,body});fixture.checkReady();
    if(action==='settings'){
     await new Promise(resolve=>fixture.releaseSettings=resolve);
@@ -45,10 +52,14 @@ const server=http.createServer(async(req,res)=>{
   else if(p.endsWith('/timeline')||p.endsWith('/updates')||p.endsWith('/changes')){
    if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,250));
    const id=p.split('/')[3],fixture=id===created?creationFixture:null;
+   if(fixture&&!fixture.visible){fixture.earlyRequests.push('history');res.writeHead(404);return res.end(JSON.stringify({error:'找不到这个会话'}));}
    if(fixture&&p.endsWith('/timeline'))await new Promise(resolve=>{fixture.releaseHistory=resolve;fixture.checkReady();});
    if(p.endsWith('/changes'))await new Promise(resolve=>setTimeout(resolve,100));
    value={epoch:'fixture',sequence:fixture?++fixture.sequence:1,rows:[],files:[],hasMore:false,meta:{id,host:'local',title:rows.find(r=>r.id===id)?.title||id,connected:true,status:'idle',requests:[],queue:[],turns:[],access:fixture?{source:'desktop'}:access,
     ...(fixture?{model:fixture.model,effort:fixture.effort,permissionMode:fixture.permissionMode}:{})}};
+  }else if(creationFixture&&p==='/api/sessions/'+created+'/reconnect'){
+   if(!creationFixture.visible){creationFixture.earlyRequests.push('reconnect');res.writeHead(404);return res.end(JSON.stringify({error:'找不到这个会话'}));}
+   value={connected:true};
   }else if(p.startsWith('/api/desktop-sessions/')){
    const action=p.split('/').at(-1),id=url.searchParams.get('sessionId');
    if(action==='list')value={connected:true,sessions:rows,capabilities:{send:true}};
@@ -93,8 +104,9 @@ const server=http.createServer(async(req,res)=>{
    await context.close();
   }
   for(const [width,outcome] of [[390,'confirmed'],[820,'confirmed'],[1280,'confirmed'],[390,'unconfirmed'],[390,'failed']]){
-   const fixture=creationFixture={outcome,exists:false,writes:[],model:'native-model',effort:'low',permissionMode:'auto-review',sequence:0};
+   const fixture=creationFixture={outcome,exists:false,visible:false,discoveryReads:0,earlyRequests:[],writes:[],model:'native-model',effort:'low',permissionMode:'auto-review',sequence:0};
    let ready;const requested=new Promise(resolve=>ready=resolve);fixture.checkReady=()=>{if(fixture.writes.length===2&&fixture.releaseHistory)ready();};
+   const waitingVisibility=new Promise(resolve=>fixture.waitingVisibility=resolve);
    const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
    await page.goto(base);await page.locator('#new-chat').click();
    await page.waitForFunction(()=>!newChatSettings.loading);
@@ -106,6 +118,10 @@ const server=http.createServer(async(req,res)=>{
    });
    check(await page.locator('#model-name').textContent()==='selected-model · 正在应用…','历史未返回时立即显示所选模型 '+width+' '+outcome);
    check(await page.locator('#model-effort').textContent()==='· high'&&await page.locator('#permissions-button').textContent()==='请求批准 · 正在应用…','思考程度和权限立即沿用创建表单 '+width+' '+outcome);
+   let visibilityDeadline;try{await Promise.race([waitingVisibility,new Promise((_,reject)=>visibilityDeadline=setTimeout(()=>reject(Error('未等待新会话可见性')),3000))]);}finally{clearTimeout(visibilityDeadline);}
+   check(fixture.discoveryReads===3&&fixture.writes.length===0&&fixture.earlyRequests.length===0,'会话连续两次不存在时只重试轻量读取，不提前连接或写设置 '+width+' '+outcome);
+   check(!(await page.locator('#toast').textContent()).includes('找不到这个会话'),'暂时不可见不会弹出会话不存在 '+width+' '+outcome);
+   fixture.releaseVisibility();
    let deadline;try{await Promise.race([requested,new Promise((_,reject)=>deadline=setTimeout(()=>reject(Error('设置请求被历史读取或模型确认阻塞')),3000))]);}finally{clearTimeout(deadline);}
    await page.waitForFunction(()=>applyingNewChat!==null&&state?.loadingHistory);
    check(fixture.writes.some(row=>row.action==='settings')&&fixture.writes.some(row=>row.action==='permissions'),'历史和模型确认均被阻塞时，两类设置已分别提交 '+width+' '+outcome);
@@ -190,5 +206,5 @@ const server=http.createServer(async(req,res)=>{
   await starting.evaluate(hash=>window.BridgeNavigation.openChat(hash),'#'+second+'~local');assert.ok(releaseDiscovery);releaseDiscovery();await starting.waitForFunction(()=>!entering&&state?.connected);
   check(await starting.evaluate(()=>currentId)===second,'初次进入期间的新通知优先于启动时的旧链接');
   check(errors.length===0,'浏览器无脚本异常：'+errors.join('; '));console.log(JSON.stringify({passed:checks.length,writes,checks},null,2));
- }finally{releaseModels?.();creationFixture?.releaseHistory?.();creationFixture?.releaseSettings?.();if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
+ }finally{releaseModels?.();creationFixture?.releaseVisibility?.();creationFixture?.releaseHistory?.();creationFixture?.releaseSettings?.();if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

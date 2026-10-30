@@ -960,6 +960,25 @@ class HttpTests(unittest.TestCase):
         status, _, _ = self.request('GET', '/api/sessions?source=unknown', headers=headers)
         self.assertEqual(status, 400)
 
+    def test_new_chat_metadata_read_is_authenticated_host_scoped_and_does_not_load_history(self):
+        from unittest.mock import Mock
+        metadata = self.server.bridge.session_metadata = Mock(return_value={'id': THREAD, 'host': 'local'})
+        self.server.bridge.view = Mock(side_effect=AssertionError('must not load history'))
+        path = '/api/sessions/' + THREAD + '?host=local&metadata=1'
+        self.assertEqual(self.request('GET', path)[0], 401)
+        metadata.assert_not_called()
+        headers = self.login()
+        status, _, body = self.request('GET', path, headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {'id': THREAD, 'host': 'local'})
+        metadata.assert_called_once_with(THREAD)
+        self.server.bridge.view.assert_not_called()
+        metadata.side_effect = KeyError('not visible yet')
+        self.assertEqual(self.request('GET', path, headers=headers)[0], 404)
+        metadata.reset_mock()
+        self.assertEqual(self.request('GET', path.replace('host=local', 'host=other'), headers=headers)[0], 404)
+        metadata.assert_not_called()
+
     def test_host_scoped_list_contract_is_authenticated_and_incomplete_on_failure(self):
         self.assertEqual(self.request('GET', '/api/sessions?scope=host&host=local')[0], 401)
         headers = self.login()

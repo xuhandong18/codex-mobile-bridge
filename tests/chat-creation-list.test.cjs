@@ -9,7 +9,7 @@ function fixture({preferences={},settings=async()=>({confirmed:true}),openError=
     sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},localStorage:{setItem(){}},
     newChatScopes:new Map(),newChatProjects:[{key:'local|p',name:'Project',host:'local',cwd:'/project'}],listRows:[],sidebarData:{projects:[],sections:[]},listRenderStamp:'',createdChats:new Map(),listSource:'all',renderSourceFilter(){},
     waitForCreatedChat:read,confirm:()=>true,sessionUrl:(id,action)=>'/'+action,uuid:()=>id,chatKey:(id,host)=>host+'|'+id,
-    api:async(url,body)=>{calls.push({url,body});return url==='/api/sessions'?{id,host:'local',message:'Created'}:settings(url,body);},toast:message=>notices.push(message),renderList(){},
+    api:async(url,body)=>{calls.push({url,body});return url==='/api/sessions'?{id,host:'local',message:'Created'}:url==='/&metadata=1'?{id,host:'local'}:settings(url,body);},toast:message=>notices.push(message),renderList(){},
     loadList:()=>new Promise(()=>{}),document:{querySelector:()=>({disabled:false})},
     openChat:async()=>{assert.equal(context.listRows.filter(row=>row.id===id).length,1,'created chat must already be in the sidebar');await opening();if(openError)throw Error(openError);},applyingNewChat:null,applyingNewChatPreferences:null,state:null};
   vm.createContext(context);
@@ -18,6 +18,21 @@ function fixture({preferences={},settings=async()=>({confirmed:true}),openError=
   return {calls,notices,context,$,id,submit:()=>$('new-chat-form').onsubmit({preventDefault(){}})};
 }
 const selected={model:'model-b',effort:'xhigh',permission:'full-access'};
+
+test('刚创建的会话尚未可见时立即打开页面，但不提前提交设置',async()=>{
+  let release,opened=false,visible=false;const pending=new Promise(resolve=>release=resolve);
+  const ui=fixture({preferences:selected,opening:async()=>{opened=true;},read:async()=>{await pending;visible=true;},settings:async()=>{
+    assert.equal(visible,true,'会话可读之前提交设置会返回“找不到这个会话”');return {confirmed:true};
+  }}),submit=ui.submit();
+  try{
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(opened,true,'等待可见性时仍应立即显示聊天和所选设置');
+    assert.equal(ui.calls.some(call=>call.url==='/settings'||call.url==='/permissions'),false,'不能向尚不可见的会话提交设置');
+  }finally{release();await submit;}
+  assert.equal(ui.calls.filter(call=>call.url==='/settings').length,1);
+  assert.equal(ui.calls.filter(call=>call.url==='/permissions').length,1);
+  assert.equal(ui.notices.some(message=>message.includes('找不到这个会话')),false);
+});
 
 test('新聊天设置不等待聊天历史读取',async()=>{
   let release;const pending=new Promise(resolve=>release=resolve);
@@ -30,10 +45,17 @@ test('新聊天设置不等待聊天历史读取',async()=>{
   }finally{release();await submit;}
 });
 
-test('新聊天不再重复预读元数据才打开页面',async()=>{
-  const ui=fixture({preferences:selected,read:()=>{throw Error('不应重复预读');}});await ui.submit();
-  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/settings','/permissions']);
-  assert.equal(ui.notices.some(message=>message.includes('不应重复预读')),false);
+test('新聊天只预读轻量元数据，不为等待可见性加载完整详情',async()=>{
+  const ui=fixture({preferences:selected});await ui.submit();
+  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1','/settings','/permissions']);
+});
+
+test('可见性检查失败时结束应用提示，不提交任何设置写入',async()=>{
+  const ui=fixture({preferences:selected,read:async()=>{throw Object.assign(Error('新会话尚不可用'),{status:404});}});
+  await ui.submit();
+  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions']);
+  assert.equal(ui.context.applyingNewChat,null);assert.equal(ui.context.applyingNewChatPreferences,null);
+  assert.ok(ui.notices.some(message=>message.includes('新会话尚不可用')));
 });
 
 test('模型确认仍在等待时权限独立提交，所有写入只执行一次',async()=>{
@@ -41,7 +63,7 @@ test('模型确认仍在等待时权限独立提交，所有写入只执行一�
   const ui=fixture({preferences:selected,settings:url=>url==='/settings'?pending:Promise.resolve({confirmed:true})}),submit=ui.submit();
   try{
     await new Promise(resolve=>setImmediate(resolve));
-    assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/settings','/permissions']);
+    assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1','/settings','/permissions']);
     assert.equal(ui.context.applyingNewChat,'local|'+ui.id);
   }finally{release({confirmed:false});await submit;}
   assert.equal(ui.context.applyingNewChat,null);assert.equal(ui.context.applyingNewChatPreferences,null);
@@ -51,7 +73,7 @@ test('模型确认仍在等待时权限独立提交，所有写入只执行一�
 test('a confirmed new chat appears before its background list refresh returns',async()=>{
   const ui=fixture();await ui.submit();
   assert.equal(ui.context.listRows.filter(row=>row.id===ui.id).length,1);
-  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions']);
+  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1']);
 });
 
 test('choosing no project submits an independent chat even when another project was selected before',async()=>{
@@ -72,19 +94,19 @@ for(const failure of ['unconfirmed','failed'])test(failure+' model settings do n
     return {confirmed:false};
   }});
   await ui.submit();
-  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/settings','/permissions']);
-  assert.equal(ui.calls[1].body.effort,'xhigh');assert.equal(ui.calls[2].body.confirmed,true);
+  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1','/settings','/permissions']);
+  assert.equal(ui.calls[2].body.effort,'xhigh');assert.equal(ui.calls[3].body.confirmed,true);
   assert.ok(ui.notices.some(message=>message.includes('模型和推理强度：')));
 });
 test('a failed timeline read does not discard settings for the created chat',async()=>{
   const ui=fixture({preferences:selected,openError:'timeline unavailable'});await ui.submit();
-  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/settings','/permissions']);
+  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1','/settings','/permissions']);
   assert.ok(ui.notices.some(message=>message.includes('timeline unavailable')));
 });
 test('both settings are applied once and their failures are reported separately',async()=>{
   const ui=fixture({preferences:selected,settings:async url=>{throw Error(url==='/settings'?'model rejected':'permissions rejected');}});
   await ui.submit();
-  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/settings','/permissions']);
+  assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1','/settings','/permissions']);
   const message=ui.notices.find(message=>message.includes('model rejected'));
   assert.ok(message.includes('permissions rejected'));assert.ok(message.includes('权限：'));
 });

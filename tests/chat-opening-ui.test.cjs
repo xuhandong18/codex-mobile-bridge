@@ -24,7 +24,7 @@ function fixture({source='desktop',canReconnect=true}={}){
       dispose(){this.abort.abort();}
     }};
   vm.createContext(ctx);vm.runInContext(opening,ctx);
-  return {ctx,events,finish:()=>finishReading()};
+  return {ctx,events,finish:()=>finishReading?.()};
 }
 
 test('opening reserves requests for owner connection and history before model discovery',async()=>{
@@ -41,4 +41,21 @@ test('opening CLI history never starts an automatic runtime connection',async()=
   const f=fixture({source:'cli'}),pending=f.ctx.openChat('a');
   assert.ok(!f.events.includes('reconnect'));
   f.finish();await pending;
+});
+
+test('新会话等待可见性时先显示页面，再开始历史和自动连接',async()=>{
+  const f=fixture();let release;const ready=new Promise(resolve=>release=resolve);
+  const pending=f.ctx.openChat('a','local',{ready});
+  try{
+    assert.equal(f.ctx.currentId,'a');
+    assert.equal(f.events.includes('history'),false,'发现新会话之前不能读取历史');
+    assert.equal(f.events.includes('reconnect'),false,'发现新会话之前不能发送自动连接请求');
+  }finally{release();await new Promise(resolve=>setImmediate(resolve));f.finish();await pending;}
+  assert.ok(f.events.includes('history'));assert.ok(f.events.includes('reconnect'));
+});
+
+test('等待可见性期间切到其他聊天，不再启动旧页面的读取或连接',async()=>{
+  const f=fixture();let release;const ready=new Promise(resolve=>release=resolve);
+  const pending=f.ctx.openChat('a','local',{ready});f.ctx.chatTimeline.dispose();f.finish();release();await pending;
+  assert.equal(f.events.includes('history'),false);assert.equal(f.events.includes('reconnect'),false);
 });

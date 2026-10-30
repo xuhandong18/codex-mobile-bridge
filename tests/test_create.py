@@ -68,6 +68,16 @@ class CreationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '数据目录'):
                 self.bridge.session_record_path(self.tid)
 
+    def test_new_chat_metadata_only_checks_visibility_without_loading_history_or_owner(self):
+        with patch.object(self.bridge.store, 'get', return_value={'id': self.tid, 'origin': 'desktop'}) as metadata, \
+             patch.object(self.bridge, 'session', side_effect=AssertionError('must not load history or owner')):
+            self.assertEqual(self.bridge.session_metadata(self.tid), {'id': self.tid, 'host': 'local'})
+            metadata.assert_called_once_with(self.tid)
+            self.assertEqual(self.bridge.live, {})
+            metadata.side_effect = KeyError('not visible yet')
+            with self.assertRaises(KeyError):
+                self.bridge.session_metadata(self.tid)
+
     def test_management_checks_fresh_parent_and_descendant_state_and_delete_confirmation(self):
         child = str(uuid.uuid4())
         with patch.object(self.bridge.store, 'get', return_value={'origin': 'desktop'}), \

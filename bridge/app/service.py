@@ -2008,6 +2008,12 @@ class Bridge:
         target.chmod(0o600)
         target.replace(self.ledger_path)
 
+    def session_metadata(self, thread_id):
+        """Check saved visibility without loading history or subscribing an owner."""
+        uuid.UUID(thread_id)
+        self.store.get(thread_id)
+        return {'id': thread_id, 'host': self.host}
+
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)
         self._refresh_message_times(session)

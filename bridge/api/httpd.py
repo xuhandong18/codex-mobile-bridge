@@ -997,6 +997,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.changes(bridge, thread_id, int(query.get('after', ['-1'])[0]),
                                         query.get('epoch', [''])[0], query.get('start', [''])[0])
                 if action is None:
+                    if query.get('metadata') == ['1']:
+                        return self.output(200, bridge.session_metadata(thread_id))
                     return self.output(200, bridge.view(thread_id, background=True))
                 if action == "catalog":
                     kind = query.get("kind", [None])[0]
