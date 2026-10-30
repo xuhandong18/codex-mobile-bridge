@@ -45,6 +45,14 @@ class SessionMaintenanceTests(unittest.TestCase):
             bridge._maintain()
         self.assertEqual(bridge._refresh_async.call_count, 2)
 
+    def test_native_backup_failure_does_not_skip_chat_maintenance(self):
+        bridge = self.bridge()
+        bridge.side_chats = SimpleNamespace(native_sync=SimpleNamespace(start=Mock(side_effect=RuntimeError('synthetic backup startup failure'))))
+        bridge._refresh_async = Mock()
+        with self.assertLogs('bridge.app.service', level='ERROR'):
+            bridge._maintain()
+        self.assertEqual(bridge._refresh_async.call_count, 4)
+
     def test_failed_queue_send_keeps_unknown_result_and_is_not_replayed(self):
         bridge = self.bridge()
         session = bridge.live['healthy']

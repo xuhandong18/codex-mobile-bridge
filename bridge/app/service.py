@@ -198,7 +198,12 @@ class Bridge:
         self.subagent_activity = SubagentActivity(self.store, lambda: self.ipc.path, host)
         self.desktop_activity = DesktopActivity(self)
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
-                                   executable_getter=executable_getter, on_first_message=self._side_title)
+                                   executable_getter=executable_getter, on_first_message=self._side_title,
+                                   parent_lookup=self.store.get)
+        if host == 'local':
+            from bridge.clients.codex.native_side_chats import NativeSideChatSync
+            self.side_chats.native_sync = NativeSideChatSync(self.ipc.path, host, self.store.get,
+                self.side_chats.native_snapshot, self.side_chats.native_disconnected)
         self.closed = threading.Event()
         Path(data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         self.recency_index = RecencyIndex(self.store, Path(data_dir)/'session-recency-v2.json')
@@ -1926,6 +1931,12 @@ class Bridge:
                 self.accounts.check_ready()
             except ValueError:
                 return
+        native_sync = getattr(getattr(self, 'side_chats', None), 'native_sync', None)
+        if native_sync:
+            try:
+                native_sync.start()
+            except Exception:
+                logging.getLogger(__name__).exception('Native side-chat backup unavailable host=%s', self.host)
         self.subagent_activity.prune()
         with self.lock:
             sessions = list(self.live.values())

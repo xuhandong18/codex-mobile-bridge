@@ -828,17 +828,22 @@ class Handler(BaseHTTPRequestHandler):
                     raise PermissionError('侧边聊天需要启用网关密码保护')
                 owner = self.server.auth.key(self.token())
                 body = self.read_json() if write else {}
-                action = body.get('action') if write else 'read'
+                action = body.get('action') if write else 'history' if query.get('history') == ['1'] else 'read'
                 fields = {'create': {'action', 'creationId', 'title'}, 'rename': {'action', 'id', 'title'}, 'send': {'action', 'id', 'text', 'submissionId', 'attachments', 'skills', 'mode', 'workMode'},
                           'catalog': {'action', 'id'}, 'skills': {'action', 'id', 'query', 'offset', 'refresh', 'selected'},
                           'linux-permission-options': {'action', 'id'},
                           'permissions': {'action', 'id', 'preset', 'confirmed'}, 'cancel-queued': {'action', 'id', 'submissionId'}, 'settings': {'action', 'id', 'model', 'effort'},
                           'close': {'action', 'id'}, 'stop': {'action', 'id'},
-                          'respond': {'action', 'id', 'requestId', 'response'}, 'read': set()}
-                if action not in fields or set(body) - fields[action] or (write and action == 'read'):
+                          'respond': {'action', 'id', 'requestId', 'response'}, 'read': set(), 'history': set()}
+                if action not in fields or set(body) - fields[action] or (write and action in ('read', 'history')):
                     raise ValueError('无效侧边聊天操作')
                 if 'slot' in query:
                     body = {**body, 'slot': query['slot'][0]}
+                if not write:
+                    if 'archiveId' in query:
+                        body['archiveId'] = query['archiveId'][0]
+                    if action == 'history':
+                        body['offset'] = int(query.get('offset', ['0'])[0])
                 return self.output(200, bridge.side_chat(side_match[1], owner, action, body))
             agent_match = re.fullmatch(r"/api/sessions/([0-9a-f-]{36})/subagents", path)
             if agent_match:

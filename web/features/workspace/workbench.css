@@ -165,3 +165,4 @@
 .wb-side-message-area{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .wb-side-message-area>.chat-message-map{height:0}
 .wb-side-latest{position:absolute;right:6px;bottom:8px;display:grid;place-items:center;width:32px;height:32px;min-height:32px;margin:0;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--surface);color:var(--text);font-size:18px;line-height:1;box-shadow:0 2px 6px #00000012}
+.wb-side-history[open]{display:flex;flex-direction:column;gap:8px;overflow:hidden}.wb-side-history .picker-choices{overflow:auto;min-height:0;margin:0;overscroll-behavior:contain}.wb-side-history .picker-head,.wb-side-history>p,.wb-side-history>button{flex:none}.wb-side-history .picker-choices button{width:100%;min-height:60px;overflow-wrap:anywhere}.wb-side-history .picker-choices span{line-height:1.5}

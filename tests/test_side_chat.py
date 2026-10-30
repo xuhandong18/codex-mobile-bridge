@@ -177,11 +177,13 @@ class SideChatTests(unittest.TestCase):
             self.assertEqual(manager.operate(self.parent, 'read', {})['id'], view['id'])
             self.assertEqual(manager.operate(self.parent, 'create', create, *args)['id'], view['id'])
             manager.operate(self.parent, 'close', {'id': view['id']})
-            self.assertIsNone(manager.operate(self.parent, 'read', {})['id'])
+            self.assertEqual(manager.operate(self.parent, 'read', {})['id'], view['id'])
+            self.assertTrue(manager.operate(self.parent, 'read', {})['readOnly'])
             with self.assertRaises(ValueError): manager.operate(self.parent, 'create', create, *args)
             new = manager.operate(self.parent, 'create', {'creationId': str(uuid.uuid4())}, *args)
             with self.assertRaises(ValueError): manager.operate(self.parent, 'close', {'id': view['id']})
             self.assertEqual(manager.operate(self.parent, 'read', {})['id'], new['id'])
+            manager.close()
 
 
 class SideChatServiceTests(unittest.TestCase):
@@ -232,7 +234,7 @@ class SideChatServiceTests(unittest.TestCase):
             bridge.side_attachment(support.THREAD, first['id'], 'preview', identifier)
         bridge.side_chat(support.THREAD, 'phone', 'close', {'slot': slot, 'id': second['id']})
         self.assertEqual(bridge.side_chat(support.THREAD, 'browser', 'read', {})['id'], first['id'])
-        self.assertIsNone(bridge.side_chat(support.THREAD, 'browser', 'read', {'slot': slot})['id'])
+        self.assertTrue(bridge.side_chat(support.THREAD, 'browser', 'read', {'slot': slot})['readOnly'])
         with self.assertRaises(ValueError):
             bridge.side_chat(support.THREAD, 'phone', 'create', {'creationId': second_token, 'slot': slot})
         with self.assertRaises(ValueError):
@@ -299,6 +301,11 @@ class SideChatHttpTests(unittest.TestCase):
         slot = str(uuid.uuid4())
         self.assertEqual(self.request('GET', path+'?slot='+slot, headers=auth)[0], 200)
         self.assertEqual(calls[-1][-1], {'slot': slot})
+        self.assertEqual(self.request('GET', path+'?history=1&offset=30', headers=auth)[0], 200)
+        self.assertEqual(calls[-1][-2:], ('history', {'offset': 30}))
+        self.assertEqual(self.request('GET', path+'?archiveId='+slot, headers=auth)[0], 200)
+        self.assertEqual(calls[-1][-1], {'archiveId': slot})
+        self.assertEqual(self.request('POST', path, {'action': 'history'}, auth)[0], 400)
         self.assertEqual(self.request('POST', path+'?slot='+slot, {'action': 'create', 'creationId': str(uuid.uuid4())}, auth)[0], 200)
         self.assertEqual(calls[-1][-1]['slot'], slot)
 
@@ -383,11 +390,13 @@ class SideAttachmentTests(unittest.TestCase):
         self.assertEqual(sum(method == 'turn/start' for method, _ in chat.runtime.calls), 1)
         with self.assertRaises(ValueError):
             self.manager.operate(self.parent, 'send', {**body, 'text': 'changed'})
-        folder = Path(chat.file_directory.name)
+        folder = chat.uploads.root
         self.manager.operate(self.parent, 'close', {'id': self.child})
-        self.assertFalse(folder.exists())
+        self.assertTrue(folder.exists())
+        retained, _ = self.manager.attachment(self.parent, self.child, 'preview', identifier)
+        self.assertEqual(Path(retained['previewPath']).read_bytes(), data)
         with self.assertRaises(ValueError):
-            self.manager.attachment(self.parent, self.child, 'preview', identifier)
+            self.manager.attachment(self.parent, self.child, 'put', str(uuid.uuid4()), 'new.txt', b'new')
 
     def test_steer_attachment_echo_keeps_one_message_and_its_preview(self):
         chat = self.manager.chats[(self.parent, '')]

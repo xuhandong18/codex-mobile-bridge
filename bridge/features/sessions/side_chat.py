@@ -1,9 +1,6 @@
-"""Bridge-owned ephemeral forks. Parent threads are never resumed or executed.
-
-One runtime owns each temporary child; closing it destroys the in-memory fork.
-Views are shared by authenticated gateway clients, never persisted in Bridge.
-"""
+"""Temporary executors with durable, display-only side-chat archives."""
 import re
+import base64
 import copy
 import hashlib
 import json
@@ -14,11 +11,13 @@ import tempfile
 import threading
 import time
 import uuid
+import sqlite3
 from pathlib import Path
 
 from bridge.features.sessions.model import normalize_state, normalize_request, normalize_item, waiting_for_user
 from bridge.features.sessions.message_index import conversation_recency_key, conversation_recency_time
 from bridge.features.workspace.uploads import Uploads
+from bridge.features.sessions.side_chat_archive import SideChatArchive
 
 
 BOUNDARY = """You are in a temporary side conversation, separate from the main thread.
@@ -172,8 +171,12 @@ class SideChat:
         self.first_message_submission = None
         self.first_message_accepted = False
         self.submissions = {}
+        self.responses = []
         self.file_directory = None
         self.uploads = None
+        self.on_change = None
+        self.saved_at = None
+        self.persistence_error = None
         self.queue_event = threading.Event()
         self.queue_worker = None
         self.turn_permissions = {key: copy.deepcopy(settings[key]) for key in ('permissions', 'approvalPolicy', 'approvalsReviewer', 'runtimeWorkspaceRoots') if key in settings}
@@ -216,6 +219,26 @@ class SideChat:
         return turn
 
     def _event(self, message):
+        self._apply_event(message)
+        params = message.get('params') or {}
+        if message.get('method') == 'bridge/disconnected' or params.get('threadId') == self.id:
+            self._persist()
+
+    def _persist(self, *, required=False):
+        with self.lock:
+            if self.on_change is None:
+                return True
+            try:
+                self.saved_at = self.on_change(self.view())
+                self.persistence_error = None
+                return True
+            except (OSError, sqlite3.Error, ValueError):
+                self.persistence_error = '保存异常，已暂停新的发送；请检查网关存储后重试。'
+                if required:
+                    raise SideChatError(self.persistence_error) from None
+                return False
+
+    def _apply_event(self, message):
         method, params = message.get('method'), message.get('params') or {}
         with self.lock:
             if self.closed:
@@ -262,7 +285,8 @@ class SideChat:
                     content_at = max((conversation_recency_time(item, normalize_item) for item in changed), default=0)
                 self.state['threadRuntimeStatus']['type'] = runtime
                 if method == 'turn/completed':
-                    self.queue_event.set()
+                    if any(row['status'] == 'queued' for row in self.submissions.values()):
+                        self.queue_event.set()
                     self.state['requests'] = [r for r in self.state['requests'] if r['params'].get('turnId') != source['id']]
             elif method in ('item/started', 'item/completed'):
                 turn = self._turn(params['turnId'])
@@ -288,7 +312,8 @@ class SideChat:
                     content_at = conversation_recency_time(params, normalize_item) or conversation_recency_time(item, normalize_item)
             elif method == 'serverRequest/resolved':
                 self.state['requests'] = [r for r in self.state['requests'] if r['id'] != params.get('requestId')]
-                self.queue_event.set()
+                if any(row['status'] == 'queued' for row in self.submissions.values()):
+                    self.queue_event.set()
             elif method == 'error' and not params.get('willRetry'):
                 self.error = '侧边聊天执行失败，请检查模型接入后重试'
                 self.state['threadRuntimeStatus']['type'] = 'idle'
@@ -374,6 +399,11 @@ class SideChat:
                     request['supported'] = False
                     request['params'] = {'message': '此请求暂不支持在侧边聊天处理，请停止本次回复。'}
             return {**result, 'parentId': self.parent, 'error': self.error, 'recency': self.recency,
+                    'archiveId': self.id, 'source': 'gateway', 'savedAt': self.saved_at,
+                    'readOnly': self.closed or bool(self.error), 'expired': self.closed or bool(self.error),
+                    'saveError': self.persistence_error,
+                    'historyResponses': copy.deepcopy(self.responses),
+                    'syncState': 'ended' if self.closed else 'live' if result['connected'] else 'offline',
                     'title': self.title, 'titleRevision': self.title_revision, 'titleSource': self.title_source,
                     'submissions': [{'id': k, 'status': v['status'], 'text': v['text'], 'mode': v.get('mode', 'send'), 'workMode': v.get('workMode', 'default'), 'attachments': v.get('attachments', []), 'error': v.get('error')} for k, v in self.submissions.items()]}
 
@@ -387,6 +417,7 @@ class SideChat:
             self.title_source = 'manual'
             if self.cancel_title:
                 self.cancel_title()
+            self._persist()
             return self.view()
 
     def apply_auto_title(self, title, revision):
@@ -395,6 +426,7 @@ class SideChat:
                 return False
             self.title, self.title_source = title, 'summary'
             self.title_revision += 1
+            self._persist()
             return True
 
     def title_info(self):
@@ -416,6 +448,7 @@ class SideChat:
             # Shared next-turn settings. No parent mutation or provider switch.
             self.state['latestModel'] = model
             self.state['latestReasoningEffort'] = effort
+            self._persist()
             return self.view()
 
     def permissions(self, preset, confirmed=False):
@@ -433,6 +466,7 @@ class SideChat:
             with self.lock:
                 self.turn_permissions.update(settings)
                 self.state['latestThreadSettings'].update(settings)
+                self._persist()
             return self.view()
 
     @staticmethod
@@ -486,6 +520,12 @@ class SideChat:
                    'skills': skills, 'catalog': catalog_reader}
             with self.lock:
                 self.submissions[submission] = row
+                try:
+                    self._persist(required=True)
+                except SideChatError:
+                    row['status'] = 'failed'
+                    row['error'] = self.persistence_error
+                    raise
             if mode == 'queue':
                 self.queue_event.set()
                 return {'id': submission, 'status': 'queued'}
@@ -528,6 +568,14 @@ class SideChat:
             row['status'] = 'unknown'
             if self.first_message_submission is None:
                 self.first_message_submission = submission
+            try:
+                self._persist(required=True)
+            except SideChatError:
+                row['status'] = 'failed'
+                row['error'] = self.persistence_error
+                if row['mode'] != 'steer':
+                    self.state['threadRuntimeStatus']['type'] = 'idle'
+                raise
         try:
             response = self.runtime.request('turn/steer' if row['mode'] == 'steer' else 'turn/start', params)
         except SideChatError as error:
@@ -539,6 +587,7 @@ class SideChat:
                     row['error'] = str(error)
                     if row['mode'] != 'steer':
                         self.state['threadRuntimeStatus']['type'] = 'idle'
+                    self._persist()
                 raise
             return {'id': submission, 'status': 'unknown'}
         with self.lock:
@@ -562,6 +611,7 @@ class SideChat:
                 # Naming is optional and must never turn an accepted send into
                 # a failed/unknown send which might be replayed by the client.
                 pass
+        self._persist()
         return {'id': submission, 'status': 'accepted'}
 
     def _queue_loop(self):
@@ -591,6 +641,7 @@ class SideChat:
             if row is None or row['status'] != 'queued':
                 raise ValueError('消息已开始发送或已处理，请刷新状态')
             row['status'] = 'cancelled'
+            self._persist()
             return self.view()
 
     def stop(self):
@@ -606,6 +657,7 @@ class SideChat:
             raise ValueError('确认回复格式不正确')
         with self.actions:
             with self.lock:
+                self._persist(required=True)
                 request = next((r for r in self.state['requests'] if str(r['id']) == str(identifier)), None)
                 if not request:
                     raise ValueError('此请求已处理或已失效')
@@ -638,10 +690,12 @@ class SideChat:
                 else:
                     raise ValueError('此请求暂不支持，请停止本次回复')
                 self.runtime.write({'id': request['id'], 'result': result})
+                self.responses.append({'id': request['id'], 'method': method, 'response': copy.deepcopy(result)})
                 self._record_interaction()
                 self.state['requests'].remove(request)
                 self.waiting_observed_at = time.time_ns()//1000
                 self.queue_event.set()
+                self._persist()
             return self.view()
 
     def close(self):
@@ -654,19 +708,28 @@ class SideChat:
                 self.queue_event.set()
             self.runtime.close()
             with self.lock:
-                self.state['turns'] = []
+                self._persist()
                 self.state['requests'] = []
-                self.submissions.clear()
+                if self.on_change is None:
+                    self.state['turns'] = []
+                    self.submissions.clear()
+                    self.responses.clear()
             if self.file_directory:
                 self.file_directory.cleanup()
                 self.file_directory = None
 
 
 class SideChats:
-    def __init__(self, executable, home, directory, host, factory=SideChat, *, executable_getter=None, on_first_message=None):
+    def __init__(self, executable, home, directory, host, factory=SideChat, *, executable_getter=None, on_first_message=None, parent_lookup=None):
         self.executable, self.home, self.directory, self.host = executable, home, directory, host
         self.executable_getter = executable_getter
         self.on_first_message = on_first_message
+        self.archive = SideChatArchive(directory, home, host)
+        self.archive.disconnect()
+        self.archive.import_snapshots(parent_lookup)
+        self.archive.import_titles(parent_lookup)
+        self.saved_uploads = Uploads(self.archive.files)
+        self.native_sync = None
         if factory is SideChat:
             from bridge.features.sessions.linux_permissions import enabled
             if enabled(host):
@@ -683,6 +746,49 @@ class SideChats:
         self.creations = {}
         self.checked = False
         self._checked_executable = executable
+        self.closed = False
+
+    def native_snapshot(self, parent, child, state, revision):
+        from bridge.features.workspace.workspace import Workspace
+        view = normalize_state(state, False)
+        view.update(id=child, parentId=parent, title=state.get('name') or state.get('title') or '原生侧边聊天',
+                    titleSource='native', historyComplete=view.get('historyComplete', True))
+        # Native file paths are only copied from within this verified workspace.
+        cwd = Path(state['cwd']).resolve()
+        for turn in view.get('turns', []):
+            for message in turn.get('messages', []):
+                files = []
+                for index, attachment in enumerate(message.get('attachments', [])):
+                    if not isinstance(attachment, dict):
+                        continue
+                    name = attachment.get('name') or '附件'
+                    file_id = str(uuid.uuid5(uuid.UUID(child), json.dumps([
+                        turn.get('id'), message.get('id'), index, attachment.get('path', name)])))
+                    item = {'id': file_id, 'name': name, 'unavailable': True}
+                    try:
+                        item = self.saved_uploads.public(self.saved_uploads.get(child, file_id))
+                        files.append(item)
+                        continue
+                    except ValueError:
+                        pass
+                    try:
+                        path = Path(attachment.get('path', '')).resolve(strict=True)
+                        if not attachment.get('path') or not path.is_relative_to(cwd):
+                            raise ValueError('Native attachment outside workspace')
+                        data = Workspace(cwd).read(path.relative_to(cwd).as_posix(), download=True)
+                        item = self.saved_uploads.put(child, file_id, data['name'], base64.b64decode(data['data']))
+                    except (OSError, ValueError):
+                        pass
+                    files.append(item)
+                if files:
+                    message['attachments'] = files
+        return self.archive.save(parent, child, view, source='desktop')
+
+    def native_disconnected(self, child):
+        try:
+            self.archive.disconnect(child)
+        except (OSError, sqlite3.Error):
+            pass
 
     def activity(self, parent):
         return [chat.activity() for key, chat in self.activity_chats if key[0] == parent]
@@ -704,9 +810,17 @@ class SideChats:
             if action == 'read':
                 slots = [{'slot': identifier[1], **child.title_info()}
                          for identifier, child in self.chats.items()
-                         if identifier[0] == parent]
-                view = chat.view() if chat else {'id': None, 'connected': False, 'turns': [], 'requests': []}
-                return {**view, 'slots': slots}
+                         if identifier[0] == parent and not child.closed and not child.error]
+                archive_id = body.get('archiveId')
+                if chat and (not archive_id or archive_id == chat.id):
+                    if chat.persistence_error:
+                        chat._persist()
+                    view = chat.view()
+                else:
+                    view = self.archive.read(parent, archive_id, slot=slot) or {'id': None, 'connected': False, 'turns': [], 'requests': []}
+                return {**view, 'slots': slots, 'nativeSync': self.native_sync.status() if self.native_sync else {'state': 'unavailable', 'message': '桌面原生侧边聊天未接入'}}
+            if action == 'history':
+                return {**self.archive.list(parent, body.get('offset', 0)), 'nativeSync': self.native_sync.status() if self.native_sync else {'state': 'unavailable', 'message': '桌面原生侧边聊天未接入'}}
             if action == 'create':
                 token = str(uuid.UUID(str(body.get('creationId', ''))))
                 if token in self.creations:
@@ -718,7 +832,7 @@ class SideChats:
                     return chat.view()
                 if self.host != 'local':
                     raise ValueError('此预览暂支持网关电脑上的聊天，SSH 远程工作区尚未接入侧边聊天')
-                if len(self.chats) >= 8 or len(self.creations) >= 1000:
+                if sum(not child.closed and not child.error for child in self.chats.values()) >= 8 or len(self.creations) >= 1000:
                     raise ValueError('临时侧边聊天数量已达上限，请关闭不用的聊天；必要时重启网关')
                 title = side_chat_title(body['title']) if 'title' in body else ''
                 executable = self.executable_getter() if self.executable_getter else self.executable
@@ -739,8 +853,9 @@ class SideChats:
                 chat.title_access_stamp = stamp
                 if title:
                     chat.rename(title)
-                chat.file_directory = tempfile.TemporaryDirectory(prefix='side-files-', dir=self.directory)
-                chat.uploads = Uploads(chat.file_directory.name)
+                chat.uploads = self.saved_uploads
+                chat.on_change = lambda view: self.archive.save(parent, slot, view, sync_state=view['syncState'])
+                chat._persist()
                 self.chats[key] = chat
                 self.activity_chats = tuple(self.chats.items())
                 self.creations[token] = (key, chat.id)
@@ -753,7 +868,7 @@ class SideChats:
                 chat.close()
                 self.chats.pop(key)
                 self.activity_chats = tuple(self.chats.items())
-                return {'closed': True}
+                return {'closed': True, 'view': {**chat.view(), 'expired': True, 'readOnly': True}}
         if action == 'skills':
             return catalog_reader.get_kind('skills', chat.state['cwd'], query=body.get('query', ''), offset=body.get('offset', 0), limit=200, refresh=body.get('refresh') is True, ids=body.get('selected', []))
         if action == 'linux-permission-options':
@@ -783,15 +898,25 @@ class SideChats:
         with self.lock:
             chat = next((chat for key, chat in self.chats.items()
                          if key[0] == parent and chat.id == child), None)
-            if self.host != 'local' or not chat or chat.id != child or chat.closed:
+            if self.host != 'local':
+                raise ValueError('此侧边聊天已关闭或已失效，请刷新标签')
+            if operation in ('get', 'preview') and self.archive.read(parent, child):
+                return getattr(self.saved_uploads, operation)(child, *args)
+            if not chat or chat.id != child or chat.closed:
                 raise ValueError('此侧边聊天已关闭或已失效，请刷新标签')
             with chat.actions:
                 return getattr(chat.uploads, operation)(child, *args)
 
     def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        if self.native_sync:
+            self.native_sync.close()
         with self.lock:
             for chat in self.chats.values():
                 chat.close()
             self.chats.clear()
             self.activity_chats = ()
             self.creations.clear()
+            self.archive.close()

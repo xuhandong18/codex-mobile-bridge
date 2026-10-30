@@ -311,7 +311,8 @@ class Workbench {
     const fullscreenTab=this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===session.files[index]
       ?session.files.find(tab=>tab.id!==id&&tab.id.startsWith('file:')):null;
     if (this.previewFullscreen?.tab === session.files[index]&&!fullscreenTab) this.closePreviewFullscreen();
-    if (session.files[index].sideChat && !await session.files[index].sideChat.end()) return;
+    if (session.files[index].sideChat && session.provider==='deepseek' && !await session.files[index].sideChat.end()) return;
+    if(session.files[index].sideChat)(session.closedSideChats??=new Set()).add(id);
     if (!session.files[index] || session.files[index].id !== id) return;
     session.files[index].controller?.abort(); session.files[index].editor?.dispose(); session.files[index].pdf?.dispose(); session.files[index].html?.dispose(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
     if(session.splitTab===id)session.splitTab=(session.files[index]||session.files[index-1])?.id||null;
@@ -352,6 +353,10 @@ class Workbench {
       if((this.current.provider&&!['codex','deepseek'].includes(this.current.provider)||this.current.provider==='deepseek'&&this.current.access?.canUseSideChat!==true||this.current.access?.canUseSideChat===false)&&['侧边聊天','子智能体'].map(BridgeI18n.t).includes(name)) {button.disabled=true;button.lastChild.textContent=BridgeI18n.t('当前客户端尚未提供此能力');}
       choices.append(button);
     }
+    if((!this.current.provider||this.current.provider==='codex')&&this.current.host==='local'){
+      const button=this.button('',()=>{dialog.close();this.sideChatHistory();},'侧边聊天历史');
+      button.append(this.node('strong','','侧边聊天历史'),this.node('span','','查看已保存和已失效的侧边聊天'));choices.append(button);
+    }
     dialog.append(head, choices); dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
   }
   git() {
@@ -377,7 +382,7 @@ class Workbench {
     if(!session||document.hidden||session.host!=='local'||session.provider&&!['codex','deepseek'].includes(session.provider)||session.provider==='deepseek'&&session.access?.canUseSideChat!==true||session.access?.canUseSideChat===false||this.sessions.get(session.key)!==session)return;
     if(session.sideChatRead&&!session.sideChatRead.signal.aborted)return;
     const controller=session.sideChatRead=new AbortController();
-    const observed=session.files.filter(tab=>tab.sideChat?.state?.id&&!tab.sideChat.busy).map(tab=>({tab,panel:tab.sideChat,id:tab.sideChat.state.id,revision:tab.sideChat.readRevision}));
+    const observed=session.files.filter(tab=>!tab.archiveId&&tab.sideChat?.state?.id&&!tab.sideChat.busy).map(tab=>({tab,panel:tab.sideChat,id:tab.sideChat.state.id,revision:tab.sideChat.readRevision}));
     try{
       const url=session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(session.id):'/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host);
       const state=await this.request(url,undefined,controller.signal);
@@ -399,12 +404,13 @@ class Workbench {
       }
     }
   }
-  createSideChat(session,slot='') {
+  createSideChat(session,slot='',archiveId=null) {
     if(!session||session.access?.canUseSideChat===false||session.provider==='deepseek'&&session.access?.canUseSideChat!==true||session.provider&&!['codex','deepseek'].includes(session.provider))return;
-    const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;
+    const id=archiveId?'sidearchive:'+archiveId:slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);if(tab)return tab;
+    session.closedSideChats?.delete(id);
     const number=session.sideChatSerial=(session.sideChatSerial||0)+1;
     const name=BridgeI18n.t('侧边聊天')+(number>1?' '+number:'');
-    tab={id,slot,name,defaultName:name,body:this.node('div','wb-side-content')};
+    tab={id,slot,archiveId,name,defaultName:name,body:this.node('div','wb-side-content')};
     session.files.push(tab);tab.sideChat=new SideChatPanel(this,session,tab);return tab;
   }
   setSideChatTitle(session,tab,state){
@@ -423,11 +429,42 @@ class Workbench {
   syncSideChats(session,slots){
     if(!Array.isArray(slots)||this.sessions.get(session.key)!==session)return;
     let changed=false;for(const row of slots){const slot=row?.slot;if(typeof slot!=='string'||slot&&!/^[0-9a-f-]{36}$/.test(slot))continue;
-      const id=slot?'sidechat:'+slot:'sidechat';let tab=session.files.find(tab=>tab.id===id);
+      const id=slot?'sidechat:'+slot:'sidechat';if(session.closedSideChats?.has(id))continue;let tab=session.files.find(tab=>tab.id===id);
       if(!tab){tab=this.createSideChat(session,slot);changed=!!tab||changed;}
       if(tab&&this.setSideChatTitle(session,tab,row))changed=true;
     }
     if(changed&&this.current===session)this.paint();
+  }
+  async sideChatHistory(){
+    const session=this.current;if(!session||session.host!=='local'||session.provider&&session.provider!=='codex')return;
+    const n=(...args)=>this.node(...args),dialog=n('dialog','picker wb-side-history'),head=n('div','picker-head'),list=n('div','wb-tab-choices picker-choices'),status=n('p','muted');
+    head.append(n('h2','','侧边聊天历史'),this.button('×',()=>dialog.close(),'关闭'));
+    const more=this.button('加载更多',()=>load(offset));let offset=0;more.hidden=true;
+    dialog.append(head,status,list,more);document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
+    const load=async start=>{
+      more.disabled=true;
+      try{
+        const value=await this.request('/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host)+'&history=1&offset='+start);
+        if(!dialog.open||this.current!==session)return;
+        if(start===0)status.textContent=BridgeI18n.t(value.nativeSync?.message||'桌面原生侧边聊天未接入');
+        for(const row of value.items||[]){
+          const button=this.button('',()=>{
+            if(this.current!==session)return;dialog.close();
+            let tab=session.files.find(tab=>tab.sideChat?.state?.id===row.id);
+            if(!tab)tab=this.createSideChat(session,row.slot||'',row.archiveId);
+            if(tab){this.setSideChatTitle(session,tab,row);this.select(tab.id);}
+          },row.title||'侧边聊天');
+          button.append(this.raw(n('strong','',row.title||'侧边聊天')),n('span','muted',[
+            BridgeI18n.t(row.source==='desktop'?'桌面原生':'网关侧边聊天'),BridgeI18n.t(row.hasBody===false?'无正文备份':row.syncState==='live'?'同步中':'已保存，仅供查看'),
+            row.savedAt?new Date(row.savedAt).toLocaleString():''
+          ].filter(Boolean).join(' · ')));list.append(button);
+        }
+        if(start===0&&!value.items?.length)list.append(n('p','muted','暂无已保存的侧边聊天'));
+        offset=value.nextOffset;more.hidden=offset==null;
+      }catch(error){status.textContent=BridgeI18n.t(error.message);}
+      finally{more.disabled=false;}
+    };
+    await load(0);
   }
   sideChat(selectedText='',fresh=false) {
     if(selectedText.length>12000){this.notify(BridgeI18n.t('选中内容过长，请缩小范围后重试'));return;}

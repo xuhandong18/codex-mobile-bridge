@@ -44,6 +44,7 @@ class LinuxSideChat(SideChat):
                     if settings.get(key) is not None:
                         self.turn_permissions[key] = settings[key]
                 self.permission_revision += 1
+                self._persist()
                 condition.notify_all()
                 return
             super()._event(message)

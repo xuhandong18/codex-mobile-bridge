@@ -5,6 +5,7 @@ const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'),web=path.join(root,'web'),assets=require('../web/assets.json');
 const id='11111111-1111-4111-8111-111111111111';
 const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',projectKey:'local|/fixture',projectName:'Fixture',recency:1,status:'idle',access:{source:'cli',canSend:true,canApprove:true,canUseSideChat:true}};
+const historyOnly=process.argv.includes('--history-only'),archives=new Map();
 const states=new Map(),writes=[],errors=[];let mode='success',serial=0,createGate=null,questionFixture=false;
 const questions=[{id:'choice',question:'希望先解释哪个处理方案？',options:[{label:'先解释',description:'说明各个步骤'},{label:'直接处理',description:'执行已确认的方案'}]},{id:'free',question:'需要进一步说明的细节是什么？'}];
 const questionRequests=()=>questionFixture?[{id:'fixture-question',supported:true,method:'item/tool/requestUserInput',params:{questions},needsInput:true,tool:'AskUserQuestion',input:{questions}}]:[];
@@ -17,6 +18,11 @@ const server=http.createServer(async(req,res)=>{
       if(body)writes.push({p,body,slot:url.searchParams.get('slot')||''});
       if(p.endsWith('/side-chat')){
         const provider=p.includes('/desktop-sessions/')?'deepseek':'codex',slot=url.searchParams.get('slot')||'',key=provider+'|'+slot;
+        if(url.searchParams.get('history')==='1'){
+          const offset=Number(url.searchParams.get('offset')||0),items=[...archives.values()];
+          return json({items:items.slice(offset,offset+30).map(({turns,requests,historyRequests,submissions,...row})=>row),nextOffset:offset+30<items.length?offset+30:null,nativeSync:{state:'unavailable',message:'桌面原生侧边聊天未接入'}});
+        }
+        if(url.searchParams.has('archiveId'))return json({...archives.get(url.searchParams.get('archiveId')),slots:[]});
         if(body?.action==='create'){
           const resultMode=mode;await createGate;
           if(resultMode==='fail')return json({error:'创建失败，请重试'},503);
@@ -28,6 +34,10 @@ const server=http.createServer(async(req,res)=>{
           }
         }
         const state=states.get(key);
+        if(body?.action==='close'){
+          const saved={...state,archiveId:state.id,source:'gateway',syncState:'ended',savedAt:Date.now(),connected:false,readOnly:true,expired:true,slot,hasBody:true};
+          archives.set(state.id,saved);states.delete(key);return json({closed:true,view:saved});
+        }
         if(body?.action==='send'){
           assert.equal(body.id,state?.id);
           if(body.mode==='send'&&state.status==='active')return json({error:'请先等待回复完成，或选择完成后发送／补充当前任务'},400);
@@ -48,6 +58,7 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/clients')return json({clients:['codex','deepseek'].map(id=>({id,name:id,enabled:true,connected:true,configured:true,installed:true,running:true}))});
       if(p==='/api/accounts')return json({accounts:[],current:{kind:'api'}});
       if(p==='/api/sessions'||p==='/api/activity')return json({sessions:[row],complete:true});
+      if(p.includes('/uploads/')&&p.endsWith('/preview')){res.writeHead(200,{'Content-Type':'image/png'});return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=','base64'));}
       if(p.endsWith('/workspace/preview'))return json({name:'demo.js',kind:'text',size:24,text:'const selected = true;\n'});
       if(p.endsWith('/workspace'))return json({root:'/fixture',entries:[]});
       if(p.endsWith('/timeline')||p.endsWith('/updates')){
@@ -71,8 +82,8 @@ const server=http.createServer(async(req,res)=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;const results=[];
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
-    for(const [width,height] of [[390,844],[820,1180],[844,390],[1440,1000]])for(const provider of ['codex','deepseek']){
-      states.clear();writes.length=0;mode='success';
+    for(const [width,height] of [[390,844],[820,1180],[844,390],[1440,1000]])for(const provider of historyOnly?['codex']:['codex','deepseek']){
+      states.clear();archives.clear();writes.length=0;mode='success';
       const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
       const checks=[],check=(value,label)=>{assert.ok(value,provider+' '+width+': '+label);checks.push(label);};
@@ -91,9 +102,73 @@ const server=http.createServer(async(req,res)=>{
       await bind();
       const open=async()=>{
         await page.locator('.wb-add:visible').click();
-        await page.locator('.wb-new-tab .wb-tab-choices button').filter({hasText:'侧边聊天'}).click();
+        await page.locator('.wb-new-tab .wb-tab-choices button').filter({hasText:'继承当前上下文'}).click();
       };
       const ready=()=>page.waitForFunction(()=>creationPanel()?.state?.connected&&!creationPanel().busy);
+      if(historyOnly){
+        await open();await ready();
+        await page.locator('.wb-side-composer:visible textarea').fill('保存测试消息');
+        await page.locator('.wb-side-composer:visible button[type=submit]').click();
+        await page.waitForFunction(()=>creationPanel().messages.textContent.includes('可以直接聊天'));
+        const liveState=[...states.values()][0];liveState.saveError='保存异常，已暂停新的发送；请检查网关存储后重试。';
+        await page.evaluate(()=>creationPanel().load());
+        check(await page.evaluate(()=>creationPanel().input.readOnly&&creationPanel().sendButton.disabled&&!creationPanel().canReceiveQuote()&&creationPanel().status.textContent.includes('保存异常')),'保存失败时锁定新的发送并明确提示');
+        delete liveState.saveError;await page.evaluate(()=>creationPanel().load());
+        check(await page.evaluate(()=>!creationPanel().input.readOnly),'存储恢复后解除输入锁定，不自动发送');
+        const beforeClose=writes.length;
+        await page.evaluate(()=>creationWorkbench.close(creationWorkbench.current.active));
+        await page.evaluate(()=>creationWorkbench.refreshSideChats());
+        check(writes.length===beforeClose,'关闭标签不结束聊天，不发送服务端写入');
+        check(await page.evaluate(()=>!creationWorkbench.current.files.some(tab=>tab.sideChat)),'自动发现不重新打开刚关闭的标签');
+        await open();await ready();
+        await page.locator('.wb-side-composer:visible textarea').fill('结束前的消息');
+        await page.locator('.wb-side-composer:visible button[type=submit]').click();
+        await page.waitForFunction(()=>creationPanel().messages.textContent.includes('结束前的消息'));
+        page.once('dialog',dialog=>dialog.accept());
+        await page.locator('.wb-side-head:visible button').filter({hasText:'结束聊天'}).click();
+        await page.waitForFunction(()=>creationPanel()?.state?.readOnly);
+        check(writes.at(-1).body.action==='close','结束聊天单独停止运行并展示保存记录');
+        check(await page.locator('.wb-side-messages:visible').textContent().then(text=>text.includes('结束前的消息')),'结束后正文仍可查看');
+        archives.clear();states.clear();
+        const messages=Array.from({length:80},(_,index)=>({id:'message-'+index,role:index%2?'assistant':'user',text:'持久保存的消息 '+index}));
+        messages[0].attachments=[{id:'33333333-3333-4333-8333-333333333333',name:'saved.png',image:'image/png'}];
+        for(let index=0;index<31;index++){
+          const child='22222222-2222-4222-8222-'+String(index).padStart(12,'0');
+          archives.set(child,{id:child,archiveId:child,slot:child,title:'已保存侧边 '+index,source:index?'desktop':'gateway',syncState:'offline',savedAt:Date.now()-index,
+            connected:false,expired:true,readOnly:true,hasBody:true,turns:[{id:'history-turn',status:'completed',messages}],requests:[],
+            historyRequests:[{id:'old-request',supported:false,params:{command:'历史命令不执行'}}],submissions:[{id:'old-queue',status:'queued',text:'旧排队消息'}]});
+        }
+        const openHistory=async()=>{await page.locator('.wb-add:visible').click();await page.locator('.wb-new-tab .wb-tab-choices button').filter({hasText:'查看已保存和已失效'}).click();await page.waitForFunction(()=>document.querySelector('dialog[open] .picker-choices button'));};
+        const sideWriteCount=()=>writes.filter(write=>write.p.endsWith('/side-chat')).length,beforeHistory=sideWriteCount();
+        await openHistory();
+        check(await page.locator('dialog[open] .picker-choices button').count()===30,'历史首页有界加载');
+        await page.getByRole('button',{name:'加载更多',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelectorAll('dialog[open] .picker-choices button').length===31);
+        check(await page.locator('dialog[open] .picker-choices button').count()===31,'历史分页加载下一页');
+        check(await page.locator('dialog[open]').textContent().then(text=>text.includes('桌面原生侧边聊天未接入')),'原生能力未接入时如实显示');
+        await page.locator('dialog[open] .picker-choices button').first().click();
+        await page.waitForFunction(()=>creationPanel()?.state?.archiveId?.startsWith('22222222'));
+        check(await page.evaluate(()=>creationPanel().input.readOnly&&creationPanel().sendButton.disabled&&creationPanel().attachButton.disabled),'历史记录禁用输入、发送和附件上传');
+        check(await page.evaluate(()=>creationPanel().status.textContent.includes('已保存，仅供查看')),'显示已保存只读状态');
+        await page.waitForFunction(()=>creationPanel().messages.querySelector('img')?.naturalWidth>0);
+        check(true,'历史图片附件实际加载成功');
+        check(await page.evaluate(()=>creationPanel().approvals.querySelectorAll('button,input,textarea').length===0&&creationPanel().queued.querySelectorAll('button').length===0),'历史审批和队列没有执行入口');
+        await page.evaluate(()=>{const panel=creationPanel();panel.messages.scrollTop=150;panel.following=false;window.savedScroll=panel.messages.scrollTop;});
+        const first=archives.values().next().value;first.turns[0].messages.push({id:'late',role:'assistant',text:'后续保存的消息'});
+        await page.evaluate(()=>creationPanel().load());
+        check(await page.evaluate(()=>Math.abs(creationPanel().messages.scrollTop-savedScroll)<3),'更新保存记录时保留阅读位置');
+        await page.locator('.wb-side-composer:visible textarea').press('End');await page.keyboard.insertText('不能写入');
+        await page.evaluate(async()=>{await creationPanel().send();await creationPanel().create();});
+        check(await page.evaluate(()=>creationPanel().input.value===''),'真实键盘不能修改只读聊天');
+        check(sideWriteCount()===beforeHistory,'历史读取和无效发送不产生写入');
+        const other=await browser.newContext({viewport:{width,height}}),otherPage=await other.newPage();
+        await otherPage.goto('http://127.0.0.1:'+server.address().port+'/#'+id+'~local');await otherPage.waitForFunction(()=>state?.connected);
+        await otherPage.evaluate(()=>workbench.sideChatHistory());
+        await otherPage.locator('dialog[open] .picker-choices button').first().click();
+        await otherPage.waitForFunction(()=>workbench.current.files.some(tab=>tab.sideChat?.messages.textContent.includes('后续保存的消息')));
+        check(sideWriteCount()===beforeHistory,'独立设备可读取同一份保存记录且不启动侧边聊天');
+        await other.close();results.push({width,height,provider,fixture:'side-chat-history',passed:checks.length});await context.close();continue;
+      }
       let releaseCreate;createGate=new Promise(resolve=>releaseCreate=resolve);
       await open();await page.waitForFunction(()=>creationPanel()?.busy);
       check(await page.evaluate(()=>creationPanel().landing.hidden&&!creationPanel().status.hidden),'创建时显示进度，跳过创建按钮页面');

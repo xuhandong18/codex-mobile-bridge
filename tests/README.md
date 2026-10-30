@@ -120,6 +120,8 @@ Codex 跨设备已读另覆盖独立手机/平板存储、主聊天与侧边隔�
 
 同一浏览器驱动还会删除合成服务端的旧侧边槽位，验证停留主聊天时发现失效、旧消息与草稿保留、只读提示、真实键盘不能修改输入、主聊天与其他侧边聊天的真实选区入口禁用失效目标，以及失效前已打开的目标窗口不能继续投递；发送、创建和关闭失效标签均不额外写入服务端。`tests/chat-display-panels.test.cjs` 另覆盖短暂读取失败后恢复、首次读取已无记录、聊天身份变化和反复读取不恢复失效标签。
 
+侧边持久历史运行 `python -B scripts/test-backend.py --source-only -p 'test_side_chat*.py'`，覆盖无页面保存、重启只读、配置/主机/父聊天隔离、附件保留、写盘错误、消息增量、旧修订拒绝、快照和标题导入及分页。原生同步使用合成 owner 快照、补丁与路由日志检查身份、断连、修订缺口及没有执行操作。`node scripts/test-side-chat-create-browser.cjs --history-only` 在四种尺寸及独立浏览器上下文验证真实分页、只读输入、图片、保存异常、阅读位置和关闭/结束区别；不启动真实模型或桌面客户端。支持 `NODE_PATH`、`BROWSER_EXECUTABLE` 使用已有运行时。
+
 同一驱动还实际执行 `side-message-navigation.browser.js`，检查侧边聊天复用主聊天的缩略导航、摘要点击定位、单条与附件发言、重复发言和上下文过滤、160 条发言的虚拟列表、新回复下的阅读锚点、手动或按钮返回最新、分屏定位、标签隔离及关闭后的监听释放。主聊天导航原有回归仍为 `node scripts/test-message-navigation-browser.cjs`；所有夹具只使用合成数据。
 
 [浏览器夹具](browser/README.md) 位于 `tests/browser/*.browser.js`，依赖真实 DOM 或隔离服务，应由相应驱动调用。其中有些文件只定义测试函数，单独加载不会执行断言。本轮将它们与 Node 分开，避免虚增通过计数。

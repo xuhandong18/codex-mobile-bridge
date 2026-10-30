@@ -1,6 +1,6 @@
 'use strict';
 
-// A shared, gateway-owned ephemeral fork. Disposing a view never ends the chat.
+// Shared temporary execution and durable read-only history. Disposing only closes a view.
 class SideChatPanel {
   static messageVisible(message){
     if(message.role==='user'||message.role==='error')return true;
@@ -20,7 +20,7 @@ class SideChatPanel {
     this.head=n('div','wb-side-head');
     this.createButton=b(BridgeI18n.t('创建侧边聊天'),()=>this.create());this.createButton.className='primary';
     this.stopButton=b(BridgeI18n.t('■ 停止'),()=>this.action('stop'));this.stopButton.hidden=true;
-    this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(this.state?.expired){await workbench.close(tab.id);return;}if(await this.end())this.load();});this.endButton.hidden=true;
+    this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(this.state?.expired||this.state?.readOnly){await workbench.close(tab.id);return;}if(await this.end())this.load();});this.endButton.hidden=true;
     this.newButton=b(BridgeI18n.t('新建'),()=>workbench.sideChat('',true),'新建侧边聊天');
     this.renameButton=b(BridgeI18n.t('重命名'),()=>this.rename(),'重命名侧边聊天');
     this.modelButton=b(BridgeI18n.t('模型与思考程度'),()=>this.modelSettings());
@@ -28,9 +28,10 @@ class SideChatPanel {
     this.permissionsButton=b(BridgeI18n.t('权限'),()=>this.permissions());this.permissionsButton.className='tool-button';this.contextUsage=new ContextUsageControl();
     this.caption=workbench.raw(n('strong','wb-side-caption',tab.name));
     this.head.append(this.caption,this.renameButton,this.newButton,this.endButton);
+    if(session.provider!=='deepseek')this.head.append(b('历史',()=>workbench.sideChatHistory(),'侧边聊天历史'));
     this.landing=n('div','wb-side-landing');
     this.help=n('p','wb-side-help',BridgeI18n.t('继承当前会话的上下文，单独讨论一个问题。主会话的任务不会被接续执行。'));
-    this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t(session.provider==='deepseek'?'可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。':'可跨设备继续。结束聊天或重启网关后，临时内容会清除。')),this.createButton);
+    this.landing.append(n('div','wb-side-symbol','⑂'),n('h2','',BridgeI18n.t('开启一段侧边聊天')),this.help,n('p','muted',BridgeI18n.t(session.provider==='deepseek'?'可跨设备继续。结束侧边聊天会归档 Harness 分叉记录。':'聊天记录持续保存在网关。结束聊天或重启网关后，已保存的记录仍可查看。')),this.createButton);
     this.status=n('p','wb-status');this.status.setAttribute('role','status');
     this.messages=n('div','wb-side-messages');this.messages.setAttribute('data-i18n-aria-label','侧边聊天消息');this.messages.setAttribute('aria-label',BridgeI18n.t('侧边聊天消息'));
     this.latestButton=b('↓',()=>this.jumpBottom(),'返回最新内容 ↓');this.latestButton.className='plain wb-side-latest';this.latestButton.hidden=true;
@@ -167,7 +168,7 @@ class SideChatPanel {
     const result=await this.workbench.request(this.url(),{action:'skills',id:target.sideId,query,offset,refresh},signal);
     return ChatReferencePicker.skillItems(result,offset);
   }
-  url(){return (this.session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(this.session.id):'/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host))+(this.tab.slot?'&slot='+encodeURIComponent(this.tab.slot):'');}
+  url(){return (this.session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(this.session.id):'/api/sessions/'+this.session.id+'/side-chat?host='+encodeURIComponent(this.session.host))+(this.tab.slot?'&slot='+encodeURIComponent(this.tab.slot):'')+(this.tab.archiveId?'&archiveId='+encodeURIComponent(this.tab.archiveId):'');}
   async request(body){
     if(this.disposed)throw Error('此侧边聊天已关闭或已失效，请刷新标签');
     if(body&&['send','respond','settings','permissions','stop','cancel-queued'].includes(body.action)&&(!this.state?.connected||this.state.expired||body.id!==this.state.id))throw Error('此侧边聊天已关闭或已失效，请刷新标签');
@@ -182,10 +183,10 @@ class SideChatPanel {
       if(!this.state?.connected||this.state.expired)this.runningSendChoice.finish(null);
       else this.runningSendChoice.steer.disabled=this.state.status!=='active'||!!this.state.requests?.length;
     }
-    const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!!this.runningSendChoice||!this.state?.connected;
+    const created=!!this.state?.id,active=!!this.state?.connected&&this.state.status==='active',locked=!!this.busy||!!this.pending||!!this.runningSendChoice||!this.state?.connected||!!this.state?.saveError||!!this.state?.readOnly;
     this.form.hidden=!created&&!this.fileQuotes.rows.length&&!this.input.value.trim();this.landing.hidden=created||!!this.busy;this.head.hidden=false;this.messageArea.hidden=!created;this.messages.hidden=!created;this.queued.hidden=!created;
     this.latestButton.hidden=!created||this.following!==false;
-    this.input.readOnly=created&&!this.state.connected;
+    this.input.readOnly=created&&(!this.state.connected||!!this.state.saveError||!!this.state.readOnly);
     if(this.attachments&&this.attachments.locked!==locked)this.attachments.setLocked(locked);
     for(const button of [this.modelButton,this.permissionsButton])button.disabled=locked;
     this.referenceButton.disabled=!this.canReceiveQuote();
@@ -204,11 +205,11 @@ class SideChatPanel {
     this.createButton.disabled=!!this.busy||created;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
     this.endButton.hidden=!created;this.endButton.disabled=!!this.busy;
-    const endLabel=this.state?.expired?'关闭标签':'结束聊天';this.endButton.dataset.i18n=endLabel;this.endButton.textContent=BridgeI18n.t(endLabel);
-    this.newButton.disabled=!!this.busy;this.renameButton.disabled=!!this.busy;
+    const endLabel=this.state?.expired||this.state?.readOnly?'关闭标签':'结束聊天';this.endButton.dataset.i18n=endLabel;this.endButton.textContent=BridgeI18n.t(endLabel);
+    this.newButton.disabled=!!this.busy;this.renameButton.disabled=!!this.busy||!!this.state?.readOnly||!!this.state?.expired;
     this.status.hidden=!this.status.textContent;
   }
-  canReceiveQuote(){return !this.disposed&&!this.busy&&!this.pending&&!this.runningSendChoice&&!this.state?.expired&&(!this.state?.id?!this.tab?.titleChild:this.state.connected===true);}
+  canReceiveQuote(){return !this.disposed&&!this.busy&&!this.pending&&!this.runningSendChoice&&!this.state?.expired&&!this.state?.readOnly&&!this.state?.saveError&&(!this.state?.id?!this.tab?.titleChild:this.state.connected===true);}
   dialog(title){
     const n=(...a)=>this.workbench.node(...a),dialog=n('dialog','picker'),head=n('div','picker-head');
     head.append(n('h2','',BridgeI18n.t(title)),this.workbench.button('×',()=>dialog.close(),BridgeI18n.t('关闭')));dialog.append(head);
@@ -270,7 +271,7 @@ class SideChatPanel {
     // A missing/replaced ephemeral child cannot be resumed. Keep the old view
     // readable instead of turning its named tab back into a creation form.
     const child=this.state?.id||this.tab.titleChild;
-    if(child&&(this.state?.expired||state.id!==child))state={...this.state,id:child,connected:false,expired:true,requests:[],slots:state.slots};
+    if(child&&((this.state?.expired&&!state.archiveId)||state.id!==child))state={...this.state,id:child,connected:false,expired:true,requests:[],slots:state.slots};
     if(child&&this.state?.id===state.id&&!state.connected&&!state.turns?.length&&this.state.turns?.length)state={...state,turns:this.state.turns};
     if(this.nativeModes&&state.id!==this.state?.id)this.nativeModes.open(JSON.stringify(['deepseek',this.session.id,this.tab.slot,state.id]));
     this.state=state;this.contextUsage.update(state);
@@ -284,7 +285,7 @@ class SideChatPanel {
     if(this.pending&&state.submissions?.some(s=>s.id===this.pending.submissionId&&['accepted','queued'].includes(s.status))){
       this.completeSubmission();this.attachments.clear(state.id,this.pending.attachments);this.pending=null;this.references.close();this.resizeInput();
     }
-    this.status.textContent=state.expired?BridgeI18n.t('此侧边聊天已失效，当前记录仅供只读查看，不能输入消息或添加选区内容。请新建侧边聊天继续。'):state.id&&!state.connected?BridgeI18n.t('侧边聊天已断开，已有记录仅供只读查看，暂时不能输入消息或添加选区内容。')+(state.error?' '+BridgeI18n.t(state.error):''):state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):'');
+    this.status.textContent=state.saveError|| (state.archiveId&&(state.readOnly||!state.connected)?BridgeI18n.t(state.source==='desktop'&&state.syncState==='live'?'正在同步桌面原生侧边聊天，当前记录仅供查看。':state.expired||state.syncState==='ended'?'已保存，仅供查看':'暂时断开，显示已保存记录')+(state.savedAt?' · '+BridgeI18n.t('最近保存')+' '+new Date(state.savedAt).toLocaleString():''):state.expired?BridgeI18n.t('此侧边聊天已失效，当前记录仅供只读查看，不能输入消息或添加选区内容。请新建侧边聊天继续。'):state.id&&!state.connected?BridgeI18n.t('侧边聊天已断开，已有记录仅供只读查看，暂时不能输入消息或添加选区内容。')+(state.error?' '+BridgeI18n.t(state.error):''):state.error||(!state.id?'':this.pending?BridgeI18n.t('发送结果未确认，请核对消息，避免重复发送。'):state.requests?.length?BridgeI18n.t('有请求需要处理'):state.status==='active'?BridgeI18n.t('正在回复…'):''));
     const stamp=JSON.stringify([state.id,state.connected,state.expired,state.turns]);
     if(stamp!==this.stamp){
       this.stamp=stamp;const scroll=this.messages.scrollTop,follow=this.following!==false&&this.messages.scrollHeight-this.messages.clientHeight-scroll<60,anchor=follow?null:this.readingAnchor();
@@ -306,19 +307,23 @@ class SideChatPanel {
         card.hidden=!SideChatPanel.messageVisible(message);this.messageNodes.push({node:card,message,key,turnId,turnStatus:turn.status});
       }if(turn.error){const message={role:'error'},node=this.workbench.node('p','error',BridgeI18n.t('本次回复未完成，请检查模型接入。'));this.messageNodes.push({node,message,key:'error:'+turnIndex});}}
       this.groupMessages();
-      if(!this.messages.children.length)this.messages.append(this.workbench.node('p','wb-empty',state.expired?BridgeI18n.t('这段临时聊天的记录已不可用，无法恢复。'):state.connected?BridgeI18n.t('上下文已准备好，开始单独讨论。'):BridgeI18n.t('新建后即可在这里提问。')));
+      if(!this.messages.children.length)this.messages.append(this.workbench.node('p','wb-empty',state.archiveId?BridgeI18n.t('无正文备份'):state.expired?BridgeI18n.t('这段临时聊天的记录已不可用，无法恢复。'):state.connected?BridgeI18n.t('上下文已准备好，开始单独讨论。'):BridgeI18n.t('新建后即可在这里提问。')));
       this.messages.scrollTop=follow?this.messages.scrollHeight:scroll;
       const target=anchor&&this.messageNodes.find(row=>row.key===anchor.key);
       if(target)this.messages.scrollTop+=target.node.getBoundingClientRect().top-this.messages.getBoundingClientRect().top-anchor.offset;
       this.following=follow;this.lastMessageTop=this.messages.scrollTop;this.messageMap?.update();
     }
-    this.renderApprovals(state.connected?state.requests||[]:[]);this.renderQueue(state.submissions||[]);this.controls();
+    this.renderApprovals(state.connected&&!state.saveError?state.requests||[]:[]);
+    if(state.readOnly&&(state.historyRequests?.length||state.historyResponses?.length)){this.approvals.replaceChildren();for(const request of [...state.historyRequests||[],...state.historyResponses||[]]){
+      const details=this.workbench.node('details');details.append(this.workbench.node('summary','','历史请求，仅供查看'),this.workbench.node('pre','',JSON.stringify(request.response||request.params||{},null,2)));this.approvals.append(details);
+    }}
+    this.renderQueue(state.submissions||[]);this.controls();
     this.workbench.onSideChatActivity?.(this.session,state,this.workbench.isVisible(this.session,this.tab));
   }
   renderQueue(rows){
     const stamp=JSON.stringify([this.state?.connected,rows]);if(stamp===this.queueStamp)return;this.queueStamp=stamp;this.queued.replaceChildren();
     for(const row of rows.filter(r=>['queued','failed','unknown'].includes(r.status))){
-      const card=this.workbench.node('div','queue-card');card.append(this.workbench.node('strong','',BridgeI18n.t(row.status==='queued'?'完成后发送':row.status==='failed'?'发送失败':'发送结果未确认')),this.workbench.raw(this.workbench.node('p','',row.text)));
+      const card=this.workbench.node('div','queue-card');card.append(this.workbench.node('strong','',BridgeI18n.t(!this.state?.connected&&row.status==='queued'?'历史排队消息，未恢复发送':row.status==='queued'?'完成后发送':row.status==='failed'?'发送失败':'发送结果未确认')),this.workbench.raw(this.workbench.node('p','',row.text)));
       if(row.error)card.append(this.workbench.node('p','error',BridgeI18n.t(row.error)));
       if(row.status==='queued'&&this.state?.connected)card.append(this.workbench.button(BridgeI18n.t('取消'),()=>this.action('cancel-queued',{submissionId:row.id})));
       this.queued.append(card);
@@ -421,11 +426,11 @@ class SideChatPanel {
   }
   async action(action,fields={},rethrow=false){if(this.busy||!this.state?.connected)return;this.readRevision=(this.readRevision||0)+1;this.busy=true;this.controls();try{this.apply(await this.request({action,id:this.state.id,...fields}));}catch(e){this.status.textContent=BridgeI18n.t(e.message);if(rethrow)throw e;}finally{this.busy=false;this.controls();}}
   async end(){
-    if(this.busy)return false;if(!this.state?.id||this.state.expired)return true;
-    if(!confirm(BridgeI18n.t(this.session.provider==='deepseek'?'结束此侧边聊天？正在运行的回复会停止，Harness 分叉记录会归档。':'结束此侧边聊天？正在运行的回复会停止，临时内容将清除，所有设备都无法继续此聊天。')))return false;
+    if(this.busy)return false;if(!this.state?.id||this.state.expired||this.state.readOnly)return true;
+    if(!confirm(BridgeI18n.t(this.session.provider==='deepseek'?'结束此侧边聊天？正在运行的回复会停止，Harness 分叉记录会归档。':'结束此侧边聊天？正在运行的回复会停止，已保存的记录仍可查看。')))return false;
     this.readRevision=(this.readRevision||0)+1;
     this.busy=true;this.controls();
-    try{await this.request({action:'close',id:this.state.id});this.apply({id:null,connected:false,turns:[],requests:[]});return true;}
+    try{const result=await this.request({action:'close',id:this.state.id});this.apply(result.view||{id:null,connected:false,turns:[],requests:[]});return true;}
     catch(e){this.status.textContent=BridgeI18n.t(e.message);return false;}
     finally{this.busy=false;this.controls();}
   }

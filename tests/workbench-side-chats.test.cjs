@@ -47,6 +47,25 @@ test('manually opening a side panel can already discover the same gateway chats 
   assert.deepEqual(Array.from(tablet.wb.current.files,tab=>tab.slot),['',slot]);
 });
 
+test('关闭 Codex 标签仅释放本机视图，后台发现不重新打开，显式打开仍读取原会话',async()=>{
+  const tablet=device(async()=>({id:'saved-child',connected:true,slots:[{slot:'',id:'saved-child'}]}));
+  tablet.wb.open('parent','local');await tablet.flush();
+  await tablet.wb.close('sidechat');
+  assert.equal(tablet.wb.current.files.length,0);
+  await tablet.wb.refreshSideChats();assert.equal(tablet.wb.current.files.length,0);
+  tablet.wb.createSideChat(tablet.wb.current);await tablet.flush();
+  assert.equal(tablet.wb.current.files[0].sideChat.state.id,'saved-child');
+  assert.ok(tablet.calls.every(call=>call.body===undefined));
+});
+
+test('历史标签通过存档身份读取，不与同槽位的新聊天合并',async()=>{
+  const tablet=device(async url=>({id:new URL(url,'https://fixture').searchParams.get('archiveId')||'live-child',slots:[]}));
+  tablet.wb.open('parent','local');await tablet.flush();
+  const archived=tablet.wb.createSideChat(tablet.wb.current,'',slot);await tablet.flush();
+  assert.equal(archived.id,'sidearchive:'+slot);assert.equal(archived.sideChat.state.id,slot);
+  assert.ok(tablet.calls.every(call=>call.body===undefined));
+});
+
 test('a phone side chat in an independent slot restores without creating an empty default tab',async()=>{
   const tablet=device(async url=>({id:new URL(url,'https://fixture').searchParams.has('slot')?'phone-side':null,
     slots:[{slot,id:'phone-side'}],turns:[{text:'Shared discussion'}]}));
