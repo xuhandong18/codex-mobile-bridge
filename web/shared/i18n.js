@@ -167,6 +167,7 @@ const en={
 "完全访问 · 请求批准":"Full access · Ask for approval",
 "权限未提供":"Permissions unavailable",
 "思考程度未指定":"Reasoning effort unspecified",
+"正在应用…":"Applying…",
 "模型和推理强度":"Model and reasoning effort",
 "标记为未读":"Mark as unread",
 "未读":"Unread",

@@ -59,6 +59,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 新建聊天设置与发送快捷键运行 `node --test tests/new-chat-settings.test.cjs tests/composer-shortcuts.test.cjs tests/host-environment.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p test_create.py`。`node scripts/test-composer-drafts-browser.cjs` 在手机、平板和电脑宽度阻塞合成模型目录，验证默认设置、记住的模型/思考程度/权限立即可用、加载期间可提交创建及晚到结果保留当前选择；同时以 macOS/Windows 浏览器平台提示，在三种客户端的主聊天中实际按键，检查 Cmd+Enter/Ctrl+Enter 单次发送、普通 Enter/Shift+Enter 换行、输入法确认不发送。`node scripts/test-side-chat-create-browser.cjs` 另在四种窗口尺寸验证 Codex/Harness 侧边聊天的平台快捷键。均使用隔离 Chromium 和合成 API，不连接真实聊天；可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定已有运行时，平台提示模拟不代表 macOS 实机验证。
 
+创建后的设置同步另运行 `node --test tests/chat-creation-list.test.cjs tests/chat-opening-ui.test.cjs tests/cli-access-ui.test.cjs`。上述草稿浏览器驱动在 390、820、1280 像素下实际阻塞聊天历史与模型确认，检查输入框立即显示所选模型、思考程度和权限及“正在应用”提示，两类设置均已提交、实际状态未被偏好覆盖、发送与重复修改保持禁用，晚到快照保留待应用选择。确认成功后显示实际设置，失败或未确认则恢复实际值并分别报错，所有设置写入均只提交一次；测试只操作合成聊天。
+
 聊天菜单的手工改名与 AI重命名运行 `python -B scripts/test-backend.py --source-only -p test_title_rename.py`、`node --test tests/deepseek-personal.test.mjs`，以及完整页面的 `node scripts/test-chat-rename-browser.cjs`。浏览器驱动在 320、390、820、1280 像素检查 Codex/DeepSeek 的右键与长按菜单、未打开聊天的手工改名、AI 自动写回、回执丢失只读核对和未知结果；`--screenshots` 只写入 `.tmp/chat-rename/`。需要已有 Playwright/Chromium，可用 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定，不连接真实客户端或模型。
 
 为“新网页加载到旧网关进程”的 AI重命名接口缺失运行 `node scripts/test-chat-rename-browser.cjs --unavailable-only`，覆盖检查、提交与查询阶段的 404，明确提示更新/重启且停止轮询、不重复提交，保留真实会话缺失错误，以及检查期间关闭窗口不再发送模型任务。

@@ -7,7 +7,7 @@ function fixture({source='desktop',canReconnect=true}={}){
   const events=[],nodes=new Map(),access={source,canReconnect,canChangeModel:true};
   const $=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',classList:{add(){}},close(){},replaceChildren(){}});return nodes.get(id);};
   let finishReading;
-  const ctx={$,events,currentId:null,currentHost:'local',state:null,chatTimeline:null,catalogStarted:false,modelCatalogGeneration:0,modelRequest:0,notificationRequest:0,
+  const ctx={$,events,currentId:null,currentHost:'local',state:null,chatTimeline:null,catalogStarted:false,modelCatalogGeneration:0,modelRequest:0,notificationRequest:0,applyingNewChat:null,
     listRows:[{id:'a',host:'local',access}],submittedRequestIds:new Set(),
     messageActions:{dialog:{close(){}}},workbench:{open(){},current:{}},saveDraft(){},
     sessionAccess:value=>value||access,currentAccess:()=>access,chatKey:(id='a',host='local')=>host+'|'+id,

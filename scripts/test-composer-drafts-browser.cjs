@@ -4,10 +4,12 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'),assets=require('../web/assets.json'),web=path.join(root,'web');
 const first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222';
+const created='33333333-3333-4333-8333-333333333333';
 const access={source:'cli',canSend:true,canConfigure:false,canReconnect:false};
-const rows=[first,second].map((id,i)=>({id,host:'local',title:'测试会话 '+(i+1),cwd:'/fixture',status:'idle',updatedAt:100-i,access}));
+const rows=[first,second].map((id,i)=>({id,host:'local',title:'测试会话 '+(i+1),cwd:'/fixture',projectKey:'local|independent',projectName:'独立聊天',recency:100-i,status:'idle',updatedAt:100-i,access}));
 let pendingDiscovery=false,acceptSend=true,writes=0,holdDiscovery=false,releaseDiscovery;
 let holdModels=false,releaseModels;const newChatAttempts=[];
+let creationFixture=null;
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;
  res.setHeader('Cache-Control','no-store');
@@ -26,12 +28,27 @@ const server=http.createServer(async(req,res)=>{
   }
   else if(p==='/api/sessions'&&req.method==='POST'){
    let raw='';for await(const chunk of req)raw+=chunk;newChatAttempts.push(JSON.parse(raw));
+   if(creationFixture){creationFixture.exists=true;return res.end(JSON.stringify({id:created,host:'local',message:'合成创建成功'}));}
    res.writeHead(503);return res.end(JSON.stringify({error:'合成创建失败'}));
   }
-  else if(p==='/api/activity'||p==='/api/sessions')value={sessions:rows,hosts:[],sources:[],hasMore:false,complete:true};
-  else if(p.endsWith('/timeline')||p.endsWith('/updates')){
+  else if(p==='/api/activity'||p==='/api/sessions')value={sessions:[...rows,...(creationFixture?.exists?[{id:created,host:'local',title:'新聊天',projectKey:'local|independent',projectName:'独立聊天',recency:200,access:{source:'desktop'}}]:[])],hosts:[],sources:[],hasMore:false,complete:true};
+  else if(creationFixture&&p.startsWith('/api/sessions/'+created+'/')&&(p.endsWith('/settings')||p.endsWith('/permissions'))){
+   const fixture=creationFixture,action=p.split('/').at(-1);let raw='';for await(const chunk of req)raw+=chunk;
+   const body=JSON.parse(raw);fixture.writes.push({action,body});fixture.checkReady();
+   if(action==='settings'){
+    await new Promise(resolve=>fixture.releaseSettings=resolve);
+    if(fixture.outcome==='failed'){res.writeHead(503);return res.end(JSON.stringify({error:'合成模型设置失败'}));}
+    if(fixture.outcome==='confirmed'){fixture.model=body.model;fixture.effort=body.effort;}
+   }else fixture.permissionMode=body.preset;
+   value={confirmed:action==='permissions'||fixture.outcome==='confirmed'};
+  }
+  else if(p.endsWith('/timeline')||p.endsWith('/updates')||p.endsWith('/changes')){
    if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,250));
-   const id=p.split('/')[3];value={epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{id,title:rows.find(r=>r.id===id)?.title||id,connected:true,status:'idle',requests:[],queue:[],turns:[],access}};
+   const id=p.split('/')[3],fixture=id===created?creationFixture:null;
+   if(fixture&&p.endsWith('/timeline'))await new Promise(resolve=>{fixture.releaseHistory=resolve;fixture.checkReady();});
+   if(p.endsWith('/changes'))await new Promise(resolve=>setTimeout(resolve,100));
+   value={epoch:'fixture',sequence:fixture?++fixture.sequence:1,rows:[],files:[],hasMore:false,meta:{id,host:'local',title:rows.find(r=>r.id===id)?.title||id,connected:true,status:'idle',requests:[],queue:[],turns:[],access:fixture?{source:'desktop'}:access,
+    ...(fixture?{model:fixture.model,effort:fixture.effort,permissionMode:fixture.permissionMode}:{})}};
   }else if(p.startsWith('/api/desktop-sessions/')){
    const action=p.split('/').at(-1),id=url.searchParams.get('sessionId');
    if(action==='list')value={connected:true,sessions:rows,capabilities:{send:true}};
@@ -74,6 +91,37 @@ const server=http.createServer(async(req,res)=>{
    assert.ok(releaseModels);holdModels=false;releaseModels();await page.waitForFunction(()=>!newChatSettings.loading);
    check(await page.evaluate(()=>JSON.stringify(newChatSettings.value()))===JSON.stringify({model:'custom-model',effort:'high',permission:'ask'}),'晚到的模型列表保留用户选择 '+width);
    await context.close();
+  }
+  for(const [width,outcome] of [[390,'confirmed'],[820,'confirmed'],[1280,'confirmed'],[390,'unconfirmed'],[390,'failed']]){
+   const fixture=creationFixture={outcome,exists:false,writes:[],model:'native-model',effort:'low',permissionMode:'auto-review',sequence:0};
+   let ready;const requested=new Promise(resolve=>ready=resolve);fixture.checkReady=()=>{if(fixture.writes.length===2&&fixture.releaseHistory)ready();};
+   const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
+   await page.goto(base);await page.locator('#new-chat').click();
+   await page.waitForFunction(()=>!newChatSettings.loading);
+   await page.locator('#new-chat-model').selectOption('__custom__');await page.locator('#new-chat-custom-model').fill('selected-model');
+   await page.locator('#new-chat-effort').selectOption('high');await page.locator('#new-chat-permission').selectOption('ask');
+   await page.locator('#new-chat-submit').click();
+   await page.waitForFunction(()=>currentId==='33333333-3333-4333-8333-333333333333').catch(async error=>{
+    throw Error('新聊天未打开：'+JSON.stringify({errors,ui:await page.evaluate(()=>({error:$('new-chat-error').textContent,toast:$('toast').textContent,creatingChat,currentId}))}),{cause:error});
+   });
+   check(await page.locator('#model-name').textContent()==='selected-model · 正在应用…','历史未返回时立即显示所选模型 '+width+' '+outcome);
+   check(await page.locator('#model-effort').textContent()==='· high'&&await page.locator('#permissions-button').textContent()==='请求批准 · 正在应用…','思考程度和权限立即沿用创建表单 '+width+' '+outcome);
+   let deadline;try{await Promise.race([requested,new Promise((_,reject)=>deadline=setTimeout(()=>reject(Error('设置请求被历史读取或模型确认阻塞')),3000))]);}finally{clearTimeout(deadline);}
+   await page.waitForFunction(()=>applyingNewChat!==null&&state?.loadingHistory);
+   check(fixture.writes.some(row=>row.action==='settings')&&fixture.writes.some(row=>row.action==='permissions'),'历史和模型确认均被阻塞时，两类设置已分别提交 '+width+' '+outcome);
+   check(await page.locator('#send').isDisabled()&&await page.locator('#model-button').isDisabled()&&await page.locator('#permissions-button').isDisabled(),'等待实际确认时禁止发送和重复修改 '+width+' '+outcome);
+   assert.ok(fixture.releaseHistory);fixture.releaseHistory();await page.waitForFunction(()=>state?.connected);
+   check(await page.locator('#model-name').textContent()==='selected-model · 正在应用…'&&await page.evaluate(()=>state.model)==='native-model','晚到原生快照不覆盖待应用选择，也不伪造已生效状态 '+width+' '+outcome);
+   assert.ok(fixture.releaseSettings);fixture.releaseSettings();await page.waitForFunction(()=>!creatingChat);
+   if(outcome==='confirmed'){
+    await page.waitForFunction(()=>state?.model==='selected-model'&&document.querySelector('#model-name').textContent==='selected-model');
+    check(await page.locator('#model-effort').textContent()==='· high'&&await page.locator('#permissions-button').textContent()==='请求批准','确认后使用实际模型、思考程度和权限 '+width);
+   }else{
+    check(await page.locator('#model-name').textContent()==='native-model'&&await page.locator('#model-effort').textContent()==='· low','失败或未确认后恢复实际设置 '+outcome);
+    check((await page.locator('#toast').textContent()).includes('模型和推理强度：'),'单独报告模型设置问题 '+outcome);
+   }
+   check(fixture.writes.filter(row=>row.action==='settings').length===1&&fixture.writes.filter(row=>row.action==='permissions').length===1,'设置写入均只提交一次 '+width+' '+outcome);
+   await context.close();creationFixture=null;
   }
   for(const platform of ['MacIntel','Win32'])for(const width of [390,1280]){
    const context=await browser.newContext({viewport:{width,height:900}});
@@ -142,5 +190,5 @@ const server=http.createServer(async(req,res)=>{
   await starting.evaluate(hash=>window.BridgeNavigation.openChat(hash),'#'+second+'~local');assert.ok(releaseDiscovery);releaseDiscovery();await starting.waitForFunction(()=>!entering&&state?.connected);
   check(await starting.evaluate(()=>currentId)===second,'初次进入期间的新通知优先于启动时的旧链接');
   check(errors.length===0,'浏览器无脚本异常：'+errors.join('; '));console.log(JSON.stringify({passed:checks.length,writes,checks},null,2));
- }finally{releaseModels?.();if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
+ }finally{releaseModels?.();creationFixture?.releaseHistory?.();creationFixture?.releaseSettings?.();if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});

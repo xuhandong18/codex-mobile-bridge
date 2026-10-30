@@ -662,6 +662,7 @@ function openNewProject(){
   }).catch(failure=>{if(dialog.open)error.textContent=t(failure.message);});
 }
 let applyingNewChat=null;
+let applyingNewChatPreferences=null;
 let newChatProjectPicker=null,newChatSidebar=null,newChatProjectRequest=0;
 const newChatScopes=new Map();
 try{for(const row of JSON.parse(localStorage.getItem('new-chat-scopes')||'[]'))if(Array.isArray(row)&&row.length===2&&row.every(value=>typeof value==='string'))newChatScopes.set(...row);}catch{}
@@ -746,21 +747,25 @@ $('new-chat-form').onsubmit=async event=>{
     rememberCreatedChat(result,attempt);
     loadList(true).catch(e=>toast(e.message));toast(result.message);
     applyingNewChat=chatKey(result.id,result.host);
+    applyingNewChatPreferences=preferences;
     try{
       const settingErrors=[];
-      // The owner validates settings independently of the browser history read.
-      try{await waitForCreatedChat(()=>api(sessionUrl(result.id,'',result.host)));await openChat(result.id,result.host);}catch(error){settingErrors.push(t(error.message));}
+      // History reads must not delay the owner's independent settings checks.
+      const opening=openChat(result.id,result.host).catch(error=>settingErrors.push(t(error.message)));
       const applySetting=async(action,body,label)=>{
         try{
           const applied=await api(sessionUrl(result.id,action,result.host),body);
           if(!applied.confirmed)throw Error(t('设置已提交，等待 Codex 确认；发送前请检查模型和权限。'));
         }catch(error){settingErrors.push(t(label)+'：'+t(error.message));}
       };
-      if(preferences.model)await applySetting('settings',{model:preferences.model,effort:preferences.effort},'模型和推理强度');
-      if(preferences.permission)await applySetting('permissions',{preset:preferences.permission,confirmed:preferences.permission==='full-access'},'权限');
+      await Promise.all([
+        opening,
+        preferences.model?applySetting('settings',{model:preferences.model,effort:preferences.effort},'模型和推理强度'):null,
+        preferences.permission?applySetting('permissions',{preset:preferences.permission,confirmed:preferences.permission==='full-access'},'权限'):null
+      ]);
       if(settingErrors.length)throw Error(settingErrors.join('；'));
     }catch(error){throw Error(t('聊天已创建，但设置或连接尚未完成：')+t(error.message));}
-    finally{applyingNewChat=null;if(state)renderState(state);}
+    finally{applyingNewChat=null;applyingNewChatPreferences=null;if(state)renderState(state);}
   }catch(e){
     if($('new-chat-dialog').open)$('new-chat-error').textContent=t(e.message)+t('；若结果不确定，请先刷新列表检查，避免重复创建。');
     else toast(e.message);
@@ -881,6 +886,8 @@ async function openChat(id,host="local"){if(messageActions.pending&&messageActio
   reconnectFailure=null;
   window.BridgePresentation?.openChat();
   sessionActivity.read(chatKey(id,host),{explicit:true,sync:false});renderActivity();
+  if(applyingNewChat===chatKey())renderState({id,host,title:listRows.find(row=>row.id===id&&row.host===host)?.title,
+    loadingHistory:true,connected:false,access:workbench.current.access,requests:[],submissions:[]});
   const reading=timeline.start();
   const openingAccess=sessionAccess(listRows.find(row=>row.id===id&&row.host===host)?.access);
   if(openingAccess.source==='desktop'&&openingAccess.canReconnect)api(sessionUrl(id,'reconnect',host),{activate:true},timeline.abort.signal).catch(error=>{if(!timeline.abort.signal.aborted)toast(error.message);});
@@ -957,12 +964,14 @@ function renderState(view){
   }
   if(view.connected)reconnectFailure=null;
   const access=sessionAccess(view.access),limited=!!view.access;
-  const permissionLabel={'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问','custom':'自定义权限'}[view.permissionMode];
+  const applying=applyingNewChat===chatKey(),preferences=applying?applyingNewChatPreferences:null;
+  const pendingLabel=t('正在应用…');
+  const permissionLabel={'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问','custom':'自定义权限'}[preferences?.permission||view.permissionMode];
   const permissionFacts=view.permissionDetails||{};
-  const customPermission=permissionFacts.sandbox==='dangerFullAccess'&&permissionFacts.approvalPolicy==='on-request';
-  $('permissions-button').textContent=customPermission?t('完全访问 · 请求批准'):t(permissionLabel||'权限未提供');
+  const customPermission=!preferences?.permission&&permissionFacts.sandbox==='dangerFullAccess'&&permissionFacts.approvalPolicy==='on-request';
+  $('permissions-button').textContent=(customPermission?t('完全访问 · 请求批准'):t(permissionLabel||'权限未提供'))+(preferences?.permission?' · '+pendingLabel:'');
   $('permissions-button').title=$('permissions-button').textContent;
-  $('permissions-button').disabled=!view.connected||!access.canChangePermissions;
+  $('permissions-button').disabled=applying||!view.connected||!access.canChangePermissions;
   $('fork-source').hidden=!view.forkedFrom;$('fork-source').textContent=view.forkedFrom?t('来源会话：')+view.forkedFrom.title:'';
   if($('model-dialog').open&&modelTarget===chatKey())fastModeControl.sync(view);
   readVisibleChat(view);
@@ -970,10 +979,11 @@ function renderState(view){
   $('chat-title').textContent=view.loadingHistory?t('正在读取聊天…'):view.title;
   const source=sourceLabel(view.access);
   $('chat-meta').textContent=(view.host==='local'?t('此电脑'):view.hostLabel||t('SSH 主机'))+(source?' · '+source:'')+' · '+(view.cwd||t('电脑上的聊天'));
-  $('model-name').textContent=view.model||t('模型');$('model-current').textContent=view.model?t('当前模型：')+view.model:'';$('model-current').hidden=!view.model;
-  const effortLabel=view.effort||t('思考程度未指定');
+  const model=preferences?.model||view.model;
+  $('model-name').textContent=(model||t('模型'))+(preferences?.model?' · '+pendingLabel:'');$('model-current').textContent=view.model?t('当前模型：')+view.model:'';$('model-current').hidden=!view.model;
+  const effortLabel=preferences?.model?preferences.effort:view.effort||t('思考程度未指定');
   $('model-effort').textContent='· '+effortLabel;$('model-effort').hidden=false;
-  $('model-button').title=[view.model||t('模型'),effortLabel].filter(Boolean).join(' · ');$('provider').textContent=[view.model,view.provider].filter(Boolean).join(' · ');
+  $('model-button').title=[$('model-name').textContent,effortLabel].filter(Boolean).join(' · ');$('provider').textContent=[view.model,view.provider].filter(Boolean).join(' · ');
   $('status').textContent=chatStatusText(view,access);
   $('status').classList.toggle('offline',!view.connected);
   $('notice').hidden=view.connected;
@@ -985,10 +995,10 @@ function renderState(view){
   $('send').disabled=applyingNewChat===chatKey()||view.loadingHistory||view.activating||sending||!attachments.ready()||!access.canSend;
   $('message').disabled=limited&&!access.canSend;
   $('attach-button').disabled=limited&&!access.canSend;
-  $('model-button').disabled=limited&&!access.canChangeModel;
+  $('model-button').disabled=applying||limited&&!access.canChangeModel;
   $('skills-button').disabled=sending||!access.canSend;
   $('rename-chat').disabled=limited&&!access.canConfigure;
-  if(!catalogStarted&&view.connected&&access.canChangeModel){catalogStarted=true;startCatalog();}
+  if(!applying&&!catalogStarted&&view.connected&&access.canChangeModel){catalogStarted=true;startCatalog();}
   $('send-mode').disabled=limited&&!access.canSend;
   $('send-mode').querySelector('[value=steer]').disabled=view.status!=='active'||!access.canSend;
   if((view.status!=='active'||!access.canSend)&&$('send-mode').value==='steer')$('send-mode').value='send';
