@@ -2,7 +2,7 @@
 
 class WorkModes {
   constructor({select,hint,goalRoot,goalToggle,storage=sessionStorage,onCancel,onStatus,onEdit,newId=()=>crypto.randomUUID()}) {
-    this.select=select;this.hint=hint;this.goalRoot=goalRoot;this.goalToggle=goalToggle;this.storage=storage;this.onCancel=onCancel;this.onStatus=onStatus;this.onEdit=onEdit;this.newId=newId;this.sending=false;this.editing=false;this.editText="";
+    this.select=select;this.hint=hint;this.goalRoot=goalRoot;this.goalToggle=goalToggle;this.storage=storage;this.onCancel=onCancel;this.onStatus=onStatus;this.onEdit=onEdit;this.newId=newId;this.sending=false;this.editing=false;this.editText="";this.editExpected=null;
     this.key=null;this.selection=null;this.view=null;this.cancelBusy=false;this.statusBusy=null;this.actionError='';
     select.onchange=()=>{this.selection=select.value;this.storage.setItem('work-mode:'+this.key,this.selection);this.actionError='';this.render();};
     goalToggle.onclick=()=>{this.storage.removeItem('hidden-goal:'+this.key);this.render();this.goalRoot.querySelector('.goal-close')?.focus();};
@@ -10,7 +10,7 @@ class WorkModes {
   open(key) {
     this.key=key;const saved=this.storage.getItem('work-mode:'+key);
     this.selection=['default','plan','goal'].includes(saved)?saved:null;
-    this.view=null;this.cancelBusy=false;this.statusBusy=null;this.sending=false;this.editing=false;this.editText='';this.actionError='';this.render();
+    this.view=null;this.cancelBusy=false;this.statusBusy=null;this.sending=false;this.editing=false;this.editText='';this.editExpected=null;this.actionError='';this.render();
   }
   value(sendMode) {return sendMode==='steer'?null:this.select.value;}
   submitted(key,mode) {
@@ -18,17 +18,19 @@ class WorkModes {
     this.storage.setItem('work-mode:'+key,'default');
     if(key===this.key){this.selection='default';this.cancelBusy=false;this.statusBusy=null;this.actionError='';this.render();}
   }
+  expectedGoal(goal=this.view?.goal) {
+    return goal?Object.fromEntries(['objective','status','createdAt','createdAtMs','goalId','revision'].filter(k=>goal[k]!=null).map(k=>[k,goal[k]])):{};
+  }
   async action(kind,fields,run) {
     if(this.busy())return;
     const key=this.key,storageKey='goal-action:'+key;
-    const goal=this.view?.goal;
-    const expected=goal?Object.fromEntries(['objective','status','createdAt','createdAtMs','goalId','revision'].filter(k=>goal[k]!=null).map(k=>[k,goal[k]])):{};
+    const expected=kind==='edit'&&this.editExpected?this.editExpected:this.expectedGoal();
     const fingerprint=JSON.stringify({kind,fields,expected});
     let pending;try{pending=JSON.parse(this.storage.getItem(storageKey));}catch{}
     if(!pending||pending.fingerprint!==fingerprint)pending={fingerprint,payload:{id:this.newId(),...fields,expected,uiLocale:BridgeI18n.locale()}};
     this.storage.setItem(storageKey,JSON.stringify(pending));
     this.cancelBusy=kind==='cancel';this.statusBusy=kind==='cancel'?null:kind;this.actionError='';this.render();
-    try{await run(pending.payload);this.storage.removeItem(storageKey);if(this.key===key)this.editing=false;}
+    try{await run(pending.payload);this.storage.removeItem(storageKey);if(this.key===key){this.editing=false;this.editExpected=null;}}
     catch(error){if(this.key===key)this.actionError=BridgeI18n.t(error.message||'目标操作失败，请重试');}
     finally{if(this.key===key){this.cancelBusy=false;this.statusBusy=null;this.render();}}
   }
@@ -57,6 +59,8 @@ class WorkModes {
     const dismissed=!!goalIdentity&&this.storage.getItem('hidden-goal:'+this.key)===goalIdentity;
     this.goalToggle.hidden=!(goal||request);
     const expanded=this.goalRoot.firstElementChild?.open||false;
+    const focusedEditor=this.goalRoot.querySelector('.goal-editor');
+    const editSelection=focusedEditor&&document.activeElement===focusedEditor?[focusedEditor.selectionStart,focusedEditor.selectionEnd,focusedEditor.selectionDirection]:null;
     this.goalRoot.replaceChildren();this.goalRoot.hidden=!goalIdentity||dismissed;
     const node=(tag,text,cls)=>{const el=document.createElement(tag);el.textContent=text;if(cls)el.className=cls;return el;};
     const button=(text,cls,onclick,disabled)=>{const el=node('button',text,cls);el.type='button';el.disabled=!!disabled;el.onclick=onclick;return el;};
@@ -75,6 +79,7 @@ class WorkModes {
     }
     if(this.actionError)this.goalRoot.append(node('p',this.actionError,'error'));
     if(goal&&goalSupported){
+      const canEdit=goal.status==='paused'||goal.status==='active'&&view.canEditActiveGoal!==false;
       const actions=node('div','','goal-actions');
       this.goalRoot.append(actions);
       if(['active','blocked','usageLimited','budgetLimited'].includes(goal.status)&&goal.activation!=='disarmed'){
@@ -83,14 +88,15 @@ class WorkModes {
       if(goal.status==='paused'||['active','blocked'].includes(goal.status)&&goal.activation==='disarmed'){
         actions.append(button(this.statusBusy==='active'?t('正在恢复目标…'):t('恢复目标'),'goal-status primary',()=>this.setStatus('active'),this.busy()));
       }
-      if(goal.status==='paused')actions.append(button(t('修改目标'),'goal-edit secondary',()=>{this.editing=true;this.editText=goal.objective;this.render();this.goalRoot.querySelector('.goal-editor')?.focus();},this.busy()));
+      if(canEdit)actions.append(button(t('修改目标'),'goal-edit secondary',()=>{this.editing=true;this.editText=goal.objective;this.editExpected=this.expectedGoal(goal);this.render();this.goalRoot.querySelector('.goal-editor')?.focus();},this.busy()));
       actions.append(button(this.cancelBusy?t('正在关闭目标…'):t('关闭目标'),'goal-cancel secondary',()=>this.cancel(),this.busy()));
       this.goalRoot.append(node('p',t('暂停或关闭目标不会停止当前回复；如需立即停止，请点击“停止”。'),'muted'));
-      if(goal.status==='active')this.goalRoot.append(node('p',t('修改目标前请先暂停。'),'muted'));
-      if(this.editing&&goal.status==='paused'){
+      if(goal.status==='active'&&!canEdit)this.goalRoot.append(node('p',t('修改目标前请先暂停。'),'muted'));
+      if(this.editing&&canEdit){
         const input=node('textarea','', 'goal-editor');input.value=this.editText;input.maxLength=4000;input.rows=3;input.disabled=this.busy();input.setAttribute('aria-label',t('目标内容'));input.oninput=()=>{this.editText=input.value;};
-        this.goalRoot.append(input,node('p',t('修改目标内容会重置用量统计，保存后保持暂停。'),'muted'));
+        this.goalRoot.append(input,node('p',t(goal.status==='paused'?'修改目标内容会重置用量统计，保存后保持暂停。':'修改目标内容会重置用量统计，保存后继续执行。'),'muted'));
         this.goalRoot.append(button(t('保存目标'),'goal-save primary',()=>this.saveEdit(),this.busy()),button(t('放弃修改'),'secondary',()=>{this.editing=false;this.render();},this.busy()));
+        if(editSelection&&!this.busy()){input.focus({preventScroll:true});input.setSelectionRange(...editSelection);}
       }
     }
     if(goalIdentity){

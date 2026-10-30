@@ -231,7 +231,7 @@ class DesktopSessionsView {
     this.send.disabled=!ready||!!this.busy||caps.send===false||(canAttach&&(!this.attachments.ready()||this.overRequestLimit(this.attachments.rows)));this.stop.disabled=!ready||!active||!!this.busy;this.stop.hidden=!active||caps.stop===false;this.permissionsButton.hidden=caps.permissions!==true;this.permissionsButton.disabled=!ready||!!this.busy;this.mode.disabled=!ready||!!this.busy;
     this.mode.options[1].disabled=caps.queue===false;if(this.mode.options[1].disabled&&this.mode.value==='queue')this.mode.value='send';const steer=this.mode.options[2];steer.disabled=!active||caps.steer===false;if(steer.disabled&&this.mode.value==='steer')this.mode.value='send';
     const harness=this.provider==='deepseek';this.workMode.hidden=!harness;this.form.classList.toggle('ds-work-modes',harness);
-    this.workModes.render(harness&&state?{...state,host:'local',loadingHistory:!ready,workModesLocked:active,goalRuntimeAvailable:ready&&caps.goal===true,goalUnavailableReason:'当前 Harness 会话不支持目标模式，请更新接入或检查智能体配置'}:null,this.mode.value,this.busy);
+    this.workModes.render(harness&&state?{...state,host:'local',loadingHistory:!ready,workModesLocked:active,canEditActiveGoal:false,goalRuntimeAvailable:ready&&caps.goal===true,goalUnavailableReason:'当前 Harness 会话不支持目标模式，请更新接入或检查智能体配置'}:null,this.mode.value,this.busy);
     this.workMode.disabled=this.workMode.disabled||active;this.workMode.options[1].disabled=caps.workModes!==true;this.workMode.options[1].title=BridgeI18n.t(caps.workModes===true?'':'当前 Harness 会话不支持计划模式，请更新接入或检查智能体配置');
     if(caps.workModes!==true&&this.workMode.value==='plan')this.workMode.value='default';
     if(!harness){this.goalRoot.hidden=true;this.goalToggle.hidden=true;this.modeHint.hidden=true;}

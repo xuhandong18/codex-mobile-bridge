@@ -17,7 +17,7 @@ from bridge.features.sessions.timeline import Timeline
 
 class GoalStub:
     def __init__(self, bridge, error=None):
-        self.bridge=bridge;self.error=error;self.set_calls=[];self.clear_calls=[];self.status_calls=[];self.failures=0 if error is None else 999;self.goals={}
+        self.bridge=bridge;self.error=error;self.set_calls=[];self.clear_calls=[];self.status_calls=[];self.edit_calls=[];self.failures=0 if error is None else 999;self.goals={}
     def __enter__(self):return self.start()
     def __exit__(self,*_):return False
     def start(self):return self
@@ -53,8 +53,9 @@ class GoalStub:
         self._complete(goal,thread_id)
         return {'goal':goal}
 
-    def edit_goal(self,thread_id,objective,token_budget=None):
-        goal={'objective':objective,'status':'paused','tokensUsed':0,'tokenBudget':token_budget}
+    def edit_goal(self,thread_id,objective,token_budget=None,status='paused'):
+        self.edit_calls.append((thread_id,objective,token_budget,status))
+        goal={'objective':objective,'status':status,'tokensUsed':0,'tokenBudget':token_budget}
         self.goals[thread_id]=goal;self._complete(goal,thread_id)
         return goal
 
@@ -124,6 +125,11 @@ class GoalStateTests(unittest.TestCase):
         self.assertEqual(plan_goal_command('cancel', 'Work', active)[0], 'execute')
         self.assertEqual(plan_goal_command('cancel', 'Work', complete)[0], 'execute')
         self.assertEqual(plan_goal_command('cancel', 'Work', None)[0], 'duplicate')
+        for current in (active, paused):
+            self.assertEqual(plan_goal_command('edit', 'Revised', current), ('execute', '', current['status']))
+            self.assertEqual(plan_goal_command('edit', 'Work', current), ('duplicate', '', current['status']))
+        for current in (None, complete, {'objective': 'Work', 'status': 'blocked'}):
+            self.assertEqual(plan_goal_command('edit', 'Revised', current)[0], 'invalid')
 
     def test_owner_transport_is_authoritative_and_exposed_to_projection(self):
         owner=GoalStub(self.bridge)

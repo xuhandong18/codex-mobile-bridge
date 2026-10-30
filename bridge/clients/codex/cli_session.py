@@ -691,8 +691,10 @@ class CliSessions:
             raise ValueError('目标状态无效')
         return normalize_goal_result(self._goal_request(thread_id, 'thread/goal/set', {'status': status}))
 
-    def edit_goal(self, thread_id, objective, token_budget=None):
-        params = {'objective': objective, 'status': 'paused'}
+    def edit_goal(self, thread_id, objective, token_budget=None, status='paused'):
+        if status not in ('active', 'paused'):
+            raise ValueError('目标状态无效')
+        params = {'objective': objective, 'status': status}
         if token_budget is not None:
             params['tokenBudget'] = token_budget
         return normalize_goal_result(self._goal_request(thread_id, 'thread/goal/set', params))

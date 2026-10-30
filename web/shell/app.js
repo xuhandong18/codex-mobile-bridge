@@ -53,7 +53,7 @@ async function goalAction(action,payload) {
   const result=await api(sessionUrl(id,'goal/'+action,host),payload);
   if(!result.confirmed)throw Error('目标操作结果尚未确认，请查看目标状态');
   if(currentId===id&&currentHost===host){state={...state,goal:action==='cancel'?null:(result.result?.goal||result.result)};workModes.render(state,$('send-mode').value,false);}
-  toast(action==='cancel'?'目标已关闭':action==='edit'?'目标已修改，保持暂停':payload.status==='paused'?'目标已暂停':'目标已恢复');
+  toast(action==='cancel'?'目标已关闭':action==='edit'?'目标已修改':payload.status==='paused'?'目标已暂停':'目标已恢复');
 }
 const workModes=new WorkModes({select:$('work-mode'),hint:$('mode-hint'),goalRoot:$('goal-state'),goalToggle:$('goal-toggle'),newId:uuid,
   onCancel:payload=>goalAction('cancel',payload),onStatus:payload=>goalAction('status',payload),onEdit:payload=>goalAction('edit',payload)});

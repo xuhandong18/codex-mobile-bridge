@@ -339,7 +339,9 @@ class Bridge:
                     continue
                 action = command.get('action')
                 status = {'create': 'active', 'pause': 'paused', 'resume': 'active',
-                          'cancel': 'cancelled', 'edit': 'paused'}.get(action)
+                          'cancel': 'cancelled'}.get(action)
+                if action == 'edit':
+                    status = native['status']
                 stored['state'] = 'confirmed'; stored['sent'] = True
                 stored['confirmedAt'] = time.time()
                 stored['response'] = {'status': status, 'confirmed': True,
@@ -366,12 +368,14 @@ class Bridge:
         if len(objective) > 4000:
             raise ValueError('目标内容不能超过 4000 字')
         fingerprint = goal_command_fingerprint(action, objective, status)
-        expected_status = {'create': 'active', 'resume': 'active', 'pause': 'paused', 'edit': 'paused'}.get(action)
+        expected_status = {'create': 'active', 'resume': 'active', 'pause': 'paused'}.get(action)
         # Goal commands mutate one native object and are observed asynchronously,
         # so serialize every bridge-side transition before checking the ledger.
         with self.goal_lock:
             self._reconcile_goal_commands(thread_id)
             native = self._native_goal_state(thread_id, strict=True)
+            if action == 'edit':
+                expected_status = (native or {}).get('status')
             with self.submit_lock:
                 command = self.goal_commands.get(key)
                 if command:
@@ -438,7 +442,8 @@ class Bridge:
                 session.changed()
             try:
                 if action == 'edit':
-                    result = self._goal_call('edit_goal', thread_id, objective, (native or {}).get('tokenBudget'))
+                    result = self._goal_call('edit_goal', thread_id, objective,
+                                            native.get('tokenBudget'), native['status'])
                 elif rpc_arg is None:
                     result = self._goal_call(rpc_method, thread_id)
                 else:
@@ -2889,6 +2894,23 @@ class Bridge:
                 with session.condition:
                     session.changed()
 
+    def _update_goal_activation_queues(self, thread_id, before, goal):
+        """Keep an unsent start bound to the goal the user just edited."""
+        changed = False
+        with self.submit_lock:
+            for key, entry in self.submissions.items():
+                if not key.startswith(thread_id + ':') or entry.get('status') != 'queued':
+                    continue
+                activation = entry.get('goalActivation')
+                if not activation or activation.get('objective') != (before or {}).get('objective'):
+                    continue
+                if activation.get('goal') and activation['goal'] != goal_identity(before):
+                    continue
+                activation.update({'objective': goal['objective'], 'goal': goal_identity(goal)})
+                changed = True
+            if changed:
+                self._save_ledger()
+
     def _send_goal_activation(self, session, response, action, ui_locale=None):
         """Serially start a turn after authoritative state proves the goal."""
         if not response.get("confirmed") or response.get("status") not in ("active",):
@@ -2962,8 +2984,16 @@ class Bridge:
                 objective = (prior or {}).get('objective', (native or {}).get('objective', ''))
             response = self._goal_command(session, thread_id, request_id, action,
                 objective=objective, status=status, ui_locale=ui_locale, expected=expected)
-            if response.get('confirmed') and action in ('pause', 'cancel', 'edit'):
+            if response.get('confirmed') and (action in ('pause', 'cancel') or
+                                             action == 'edit' and response.get('status') == 'paused'):
                 self._cancel_goal_activation_queues(thread_id)
+            if response.get('confirmed') and action == 'edit':
+                goal = normalize_goal_result(response.get('result'))
+                if (goal and goal['status'] == 'active' and
+                        (not response.get('duplicate') or goal_identity(goal) == goal_identity(native) and
+                         (native or {}).get('status') == 'active')):
+                    before = self.goal_commands[thread_id + ':' + request_id].get('before')
+                    self._update_goal_activation_queues(thread_id, before, goal)
             if action == 'resume':
                 response['activation'] = self._send_goal_activation(session, response, action)
             with session.condition:

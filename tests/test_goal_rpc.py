@@ -107,6 +107,16 @@ class SQLiteURITests(unittest.TestCase):
 
 
 class GoalRPCProcessTests(unittest.TestCase):
+    def test_edit_writes_the_current_status_and_preserves_budget(self):
+        rpc=GoalRPC(Path(tempfile.gettempdir()),Path(__file__))
+        for status in ('active','paused'):
+            with self.subTest(status=status), patch.object(rpc,'request',return_value={
+                    'goal':{'objective':'Revised','status':status,'tokenBudget':12345}}) as request:
+                goal=rpc.edit_goal('tid','Revised',12345,status)
+                self.assertEqual(goal['status'],status)
+                request.assert_called_once_with('thread/goal/set',{
+                    'threadId':'tid','objective':'Revised','status':status,'tokenBudget':12345})
+
     def start_rpc(self, os_name):
         process = FakeProcess()
         fake_subprocess = FakeSubprocess(process)

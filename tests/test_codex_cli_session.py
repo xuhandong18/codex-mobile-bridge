@@ -363,9 +363,12 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(self.sessions.set_goal('thread-a', 'Build')['objective'], 'Build')
         self.assertEqual(self.sessions.set_goal_status('thread-a', 'paused')['status'], 'paused')
         self.assertEqual(self.sessions.edit_goal('thread-a', 'Improve', 100)['objective'], 'Improve')
+        self.assertEqual(self.sessions.edit_goal('thread-a', 'Improve again', 100, 'active')['status'], 'active')
         self.assertEqual(self.sessions.clear_goal('thread-a'), {'cleared': True})
         self.assertIn(('thread/goal/set', {'threadId': 'thread-a', 'objective': 'Improve',
                                              'status': 'paused', 'tokenBudget': 100}), self.fake.sent)
+        self.assertIn(('thread/goal/set', {'threadId': 'thread-a', 'objective': 'Improve again',
+                                             'status': 'active', 'tokenBudget': 100}), self.fake.sent)
         self.sessions._event({'method': 'thread/goal/updated', 'params': {
             'threadId': 'thread-a', 'goal': {'objective': 'Build', 'status': 'active'}}})
         self.assertEqual(self.states[-1][1]['threadGoal']['objective'], 'Build')

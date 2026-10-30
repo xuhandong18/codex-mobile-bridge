@@ -681,10 +681,17 @@ class RemoteCliGoalTests(CliBridgeFixture):
         resumed = self.bridge.set_goal_status(self.thread_id, 'active', str(uuid.uuid4()))
         self.assertEqual(resumed['activation']['status'], 'accepted')
         self.bridge.set_goal_status(self.thread_id, 'paused', str(uuid.uuid4()))
-        self.cli.edit_goal.side_effect = lambda thread_id, objective, budget: goal.update(value={
-            'objective': objective, 'status': 'paused', 'tokenBudget': budget}) or goal['value']
+        self.cli.edit_goal.side_effect = lambda thread_id, objective, budget, status: goal.update(value={
+            'objective': objective, 'status': status, 'tokenBudget': budget}) or goal['value']
         self.bridge.edit_goal(self.thread_id, 'Revised remote objective', str(uuid.uuid4()))
         self.assertEqual(goal['value']['objective'], 'Revised remote objective')
+        self.assertEqual(goal['value']['status'], 'paused')
+        self.bridge.set_goal_status(self.thread_id, 'active', str(uuid.uuid4()))
+        turns_before_edit=self.cli.call.call_count
+        self.bridge.edit_goal(self.thread_id, 'Revised while running', str(uuid.uuid4()))
+        self.assertEqual(goal['value']['status'], 'active')
+        self.assertEqual(self.cli.call.call_count, turns_before_edit)
+        self.cli.edit_goal.assert_called_with(self.thread_id, 'Revised while running', None, 'active')
         self.bridge.cancel_goal(self.thread_id, str(uuid.uuid4()))
         self.assertIsNone(self.bridge.view(self.thread_id, attach=False)['goal'])
         self.cli.set_goal.assert_called_once_with(self.thread_id, 'Remote objective')

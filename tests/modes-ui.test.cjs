@@ -160,13 +160,38 @@ test('late goal operation failure cannot contaminate the next chat',async()=>{
  const pending=ui.panel.setStatus('paused');ui.panel.open('local|b');ui.panel.render(idle);reject(Error('Old failure'));await pending;
  assert.doesNotMatch(ui.text(),/Old failure|Work A/);assert.equal(ui.panel.busy(),false);
 });
-test('editing is only available paused and preserves draft across streamed renders',async()=>{
+test('active goals can be edited and preserve draft across streamed renders',async()=>{
  const ui=fixture();ui.panel.open('local|a');ui.panel.render({...idle,goal:{objective:'Work',status:'active'}});
- assert.equal(ui.find(n=>(n.className||'').includes('goal-edit')),undefined);
- const view={...idle,goal:{objective:'Work',status:'paused'}};ui.panel.render(view);
+ assert.ok(ui.find(n=>(n.className||'').includes('goal-edit')));
+ assert.doesNotMatch(ui.text(),/修改目标前请先暂停/);
+ const view={...idle,goal:{objective:'Work',status:'active'}};ui.panel.render(view);
  ui.find(n=>(n.className||'').includes('goal-edit')).onclick();
  const input=ui.find(n=>n.className==='goal-editor');input.value='Revised';input.oninput();ui.panel.render(view);
  assert.equal(ui.find(n=>n.className==='goal-editor').value,'Revised');
  let payload;ui.panel.onEdit=p=>{payload=p;};await ui.panel.saveEdit();
- assert.equal(payload.objective,'Revised');assert.equal(payload.expected.status,'paused');assert.equal(ui.panel.editing,false);
+ assert.equal(payload.objective,'Revised');assert.equal(payload.expected.status,'active');assert.equal(ui.panel.editing,false);
+});
+
+test('paused goals stay editable while Harness active goals still require a pause',()=>{
+ const ui=fixture();ui.panel.open('local|a');
+ ui.panel.render({...idle,goal:{objective:'Work',status:'paused'}});
+ ui.find(n=>n.className==='goal-edit secondary').onclick();
+ assert.equal(ui.find(n=>n.className==='goal-editor').value,'Work');
+ assert.match(ui.text(),/保存后保持暂停/);
+ ui.panel.render({...idle,canEditActiveGoal:false,goal:{objective:'Harness work',status:'active'}});
+ assert.equal(ui.find(n=>n.className==='goal-edit secondary'),undefined);
+ assert.equal(ui.find(n=>n.className==='goal-editor'),undefined);
+ assert.match(ui.text(),/修改目标前请先暂停/);
+});
+
+test('saving an open editor checks the original goal even after the desktop replaces it',async()=>{
+ const ui=fixture();ui.panel.open('local|a');
+ ui.panel.render({...idle,goal:{objective:'Original',status:'active',createdAt:100}});
+ ui.find(n=>n.className==='goal-edit secondary').onclick();
+ const input=ui.find(n=>n.className==='goal-editor');input.value='My draft';input.oninput();
+ ui.panel.render({...idle,goal:{objective:'Changed on desktop',status:'active',createdAt:200}});
+ let payload;ui.panel.onEdit=p=>{payload=p;};await ui.panel.saveEdit();
+ assert.equal(payload.objective,'My draft');
+ assert.equal(payload.expected.objective,'Original');
+ assert.equal(payload.expected.createdAt,100);
 });

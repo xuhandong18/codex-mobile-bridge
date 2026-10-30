@@ -131,9 +131,9 @@ def plan_goal_command(action, objective, current, *, status=None):
             return "invalid", "目标已发生变化，请刷新后重试", None
         return "execute", "", "cancelled"
     if action == "edit":
-        if current is None or current_status != "paused":
-            return "invalid", "请先暂停目标，再修改目标内容", None
-        return ("duplicate" if same_objective else "execute"), "", "paused"
+        if current is None or current_status not in ("active", "paused"):
+            return "invalid", "目标当前状态不支持修改", None
+        return ("duplicate" if same_objective else "execute"), "", current_status
     expected = "paused" if action == "pause" else "active"
     predecessor = "active" if action == "pause" else "paused"
     if current is None:
@@ -197,6 +197,8 @@ def goal_state_confirms_command(command, current):
         return current is None
     before = command.get('before')
     if before and command.get('action') in ('pause', 'resume') and goal_identity(before) != goal_identity(current):
+        return False
+    if before and command.get('action') == 'edit' and before.get('status') != (current or {}).get('status'):
         return False
     decision, _, _ = plan_goal_command(
         command.get("action"), command.get("objective"), current, status=command.get("status"))
@@ -334,8 +336,10 @@ class GoalRPC:
         params = {'threadId': str(thread_id), 'status': status}
         return normalize_goal_result(self.request('thread/goal/set', params))
 
-    def edit_goal(self, thread_id, objective, token_budget=None):
-        params = {'threadId': str(thread_id), 'objective': objective, 'status': 'paused'}
+    def edit_goal(self, thread_id, objective, token_budget=None, status='paused'):
+        if status not in ('active', 'paused'):
+            raise ValueError('目标状态无效')
+        params = {'threadId': str(thread_id), 'objective': objective, 'status': status}
         if token_budget is not None:
             params['tokenBudget'] = token_budget
         return normalize_goal_result(self.request('thread/goal/set', params))

@@ -151,10 +151,85 @@ class GoalControlTests(unittest.TestCase):
         self.bridge.set_goal_status(THREAD,'active',str(uuid.uuid4()))
         self.assertEqual(len(self.calls()),1)
 
-    def test_edit_requires_pause_preserves_budget_and_waits_for_explicit_resume(self):
+    def test_active_goal_can_be_edited_without_pausing_or_starting_an_extra_turn(self):
         self.create();stub=self.bridge.goal
-        with self.assertRaisesRegex(ValueError,'先暂停'):
-            self.bridge.edit_goal(THREAD,'Revised',str(uuid.uuid4()))
+        stub.goals[THREAD]['tokenBudget']=12345
+        request_id=str(uuid.uuid4())
+        result=self.bridge.edit_goal(THREAD,'Revised',request_id)
+        self.assertTrue(result['confirmed'])
+        self.bridge.edit_goal(THREAD,'Revised',request_id)
+        goal=stub.get_goal(THREAD)
+        self.assertEqual((goal['objective'],goal['status'],goal['tokenBudget']),('Revised','active',12345))
+        self.assertEqual(stub.status_calls,[])
+        self.assertEqual(stub.edit_calls,[(THREAD,'Revised',12345,'active')])
+        self.assertEqual(len(self.calls()),1)
+
+    def test_active_edit_updates_a_queued_start_and_retry_keeps_only_one_start(self):
+        self.fixture.state['threadRuntimeStatus']={'type':'active'}
+        created=self.create()
+        old_key=THREAD+':'+created['activation']['id']
+        request_id=str(uuid.uuid4())
+        edited=self.bridge.edit_goal(THREAD,'Revised',request_id)
+        self.bridge.edit_goal(THREAD,'Revised',request_id)
+        self.assertEqual(self.bridge.submissions[old_key]['status'],'queued')
+        queued=[(k,v) for k,v in self.bridge.submissions.items() if v['status']=='queued']
+        self.assertEqual(len(queued),1)
+        self.assertEqual(queued[0][1]['goalActivation']['objective'],'Revised')
+        self.assertNotIn('activation',edited)
+        session=self.live(threadRuntimeStatus={'type':'idle'})
+        self.bridge._send_queued(session,*queued[0])
+        self.assertEqual(len(self.calls()),1)
+
+    def test_unchanged_active_edit_does_not_reset_usage_or_cancel_queued_start(self):
+        self.fixture.state['threadRuntimeStatus']={'type':'active'}
+        created=self.create()
+        stub=self.bridge.goal;stub.goals[THREAD]['tokensUsed']=123
+        edited=self.bridge.edit_goal(THREAD,'Work',str(uuid.uuid4()))
+        self.assertTrue(edited['confirmed'])
+        self.assertEqual(edited['status'],'active')
+        self.assertEqual(stub.edit_calls,[])
+        self.assertEqual(stub.goals[THREAD]['tokensUsed'],123)
+        self.assertEqual(self.bridge.submissions[THREAD+':'+created['activation']['id']]['status'],'queued')
+
+    def test_active_edit_lost_response_reconciles_without_replaying_the_write(self):
+        self.fixture.state['threadRuntimeStatus']={'type':'active'}
+        self.create();stub=self.bridge.goal;write=stub.edit_goal
+        def edit(*args):
+            write(*args)
+            raise GoalUnavailable('response lost after edit')
+        request_id=str(uuid.uuid4())
+        with patch.object(stub,'edit_goal',side_effect=edit):
+            with self.assertRaises(IPCError):
+                self.bridge.edit_goal(THREAD,'Revised',request_id)
+            response=self.bridge.edit_goal(THREAD,'Revised',request_id)
+        self.assertTrue(response['confirmed'])
+        self.assertEqual(response['status'],'active')
+        self.assertEqual(len(stub.edit_calls),1)
+        self.assertEqual(len(self.calls()),0)
+        queued=[(k,v) for k,v in self.bridge.submissions.items() if v['status']=='queued']
+        self.assertEqual(len(queued),1)
+        self.assertEqual(queued[0][1]['goalActivation']['objective'],'Revised')
+        session=self.live(threadRuntimeStatus={'type':'idle'})
+        self.bridge._send_queued(session,*queued[0])
+        self.assertEqual(len(self.calls()),1)
+
+    def test_edit_is_not_confirmed_when_the_native_status_was_changed(self):
+        self.create();stub=self.bridge.goal;write=stub.edit_goal
+        def edit(*args):
+            write(*args)
+            stub.goals[THREAD]['status']='paused'
+            raise GoalUnavailable('response lost after edit')
+        request_id=str(uuid.uuid4())
+        with patch.object(stub,'edit_goal',side_effect=edit):
+            with self.assertRaises(IPCError):
+                self.bridge.edit_goal(THREAD,'Revised',request_id)
+            response=self.bridge.edit_goal(THREAD,'Revised',request_id)
+        self.assertFalse(response['confirmed'])
+        self.assertEqual(response['status'],'unknown')
+        self.assertEqual(len(stub.edit_calls),1)
+
+    def test_paused_goal_edit_preserves_budget_and_waits_for_explicit_resume(self):
+        self.create();stub=self.bridge.goal
         self.bridge.set_goal_status(THREAD,'paused',str(uuid.uuid4()))
         stub.goals[THREAD]['tokenBudget']=12345
         request_id=str(uuid.uuid4())
@@ -171,7 +246,10 @@ class GoalControlTests(unittest.TestCase):
         self.bridge.goal.goals[THREAD]={'objective':'From desktop','status':'active'}
         with self.assertRaisesRegex(ValueError,'发生变化'):
             self.bridge.cancel_goal(THREAD,str(uuid.uuid4()),expected=old)
+        with self.assertRaisesRegex(ValueError,'发生变化'):
+            self.bridge.edit_goal(THREAD,'Revised',str(uuid.uuid4()),expected=old)
         self.assertEqual(self.bridge.goal.clear_calls,[])
+        self.assertEqual(self.bridge.goal.edit_calls,[])
 
     def test_locale_change_during_retry_reuses_original_activation(self):
         request_id=str(uuid.uuid4());self.bridge.goal=GoalStub(self.bridge)

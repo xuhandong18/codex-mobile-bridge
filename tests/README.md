@@ -39,6 +39,8 @@ HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据�
 | 文件/终端 | `test_workspace*`、`test_download_ranges*`、`test_*terminal*` |
 | 目录与资源边界 | `test_platform_architecture.py`、`test_resource_layout.py`、`test_web_assets.py` |
 
+目标编辑运行 `python -B scripts/test-backend.py --source-only -p 'test_goal_*.py'`，并联动 `test_modes.py`、`test_cli_bridge_integration.py` 与 `test_codex_cli_session.py`。覆盖运行中直接修改、暂停状态保留、预算保留、排队启动同步、重复保存、过期目标拒绝和未知结果不重放。`node scripts/test-goal-edit-browser.cjs` 使用生产页面、隔离合成 API 与已有 Playwright/Chromium，在手机、平板和电脑宽度及中英文界面实际点击、输入和保存，验证实时刷新保留草稿、焦点与选区，失败重试保留操作 ID，且保存不发送暂停、停止或额外聊天请求。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定已有运行时；不操作真实 Codex 聊天。Harness 仍要求先暂停再修改，由 `tests/modes-ui.test.cjs` 覆盖。
+
 测试名仍保持在 `tests/` 顶层，方便按前缀发现并复用既有夹具。平台测试的模拟结果不能替代对应操作系统的实机结果。
 
 新建 Codex 项目运行 `python -B scripts/test-backend.py --source-only -p test_native_projects.py`，并联动 `test_projects.py`、`test_projects_http.py`、`test_project_directories.py` 和 `test_windows_project_ui.py`。覆盖桌面 `schemaVersion: 2` 同时返回本地、远程和无磁盘路径的 ChatGPT 项目时，两种原生创建通路均能完成本地项目与分区的核验；远程、云端项目不能充当本地创建回执，损坏的本地记录、未知项目类型和重复身份仍拒绝操作，写入结果未知不重放。夹具使用合成数据，不创建真实项目或执行真实桌面窗口操作。
