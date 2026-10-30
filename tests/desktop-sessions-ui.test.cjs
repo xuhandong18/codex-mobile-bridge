@@ -122,6 +122,47 @@ test('desktop client keeps cached rows through brief polling failures and clears
  for(let attempt=1;attempt<=3;attempt++){await assert.rejects(ui.view.refreshList(),/network unavailable/);assert.match(ui.view.rowsRoot.textContent,/Saved chat/);assert.equal(ui.view.listStatus.textContent,'');assert.equal(ui.view.listHint.hidden,attempt<3);}
  ui.setHandler(async()=>({sessions:[{id:'a',title:'Current chat',backend:'code'}]}));await ui.view.refreshList();assert.match(ui.view.rowsRoot.textContent,/Current chat/);
 });
+
+for(const provider of ['claude','deepseek'])test(provider+'状态读取短暂失败时保留绿点并说明旧状态，超时及恢复同步到头部',async()=>{
+ const ui=fixture(),view=ui.view;let now=0;view.activity.now=()=>now;
+ const session={id:'a',title:'Running chat',status:'active',turnId:'one',turnStatus:'inProgress'};
+ const ready=async url=>url.includes('/detail')?{connected:true,session,messages:[]}:{connected:true,sessions:[session]};
+ ui.setHandler(ready);await view.choose(provider);await view.open('a');
+ ui.setHandler(async()=>{throw Error('offline');});
+ await assert.rejects(view.detail(view.generation),/offline/);
+ await assert.rejects(view.refreshList(),/offline/);
+ assert.equal(view.activity.rows[provider+'|a'].offline,true);
+ assert.equal(view.rowsRoot.querySelector('.session-indicator').classList.contains('running'),true);
+ assert.equal(view.rowsRoot.querySelector('.session-indicator').title,'上次确认运行中，正在重新确认');
+ assert.equal(view.status.textContent,'上次确认运行中，正在重新确认');
+ assert.equal(view.canMutate(),false);assert.equal(view.send.disabled,true);
+ now=29000;await assert.rejects(view.refreshList(),/offline/);
+ assert.equal(view.status.textContent,'上次确认运行中，正在重新确认');
+ now=30000;view.renderIndicators();
+ assert.equal(view.rowsRoot.querySelector('.session-indicator').classList.contains('unknown'),true);
+ assert.equal(view.rowsRoot.querySelector('.session-indicator').title,'运行状态暂不可用');
+ assert.equal(view.status.textContent,'运行状态暂不可用');
+ ui.setHandler(ready);await view.refreshList();await view.detail(view.generation);
+ assert.equal(view.rowsRoot.querySelector('.session-indicator').classList.contains('running'),true);
+ assert.equal(view.rowsRoot.querySelector('.session-indicator').title,'运行中');
+ assert.equal(view.status.textContent,'运行中');assert.equal(view.canMutate(),true);
+});
+
+for(const provider of ['claude','deepseek'])test(provider+'列表失败不能把缓存侧边当成新状态续期，也不能清除已确认的派生等待',async()=>{
+ const ui=fixture(),view=ui.view;await view.choose(provider);let now=0;view.activity.now=()=>now;
+ const parent={id:'a',status:'idle',waitingSubagents:0,sideChats:[{id:'side',connected:true,status:'active'}]};
+ view.updateActivity([parent]);view.updateActivity([parent],false);
+ assert.equal(view.activity.rows[provider+'|a/side/side'].offline,true);
+ assert.equal(view.activity.indicator(provider+'|a')?.stale,true);
+ now=29000;view.updateActivity([parent],false);now=30000;
+ assert.equal(view.activity.indicator(provider+'|a')?.kind,'unknown');
+ view.updateActivity([{...parent,sideChats:[],waitingSubagents:1}]);
+ view.updateActivity([parent],false);
+ assert.equal(view.activity.indicator(provider+'|a')?.kind,'awaiting');
+ view.updateActivity([{...parent,sideChats:[{...parent.sideChats[0],waitingSubagents:1}]}]);
+ view.updateActivity([{...parent,sideChats:[{...parent.sideChats[0],waitingSubagents:0}]}],false);
+ assert.equal(view.activity.indicator(provider+'|a')?.kind,'awaiting','缓存侧边中的派生等待摘要也不能解除新确认的红色');
+});
 test('LAN HTTP send creates a secure id and retries the same unconfirmed operation',async()=>{
  const ui=await opened();ui.run('uuid=undefined');let attempt=0;ui.setHandler(async(url,body)=>{if(body){if(++attempt===1)throw Error('connection lost');return {status:'accepted'};}return url.includes('/detail')?{session:{id:'a',title:'Chat',status:'idle'},messages:[]}:{sessions:[]};});
  ui.view.input.value='hello';await ui.view.submit();assert.equal(ui.view.input.value,'hello');await ui.view.detail(ui.view.generation);await ui.view.submit();const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.match(writes[0].body.id,/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);assert.equal(writes[0].body.id,writes[1].body.id);assert.equal(ui.view.input.value,'');

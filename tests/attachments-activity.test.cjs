@@ -68,10 +68,10 @@ test('concurrent host-qualified runs become unread completion badges and persist
  restored.read('local|a');restored.update([status('a','local','idle')]);assert.equal(restored.indicator('local|a'),null);
  restored.update([status('a','local','idle','two')]);assert.equal(restored.indicator('local|a').kind,'completed');
 });
-test('initial history does not flood unread; offline is unknown and stopped/failed are not successes',()=>{
+test('initial history does not flood unread; brief offline retains the last run and stopped/failed are not successes',()=>{
  const a=new SessionActivity({storage:storage()});
  a.update([status('a','local','idle')]);assert.equal(a.indicator('local|a'),null);
- a.update([status('a','local','active','two')]);a.update([{id:'a',host:'local',connected:false,status:'unknown'}]);assert.equal(a.indicator('local|a').kind,'unknown');
+ a.update([status('a','local','active','two')]);a.update([{id:'a',host:'local',connected:false,status:'unknown'}]);assert.equal(a.indicator('local|a').stale,true);
  a.update([status('a','local','idle','two','failed')]);assert.equal(a.indicator('local|a').kind,'ended');
  a.update([status('a','local','idle','three','interrupted')],'local|a');assert.equal(a.indicator('local|a'),null);
 });
@@ -96,7 +96,7 @@ test('a parent completion stays running while descendants work and finishes only
  const row={...status('a','local','idle'),parentStatus:'idle',status:'active',runningSubagents:2,subagentsKnown:true,activityConnected:true};
  a.update([row]);assert.deepEqual(a.indicator('local|a'),{kind:'running',label:'子代理运行中'});
  a.read('local|a');a.update([{...row,runningSubagents:1}]);assert.equal(a.indicator('local|a').kind,'running');
- a.update([{...row,status:'unknown',subagentsKnown:false,runningSubagents:0}]);assert.equal(a.indicator('local|a').kind,'unknown');
+ a.update([{...row,status:'unknown',subagentsKnown:false,runningSubagents:0}]);assert.equal(a.indicator('local|a').label,'上次确认子代理运行中，正在重新确认');
  a.update([{...row,status:'idle',runningSubagents:0}]);assert.equal(a.indicator('local|a').kind,'completed');
  a.read('local|a');a.update([{...row,status:'idle',runningSubagents:0}]);assert.equal(a.indicator('local|a'),null);
 });
@@ -106,7 +106,7 @@ test('verified running subagents remain visible when the parent owner is disconn
  a.update([{...status('a','local','active'),connected:false,activityConnected:true,runningSubagents:1}]);
  assert.equal(a.indicator('local|a').kind,'running');
  a.update([{...status('a','local','idle'),status:'unknown',subagentsKnown:false}]);
- assert.equal(a.indicator('local|a').kind,'unknown');
+ assert.equal(a.indicator('local|a').stale,true);
 });
 function fixture(){
  let count=0,thumbCalls=[],upload=async(key,id,file)=>({id,name:file.name,size:file.size,image:null});

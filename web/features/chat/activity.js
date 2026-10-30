@@ -1,6 +1,6 @@
 'use strict';
 class SessionActivity {
-  constructor({storage=localStorage,key='bridge-session-activity',onRead=null}={}){this.storage=storage;this.key=key;this.onRead=onRead;this.readTokens=new Map();try{this.rows=JSON.parse(storage.getItem(key)||'{}');}catch{this.rows={};}}
+  constructor({storage=localStorage,key='bridge-session-activity',onRead=null,now=()=>globalThis.performance?.now()??Date.now()}={}){this.storage=storage;this.key=key;this.onRead=onRead;this.now=now;this.readTokens=new Map();this.refreshes=new Map();try{this.rows=JSON.parse(storage.getItem(key)||'{}');}catch{this.rows={};}}
   id(row){return row.host+'|'+row.id;}
   save(){try{this.storage.setItem(this.key,JSON.stringify(this.rows));}catch{}}
   waitingSnapshot(row,previous){
@@ -24,9 +24,14 @@ class SessionActivity {
       }
       const running=parentStatus==='active'||row.runningSubagents>0;
       const terminal=parentStatus!=='active'&&['completed','failed','interrupted'].includes(row.turnStatus);
-      if(!(row.activityConnected??row.connected)||row.status==='unknown'){
+      if(!(row.activityConnected??row.connected)||!row.status||row.status==='unknown'){
+        const refresh=this.refreshes.get(key);
+        if(refresh&&refresh.failedAt===null)refresh.failedAt=this.now();
         this.rows[key]={...previous,...waiting,offline:true,offlineReason:row.activityError||null};
       }else{
+        // Display grace is page-local. Persisted badges never establish a fresh
+        // baseline, and failed reads remain offline for sync/write decisions.
+        this.refreshes.set(key,{failedAt:null});
         const token=terminal&&row.turnId?row.turnId+':'+row.turnStatus:previous?.token||null;
         const subtreeFinished=previous?.runningSubagents>0&&!(row.runningSubagents>0);
         const wasActive=(previous?.parentStatus??previous?.status)==='active'||subtreeFinished;
@@ -40,7 +45,7 @@ class SessionActivity {
       if(Array.isArray(row.sideChats)&&(!Number.isFinite(this.rows[key].sideChatsObservedAt)||Number.isFinite(row.sideChatsObservedAt)&&row.sideChatsObservedAt>=this.rows[key].sideChatsObservedAt)){
         const old=this.rows[key].sideKeys||[],next=[];
         for(const child of row.sideChats)next.push(this.updateSideChat(row,child,false,{save:false}));
-        for(const child of old)if(!next.includes(child))delete this.rows[child];
+        for(const child of old)if(!next.includes(child))this.forget(child);
         this.rows[key].sideKeys=next;
         if(Number.isFinite(row.sideChatsObservedAt))this.rows[key].sideChatsObservedAt=Math.max(row.sideChatsObservedAt,this.rows[key].sideChatsObservedAt||0);
       }
@@ -67,17 +72,22 @@ class SessionActivity {
   }
   indicator(key){
     const indicators=[key,...(this.rows[key]?.sideKeys||[])].map(id=>this.ownIndicator(id)).filter(Boolean);
-    return ['awaiting','completed','ended','running','unknown'].map(kind=>indicators.find(row=>row.kind===kind)).find(Boolean)||null;
+    return ['awaiting','completed','ended','running','unknown'].map(kind=>indicators.find(row=>row.kind===kind&&!row.stale)||indicators.find(row=>row.kind===kind)).find(Boolean)||null;
   }
   ownIndicator(key){
     const row=this.rows[key];if(!row)return null;
     if(row.waitingForUser||row.waitingSubagents>0)return {kind:'awaiting',label:'等待你回复或处理'};
     if(row.manualUnread)return {kind:'completed',label:'未读'};
     if(row.pending){const status=row.pending.split(':').at(-1);return {kind:status==='completed'?'completed':'ended',label:status==='completed'?'已完成，未查看':status==='failed'?'运行失败，未查看':'已停止，未查看'};}
-    if(row.offline)return {kind:'unknown',label:row.offlineReason==='timeout'?'读取运行状态超时':'运行状态暂不可用'};
+    if(row.offline){
+      const failedAt=this.refreshes.get(key)?.failedAt;
+      if(!Number.isFinite(failedAt)||this.now()-failedAt>=30000)return {kind:'unknown',label:row.offlineReason==='timeout'?'读取运行状态超时':'运行状态暂不可用'};
+      return row.status==='active'?{kind:'running',label:row.runningSubagents?'上次确认子代理运行中，正在重新确认':'上次确认运行中，正在重新确认',stale:true}:null;
+    }
     if(row.status==='active')return {kind:'running',label:row.runningSubagents?'子代理运行中':'运行中'};
     return null;
   }
-  clear(){this.rows={};this.readTokens.clear();this.storage.removeItem(this.key);}
+  forget(key){delete this.rows[key];this.readTokens.delete(key);this.refreshes.delete(key);}
+  clear(){this.rows={};this.readTokens.clear();this.refreshes.clear();this.storage.removeItem(this.key);}
 }
 if(typeof module!=='undefined')module.exports={SessionActivity};

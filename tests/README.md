@@ -82,15 +82,17 @@ npm run test:updater
 
 侧栏跨设备同步运行 `node --test tests/sidebar-preferences.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p 'test_sidebar*.py'`；真实页面验证为 `node scripts/test-sidebar-preferences-browser.cjs`。后者使用独立浏览器上下文，在手机、平板和电脑宽度实际操作长按/右键菜单，检查旧设置迁移、前台自动同步、项目上下顺序、原生项目跨分区移动、分区顺序、聊天归属、整页重载及丢失保存回包时不重复提交。后端另验证原生项目完成后无需浏览器轮询即可清除旧显示覆盖、未知原生结果不清除，以及操作期间另一设备的新选择优先。所有数据与原生客户端均为合成夹具，需要已有 Playwright/Chromium，不启动真实聊天或模型。
 
-导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
+导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs tests/activity-refresh.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，以及短暂失败、持续失败三十秒和恢复成功后的显示，确认无需点击聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
 主聊天和侧边聊天的合并提示运行 `node --test tests/side-chat-activity.test.cjs tests/chat-read-state.test.cjs tests/chat-display-panels.test.cjs` 与 `python -B scripts/test-backend.py --source-only -p test_side_chat_activity.py`。真实页面回归为 `node scripts/test-side-chat-activity-browser.cjs`，在 390、820、1280 像素下分别检查最近交互和 Codex 分区列表，覆盖主聊天结束而侧边仍运行、任一完成的蓝点优先、分别已读后恢复绿点、真实侧边详情轮次结构的已读与摘要轮询、切回主标签即时已读、侧边发送更新项目排序及刷新保留。Node 回归另检查断线与锁占用不盖住蓝点、刷新持久和同轮旧摘要不复活未读；后端覆盖分页前纳入旧父聊天、关闭后保留排序、未知发送不重复计时和锁占用不阻塞活动查询。可加 `--screenshots` 将手机尺寸的蓝绿点截图写入 `.tmp/side-chat-activity/`；仅使用隔离合成数据，不操作真实客户端或模型。
 
 灰点首次显示时主动预约读取；`POST /api/activity` 在同一个请求内等待当前桌面状态，请求内的主机和聊天共享五秒截止时间。并发的相同只读查询合并等待；Windows 原生补读重新查询，不用十五秒内的旧快照直接返回。页面按聊天排除在途查询，展开或滚动出现的新条目可以立即查询，五秒更新可刷新已经返回的其他条目；每页面和每主机最多并行四个查询，满额后释放空位时查询最新可见范围。超时响应使用 `timedOut` 和条目的 `activityError: timeout` 标记，灰点说明为“读取运行状态超时”。前端不为未知状态安排短间隔补查，等待中的同一聊天不被普通五秒更新重复排队，网络请求另设十秒保护。
 
+当前页面已成功确认的聊天，后续读取失败立即记录离线，但显示保留上次状态三十秒：空闲无点，绿点说明“上次确认运行中，正在重新确认”（子代理使用对应文案）。从首次失败计时，重复失败不续期，到期后在下一次正常刷新或重绘显示灰点；成功读取立即更新并重置计时。首次未知不使用缓冲。成功基线与失败计时只在页面内存中保存，重载、登出、账号切换或移除侧边聊天后不复用旧基线。红色等待和蓝／橙未读保留原优先级；共享已读照常合并，离线状态仍阻止已读同步。可控时钟回归覆盖 29／30 秒、恢复后再次失败、主机／应用／主侧隔离、真实状态与展示分离及缓存重载；客户端 UI 回归还检查 Claude、DeepSeek 的状态说明及输入权限。
+
 超时回退不再等待会话锁：锁正被其他线程持有时，该条目返回未知状态，其他可读取条目仍返回当前状态。`test_activity_query.py` 用真实线程持有会话锁，验证整个查询能够及时返回。`test_session_maintenance.py` 验证维护异常按聊天隔离、整轮异常记录后仍继续下一轮，以及排队消息发送结果未知后不自动重发；日志只附带主机和聊天标识，不记录消息内容。
 
-后端定向回归为 `test_activity_query.py`、`test_desktop_metadata_activity.py`、`test_subagent_activity.py` 和 `test_uploads_activity.py`，覆盖单请求等待结果、查询去重、共同截止时间、超时/关闭/晚到结果、子代理初始快照、实时 owner 优先及只读边界。Node 回归覆盖阻塞请求完成、超时保留灰点、网络中断与视口变化后的合并刷新；浏览器驱动在三种尺寸实际阻塞合成响应，检查等待期间没有重复补查、同一响应更新页面，以及超时提示。上述时限不承诺真实客户端或网络必定在五秒内成功。
+后端定向回归为 `test_activity_query.py`、`test_desktop_metadata_activity.py`、`test_subagent_activity.py` 和 `test_uploads_activity.py`，覆盖单请求等待结果、查询去重、共同截止时间、超时/关闭/晚到结果、子代理初始快照、实时 owner 优先及只读边界。Node 回归覆盖阻塞请求完成、首次未知及缓冲到期后的灰点、网络中断与视口变化后的合并刷新；浏览器驱动在三种尺寸实际阻塞合成响应，检查等待期间没有重复补查、同一响应更新页面，以及超时缓冲和恢复提示。上述时限不承诺真实客户端或网络必定在五秒内成功。
 
 延迟回归用事件控制合成读取：实时 owner 已就绪时不等较慢的原生补读，已核验的原生结果不等连接清理，运行中的父会话不等子代理发现；等待期间收到的新运行状态也能唤醒查询，空闲父会话仍等待子代理确认。排序时间读取被阻塞时，状态仍在同一请求返回，并检查辅助读取的并发合并、后续时间更新、失败保留、关闭时等待资源释放与关闭后晚到结果丢弃。
 

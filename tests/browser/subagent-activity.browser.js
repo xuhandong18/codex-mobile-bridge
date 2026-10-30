@@ -9,6 +9,10 @@ function checkSubagentActivityBrowserPhase(phase,id){
     check(document.getElementById('status').textContent==='子代理运行中','An idle parent heading reflects its running descendants: '+phase);
     check(!button.querySelector('.session-indicator.completed'),'A finished parent turn cannot show completion before its agents finish: '+phase);
   }else if(phase==='unknown'){
+    check(indicator?.classList.contains('running'),'Missing child state briefly retains the last confirmed running indicator');
+    check(indicator?.title==='上次确认子代理运行中，正在重新确认','The buffered indicator identifies the last confirmed descendant activity');
+    check(document.getElementById('status').textContent==='上次确认子代理运行中，正在重新确认','The conversation heading explains the buffered descendant state');
+  }else if(phase==='unknown-expired'){
     check(indicator?.classList.contains('unknown'),'Missing child state displays unknown rather than completed');
     check(document.getElementById('status').textContent==='运行状态暂不可用','The conversation heading exposes the unavailable activity state');
   }else{

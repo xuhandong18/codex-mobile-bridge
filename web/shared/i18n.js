@@ -2644,6 +2644,8 @@ const en={
   "会话状态请求无效": "Invalid chat status request",
   "运行状态暂不可用": "Run status is temporarily unavailable",
   "读取运行状态超时": "Reading run status timed out",
+  "上次确认运行中，正在重新确认": "Last confirmed running; checking again",
+  "上次确认子代理运行中，正在重新确认": "Subagents last confirmed running; checking again",
   "已完成，未查看": "Completed, unread",
   "运行失败，未查看": "Run failed, unread",
   "已停止，未查看": "Stopped, unread",

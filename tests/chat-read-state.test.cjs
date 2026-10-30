@@ -37,7 +37,8 @@ test('侧边已读上传独立轮次，并清除另一设备的侧边蓝点而�
  assert.equal(phone.ownIndicator('local|chat/side/child'),null);
  assert.equal(phone.ownIndicator('local|chat')?.kind,'completed');
  phone.update([{id:'chat',host:'local',connected:false,status:'unknown',readCompletions:['main:completed']}]);
- assert.equal(phone.indicator('local|chat')?.kind,'unknown','断线时也应吸收已确认的跨设备已读');
+ assert.equal(phone.indicator('local|chat'),null,'短暂断线仍吸收共享已读，空闲聊天在缓冲期不冒灰点');
+ assert.equal(phone.rows['local|chat'].offline,true,'显示缓冲不改变真实离线状态');
 });
 
 test('侧边已读只由当前前台面板触发，并将服务端交互时间用于父聊天排序',()=>{

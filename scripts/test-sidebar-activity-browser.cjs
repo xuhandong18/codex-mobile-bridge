@@ -26,9 +26,11 @@ const server=http.createServer(async(req,res)=>{
       if(coldMode==='wait'&&hosts.local?.includes(rows[1].id)){
         await new Promise(resolve=>{coldWaiters.add(resolve);coldStarted?.();});
       }
-      value={sessions:Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>id===rows[1].id?
-        {id,host,connected:false,activityConnected:coldMode!=='timeout',status:coldMode==='timeout'?'unknown':'notLoaded',activityError:coldMode==='timeout'?'timeout':null,turnId:id+'-turn',turnStatus:'completed'}:
-        {id,host,connected:true,activityConnected:true,status:'active',turnId:id+'-turn',turnStatus:'inProgress'}))};
+      value={sessions:Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>
+        coldMode==='all-timeout'||id===rows[1].id&&coldMode==='timeout'?
+          {id,host,connected:false,activityConnected:false,status:'unknown',activityError:'timeout'}:id===rows[1].id?
+          {id,host,connected:false,activityConnected:true,status:'notLoaded',turnId:id+'-turn',turnStatus:'completed'}:
+          {id,host,connected:true,activityConnected:true,status:'active',turnId:id+'-turn',turnStatus:'inProgress'}))};
     }else if(p.endsWith('/reconnect')||p.endsWith('/send')||p.endsWith('/timeline')||p.endsWith('/updates'))writes.push(p);
     res.end(JSON.stringify(value));return;
   }
@@ -73,6 +75,7 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded',rows[1].id,{timeout:1500});
       check(await page.locator(coldSelector+' .session-indicator').count()===0&&await page.evaluate(()=>currentId===null),'未加载且已完成的聊天自动消除灰点，无需打开 '+width);
       check(Date.now()-readyAt<1500,'同一个请求拿到结果后立即消除灰点 '+width);
+      await page.evaluate(()=>{window.fixtureActivityNow=0;sessionActivity.now=()=>window.fixtureActivityNow;});
       await page.waitForTimeout(250);const newGrayRead=blockCold();
       const grayAt=observations.length;
       await page.evaluate(id=>{sessionActivity.rows['local|'+id].offline=true;renderActivity();},rows[1].id);
@@ -88,7 +91,8 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(id=>!!document.querySelector('#sessions .session[data-id="'+id+'"] .session-indicator.running'),rows.at(-1).id);
       check(observations.slice(scrollStart).some(hosts=>hosts.local?.includes(rows.at(-1).id)),'滚动后自动连接新出现的聊天 '+width);
       check(observations.slice(scrollStart).every(hosts=>!hosts.local?.includes(rows[0].id)),'移出屏幕的聊天停止轮询 '+width);
-      await page.locator('#list-mode').selectOption('project');
+      if(await page.locator('#list-mode').isVisible())await page.locator('#list-mode').selectOption('project');
+      else await page.locator('#list-mode-tab-project').click();
       await page.waitForSelector('#sessions .project-group');
       await page.locator('#sessions').evaluate(node=>{node.scrollTop=0;});
       await page.locator('#sessions .project-group').evaluate(node=>{node.open=false;});
@@ -104,10 +108,46 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.status==='notLoaded'&&!sessionActivity.rows['local|'+id]?.offline,rows[1].id,{timeout:1500});
       check(await page.locator(coldSelector+' .session-indicator').count()===0,'再次展开项目也在同一查询响应中确认状态 '+width);
       await page.waitForTimeout(250);coldMode='timeout';await page.evaluate(()=>refreshActivity());
-      check(await page.locator(coldSelector+' .session-indicator.unknown').getAttribute('title')==='读取运行状态超时','超时响应保持灰点并说明原因 '+width);
+      check(await page.locator(coldSelector+' .session-indicator').count()===0&&await page.evaluate(id=>sessionActivity.rows['local|'+id].offline,rows[1].id),'空闲聊天短暂超时不冒灰点，真实状态仍标记离线 '+width);
+      const briefFailureAt=observations.length;await page.waitForTimeout(450);
+      check(observations.length===briefFailureAt,'短暂失败的显示缓冲不增加补查请求 '+width);
+      coldMode='ready';await page.evaluate(()=>refreshActivity());
+      check(await page.locator(coldSelector+' .session-indicator').count()===0,'短暂失败恢复后继续安静显示 '+width);
+      coldMode='timeout';await page.evaluate(()=>refreshActivity());
+      await page.evaluate(async()=>{window.fixtureActivityNow=29000;await refreshActivity();});
+      check(await page.locator(coldSelector+' .session-indicator').count()===0,'反复失败到第二十九秒仍保持空闲显示 '+width);
+      await page.evaluate(async()=>{window.fixtureActivityNow=30000;await refreshActivity();});
+      check(await page.locator(coldSelector+' .session-indicator.unknown').getAttribute('title')==='读取运行状态超时','持续超时三十秒后显示灰点并说明原因 '+width);
       const timeoutAt=observations.length;await page.waitForTimeout(450);
       check(observations.slice(timeoutAt).every(hosts=>hosts.local?.length!==1),'超时后不再对未知聊天快速轮询 '+width);
       coldMode='ready';await page.evaluate(()=>refreshActivity());
+      check(await page.locator(coldSelector+' .session-indicator').count()===0,'持续失败恢复成功后立即消除灰点 '+width);
+      const runningSelector='#sessions .session[data-id="'+rows[0].id+'"]';
+      coldMode='all-timeout';await page.evaluate(()=>refreshActivity());
+      check(await page.locator(runningSelector+' .session-indicator.running').getAttribute('title')==='上次确认运行中，正在重新确认','原绿点短暂失败仍显示绿色，并说明是上次确认的状态 '+width);
+      check(await page.locator(runningSelector+' .session-indicator.running').getAttribute('aria-label')==='上次确认运行中，正在重新确认','缓冲中的绿点有准确的无障碍说明 '+width);
+      await page.evaluate(async()=>{window.fixtureActivityNow=59000;await refreshActivity();});
+      check(await page.locator(runningSelector+' .session-indicator.running').count()===1,'运行聊天第二十九秒再次失败不会延长或提前结束缓冲 '+width);
+      await page.evaluate(async()=>{window.fixtureActivityNow=60000;await refreshActivity();});
+      check(await page.locator(runningSelector+' .session-indicator.unknown').count()===1,'运行聊天持续失败三十秒后变灰 '+width);
+      coldMode='ready';await page.evaluate(()=>refreshActivity());
+      check(await page.locator(runningSelector+' .session-indicator.running').getAttribute('title')==='运行中','恢复成功后立即显示新确认的运行状态 '+width);
+      await page.addScriptTag({content:fs.readFileSync(path.join(root,'tests/browser/subagent-activity.browser.js'),'utf8')});
+      const subagentChecks=await page.evaluate(id=>{
+        const results=[],key='local|'+id,base={id,host:'local',connected:true,activityConnected:true,parentStatus:'idle',turnId:'agents',turnStatus:'completed',subagentsKnown:true};
+        sessionActivity.forget(key);currentId=id;currentHost='local';state={connected:true,status:'idle',requests:[]};
+        const phase=(name,row)=>{sessionActivity.update([row],null,{sync:false});renderActivity();results.push(...checkSubagentActivityBrowserPhase(name,id));};
+        try{
+          phase('two',{...base,status:'active',runningSubagents:2});
+          phase('one',{...base,status:'active',runningSubagents:1});
+          phase('unknown',{...base,status:'unknown',runningSubagents:0,subagentsKnown:false});
+          window.fixtureActivityNow+=30000;renderActivity();results.push(...checkSubagentActivityBrowserPhase('unknown-expired',id));
+          phase('done',{...base,status:'idle',runningSubagents:0});
+        }finally{currentId=null;state=null;renderActivity();}
+        return results;
+      },rows[0].id);
+      checks.push(...subagentChecks.map(label=>label+' '+width));
+      await page.evaluate(()=>refreshActivity());
       // Exercise the chat layout without opening or executing a fixture chat.
       await page.evaluate(()=>$('app').classList.add('chat-open'));await page.waitForTimeout(200);
       const beforeHide=observations.length;

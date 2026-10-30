@@ -8,7 +8,7 @@ function fixture(){
   const rows=[{id:'visible',host:'local'},{id:'below',host:'local'},{id:'collapsed',host:'ssh'},{id:'not-rendered',host:'ssh'}];
   const node=(row,top,rendered=true)=>({dataset:row,closest:()=>null,getClientRects:()=>rendered?[{}]:[],getBoundingClientRect:()=>({top,bottom:top+30,left:0,right:240})});
   nodes.push(node(rows[0],10),node(rows[1],400),node(rows[2],60,false));
-  const activity=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});let now=0;
+  let now=0;const activity=new SessionActivity({storage:{getItem:()=>null,setItem(){}},now:()=>now});
   let periodic;const context=vm.createContext({AbortController,setInterval:fn=>periodic=fn,activityBusy:false,activityRequests:new Set(),activityInFlight:new Set(),listRows:rows,document:{hidden:false},window:{innerWidth:1000,innerHeight:800},
     clientNavigation:{provider:'codex'},$:id=>id==='sessions'?root:{hidden:false},sessionActivity:activity,visibleChat:()=>null,
     setTimeout:(fn,delay=0)=>{const id={delay,at:now+delay};timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),
@@ -16,7 +16,7 @@ function fixture(){
   const start=source.indexOf('async function refreshActivity(');
   vm.runInContext(source.slice(start,source.indexOf("window.addEventListener('focus'",start)),context);
   const next=async()=>{const id=[...timers.keys()].sort((a,b)=>a.at-b.at)[0];assert.ok(id,'An automatic refresh must be scheduled');const fn=timers.get(id);timers.delete(id);now=id.at;await fn();return id.delay;};
-  return {context,calls,nodes,root,rows,timers,activity,next,periodic:()=>periodic(),refresh:()=>vm.runInContext('refreshActivity()',context),schedule:()=>vm.runInContext('scheduleActivityRefresh()',context)};
+  return {context,calls,nodes,root,rows,timers,activity,next,at:value=>now=value,periodic:()=>periodic(),refresh:()=>vm.runInContext('refreshActivity()',context),schedule:()=>vm.runInContext('scheduleActivityRefresh()',context)};
 }
 
 test('sidebar automatically polls only chats currently visible in its viewport',async()=>{
@@ -138,5 +138,9 @@ test('a failed HTTP read releases the lock without automatic resubmission',async
   const ui=fixture();ui.context.api=async(url,body)=>{ui.calls.push({url,body});throw Error('fixture unavailable');};
   ui.activity.update([{...ui.rows[0],connected:true,status:'active'}]);
   await ui.refresh();assert.equal(ui.context.activityBusy,false);assert.equal(ui.timers.size,0);assert.equal(ui.calls.length,1);
-  assert.equal(ui.activity.indicator('local|visible')?.kind,'unknown','A lost gateway connection cannot leave a stale live running badge');
+  assert.equal(ui.activity.rows['local|visible'].offline,true);
+  assert.equal(ui.activity.indicator('local|visible')?.label,'上次确认运行中，正在重新确认');
+  ui.at(29000);await ui.periodic();assert.equal(ui.activity.indicator('local|visible')?.stale,true);
+  ui.at(30000);await ui.periodic();assert.equal(ui.activity.indicator('local|visible')?.kind,'unknown');
+  assert.equal(ui.timers.size,0,'Grace and expiry cannot schedule rapid retries');
 });

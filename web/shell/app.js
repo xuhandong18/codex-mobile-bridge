@@ -272,9 +272,9 @@ function currentAccess(){return sessionAccess(state?.access||listRows.find(row=>
 function sourceLabel(access){return access?.source==='cli'?'CLI':access?.source==='ide'?'IDE':access?.source==='unknown'?t('其他来源'):'';}
 function chatStatusText(view,access){
   if(view.connected&&view.requests?.length)return t('等待回应');
-  if(view.connected&&view.status==='active')return t('运行中');
   const indicator=sessionActivity.indicator(chatKey());
   if(indicator?.kind==='running'||indicator?.kind==='unknown')return t(indicator.label);
+  if(view.connected&&view.status==='active')return t('运行中');
   return !view.connected?(view.loadingHistory?t('读取历史中'):access.source==='cli'?t('历史记录'):view.activating?t('正在加载桌面聊天…'):view.connecting?t('连接桌面中'):t('历史记录')):t('已连接');
 }
 function isPlaceholderChatTitle(title){return !title||['新聊天','未命名聊天','New chat','Untitled chat',t('新聊天'),t('未命名聊天')].includes(title);}

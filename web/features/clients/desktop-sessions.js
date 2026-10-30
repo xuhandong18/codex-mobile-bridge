@@ -139,7 +139,7 @@ class DesktopSessionsView {
     for(const [key,text] of this.accountDrafts.get(identity(next))||[])this.drafts.set(key,text);
     for(const key of this.detailCache.keys())if(jsonKey(key))this.forgetDetail(key);
     for(const key of this.pending.keys())if(key.startsWith(provider+':'))this.pending.delete(key);for(const key of this.sendChoices.keys())if(JSON.parse(key)[0]===provider)this.sendChoices.delete(key);
-    for(const key of Object.keys(this.activity.rows))if(key.startsWith(provider+'|'))delete this.activity.rows[key];this.activity.save();
+    for(const key of Object.keys(this.activity.rows))if(key.startsWith(provider+'|'))this.activity.forget(key);this.activity.save();
     this.workbench.reset(provider);this.workbench.fileQuotes.forget(key=>key.startsWith(provider+'|'));this.attachments.forget(jsonKey);
     if(provider!==this.provider)return;
     this.rows=[];this.listStamp='';this.lastMessages=[];this.requestStamp='';this.messageNodes.clear();this.messages.replaceChildren();this.requests.replaceChildren();this.showSelection(false);this.renderList();this.updateComposer();await this.refresh();
@@ -168,9 +168,23 @@ class DesktopSessionsView {
     const split=key.indexOf('|'),provider=key.slice(0,split),sessionId=key.slice(split+1);if(provider!=='deepseek')return;
     try{const value=await this.request(this.path('read-state',sessionId,provider),{id:this.requestId(),sessionId,turnId:row.turnId,turnStatus:row.turnStatus});if(['unknown','unsupported'].includes(value.status))this.notify(BridgeI18n.t(value.message||'桌面已读状态尚未同步'));}catch(error){this.notify(BridgeI18n.t(error.message));}
   }
-  updateActivity(rows,connected=true,sync=false){this.activity.update(rows.map(row=>({id:row.id,host:this.provider,connected,status:row.status,runningSubagents:row.childActive||0,subagentsKnown:!row.childUnknown,turnId:row.turnId,turnStatus:row.turnStatus,waitingForUser:row.waitingForUser,waitingObservedAt:row.waitingObservedAt,waitingSubagents:row.waitingSubagents,waitingSubagentsObservedAt:row.waitingSubagentsObservedAt,requests:row.requests,sideChats:row.sideChats,sideChatsObservedAt:row.sideChatsObservedAt})),this.visibleActivity(),{sync});}
+  updateActivity(rows,connected=true,sync=false){
+    this.activity.update(rows.map(row=>({id:row.id,host:this.provider,connected,status:row.status,runningSubagents:row.childActive||0,subagentsKnown:connected&&!row.childUnknown,turnId:row.turnId,turnStatus:row.turnStatus,waitingForUser:row.waitingForUser,waitingObservedAt:row.waitingObservedAt,waitingSubagents:connected?row.waitingSubagents:undefined,waitingSubagentsObservedAt:row.waitingSubagentsObservedAt,requests:row.requests,
+      // A failed list read reuses cached rows; its children are not new live
+      // observations and must not renew the display grace or clear waiting.
+      sideChats:connected?row.sideChats:row.sideChats?.map(side=>({...side,connected:false,activityConnected:false,status:'unknown',subagentsKnown:false,waitingSubagents:undefined})),sideChatsObservedAt:row.sideChatsObservedAt})),this.visibleActivity(),{sync});
+  }
   renderIndicators(){
     for(const button of this.rowsRoot.querySelectorAll('.session')){button.querySelector('.session-indicator')?.remove();const indicator=this.activity.indicator(this.provider+'|'+button.dataset.id);if(indicator){const dot=this.node('span','session-indicator '+indicator.kind);dot.title=BridgeI18n.t(indicator.label);dot.setAttribute('aria-label',BridgeI18n.t(indicator.label));button.querySelector('strong')?.prepend(dot);}}
+    if(this.sid&&this.state){
+      const indicator=this.activity.indicator(this.provider+'|'+this.sid);
+      if(indicator?.stale||indicator?.kind==='unknown'){
+        this.activityStatus=BridgeI18n.t(indicator.label);this.status.textContent=this.activityStatus;
+      }else if(this.activityStatus===this.status.textContent){
+        this.status.textContent=BridgeI18n.t(!this.canMutate()?(this.state.backend==='cli'?'历史记录':'尚未连接'):this.state.requests?.length?'等待回应':this.state.status==='active'?'运行中':'已连接');
+        this.activityStatus=null;
+      }
+    }
   }
   renderList(){
     if(this.provider==='deepseek'&&this.listMode.value==='native')return this.renderHarnessList();
