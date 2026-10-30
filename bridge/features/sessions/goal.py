@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 GOAL_STATUSES = {"active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"}
-GOAL_ACTIONS = {"create", "pause", "resume", "cancel", "edit"}
+GOAL_ACTIONS = {"create", "pause", "resume", "cancel", "edit", "reopen"}
 _STATUS_ALIASES = {"usage_limited": "usageLimited", "budget_limited": "budgetLimited"}
 
 
@@ -131,9 +131,17 @@ def plan_goal_command(action, objective, current, *, status=None):
             return "invalid", "目标已发生变化，请刷新后重试", None
         return "execute", "", "cancelled"
     if action == "edit":
+        if current_status == "complete":
+            return "execute", "", "paused"
         if current is None or current_status not in ("active", "paused"):
             return "invalid", "目标当前状态不支持修改", None
         return ("duplicate" if same_objective else "execute"), "", current_status
+    if action == "reopen":
+        if current is None:
+            return "execute", "", "paused"
+        if same_objective and current_status == "paused":
+            return "duplicate", "", "paused"
+        return "invalid", "目标已发生变化，请刷新后重试", None
     expected = "paused" if action == "pause" else "active"
     predecessor = "active" if action == "pause" else "paused"
     if current is None:
@@ -198,7 +206,8 @@ def goal_state_confirms_command(command, current):
     before = command.get('before')
     if before and command.get('action') in ('pause', 'resume') and goal_identity(before) != goal_identity(current):
         return False
-    if before and command.get('action') == 'edit' and before.get('status') != (current or {}).get('status'):
+    edited_status = 'paused' if (before or {}).get('status') == 'complete' else (before or {}).get('status')
+    if before and command.get('action') == 'edit' and edited_status != (current or {}).get('status'):
         return False
     decision, _, _ = plan_goal_command(
         command.get("action"), command.get("objective"), current, status=command.get("status"))

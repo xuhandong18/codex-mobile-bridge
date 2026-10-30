@@ -340,7 +340,7 @@ class Bridge:
                 action = command.get('action')
                 status = {'create': 'active', 'pause': 'paused', 'resume': 'active',
                           'cancel': 'cancelled'}.get(action)
-                if action == 'edit':
+                if action in ('edit', 'reopen'):
                     status = native['status']
                 stored['state'] = 'confirmed'; stored['sent'] = True
                 stored['confirmedAt'] = time.time()
@@ -355,20 +355,20 @@ class Bridge:
                             old['goalCancelled'] = True
                 self._save_goal_commands()
 
-    def _goal_command(self, session, thread_id, request_id, action, *, objective=None, status=None, ui_locale=None, expected=None):
+    def _goal_command(self, session, thread_id, request_id, action, *, objective=None, status=None, ui_locale=None, expected=None, completed_goal=None):
         uuid.UUID(request_id)
-        if action not in ('create', 'pause', 'resume', 'cancel', 'edit'):
+        if action not in ('create', 'pause', 'resume', 'cancel', 'edit', 'reopen'):
             raise ValueError('目标操作无效')
         key = thread_id + ':' + request_id
         if expected is not None and not isinstance(expected, dict):
             raise ValueError('目标状态无效')
         objective = (objective or '').strip()
-        if action in ('create', 'pause', 'resume', 'edit') and not objective:
+        if action in ('create', 'pause', 'resume', 'edit', 'reopen') and not objective:
             raise ValueError('当前聊天没有目标')
         if len(objective) > 4000:
             raise ValueError('目标内容不能超过 4000 字')
         fingerprint = goal_command_fingerprint(action, objective, status)
-        expected_status = {'create': 'active', 'resume': 'active', 'pause': 'paused'}.get(action)
+        expected_status = {'create': 'active', 'resume': 'active', 'pause': 'paused', 'reopen': 'paused'}.get(action)
         # Goal commands mutate one native object and are observed asynchronously,
         # so serialize every bridge-side transition before checking the ledger.
         with self.goal_lock:
@@ -376,6 +376,8 @@ class Bridge:
             native = self._native_goal_state(thread_id, strict=True)
             if action == 'edit':
                 expected_status = (native or {}).get('status')
+                if expected_status == 'complete':
+                    expected_status = 'paused'
             with self.submit_lock:
                 command = self.goal_commands.get(key)
                 if command:
@@ -393,11 +395,17 @@ class Bridge:
                     # automatically could create or clear the wrong goal.
                     return {'status': 'unknown', 'confirmed': False, 'duplicate': True,
                             'error': command.get('error') or '目标操作结果尚未确认'}
-                if expected is not None and (goal_identity(expected) != goal_identity(native) or expected.get('status') != (native or {}).get('status')):
+                archived_absent = (action in ('reopen', 'cancel') and native is None and
+                                   (expected or {}).get('nativeGoalAbsent') is True and
+                                   expected.get('status') == 'complete')
+                if expected is not None and not archived_absent and (goal_identity(expected) != goal_identity(native) or expected.get('status') != (native or {}).get('status')):
                     raise ValueError('目标已发生变化，请刷新后重试')
                 command = {'before': native, 'action': action, 'workMode': 'goal', 'objective': objective, 'status': status,
                            'uiLocale': normalize_ui_locale(ui_locale), 'state': 'pending', 'sent': False,
                            'at': time.time(), 'fingerprint': fingerprint}
+                if action == 'reopen':
+                    command['tokenBudget'] = (completed_goal or {}).get('tokenBudget')
+                    command['sourceGoal'] = goal_identity(completed_goal)
                 self.goal_commands[key] = command
                 self._save_goal_commands()
 
@@ -433,7 +441,8 @@ class Bridge:
                 raise ValueError(decision_error)
 
             rpc_methods = {'create': ('set_goal', objective), 'pause': ('set_goal_status', 'paused'),
-                           'resume': ('set_goal_status', 'active'), 'cancel': ('clear_goal', None), 'edit': ('edit_goal', objective)}
+                           'resume': ('set_goal_status', 'active'), 'cancel': ('clear_goal', None),
+                           'edit': ('edit_goal', objective), 'reopen': ('edit_goal', objective)}
             rpc_method, rpc_arg = rpc_methods[action]
             with self.submit_lock:
                 command['sent'] = True; command['state'] = 'sent'; command['attemptedAt'] = time.time()
@@ -441,9 +450,9 @@ class Bridge:
             with session.condition:
                 session.changed()
             try:
-                if action == 'edit':
+                if action in ('edit', 'reopen'):
                     result = self._goal_call('edit_goal', thread_id, objective,
-                                            native.get('tokenBudget'), native['status'])
+                                            (native or {}).get('tokenBudget', command.get('tokenBudget')), expected_status)
                 elif rpc_arg is None:
                     result = self._goal_call(rpc_method, thread_id)
                 else:
@@ -2125,6 +2134,9 @@ class Bridge:
         latest_goal_command = max(goal_commands, key=lambda pair: pair[1].get('at', 0), default=None)
         if latest_goal_command and latest_goal_command[1].get('action') == 'cancel':
             return
+        if (goal and latest_goal_command and latest_goal_command[1].get('state') == 'confirmed' and
+                goal_state_confirms_command(latest_goal_command[1], goal)):
+            return
         # The direct GoalRPC connection can leave the desktop owner's in-memory
         # thread goal behind after the owner deletes or completes it. Once
         # native storage is readable and proves absence, do not turn that stale
@@ -2132,7 +2144,8 @@ class Bridge:
         if (latest_goal_command and latest_goal_command[1].get('action') == 'create' and
                 (latest_goal_command[1].get('response') or {}).get('confirmed') and
                 time.time() - latest_goal_command[1].get('confirmedAt', latest_goal_command[1].get('at', 0)) > 1 and
-                self.host == 'local' and native_goal_absent(self.codex_home, session.id)):
+                self.host == 'local' and native_goal_absent(self.codex_home, session.id) and
+                (view.get('goal') or {}).get('status') != 'complete'):
             view['goal'] = None
             return
         goals = [(k, v) for k, v in merged.items() if v.get("workMode") == "goal"]
@@ -2145,6 +2158,9 @@ class Bridge:
         # Once the authoritative native goal is cleared, hide a stale desktop
         # snapshot instead of offering a second cancel.
         if entry.get("goalCancelled"):
+            return
+
+        if goal and goal.get('status') == 'complete':
             return
 
         goal_statuses = {"active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"}
@@ -2346,14 +2362,30 @@ class Bridge:
                 if name not in existing:
                     attachments.append({'type': 'file', 'name': name})
 
+    def _completed_goal_snapshot(self, session):
+        with session.condition:
+            state = session.state or {}
+            goal = normalize_goal(state.get('threadGoal')) or normalize_goal(state.get('completedThreadGoal'))
+        if goal and goal['status'] == 'complete' and not self._cancelled_goal_objective(session.id, goal['objective']):
+            with self.submit_lock:
+                if any(key.startswith(session.id + ':') and command.get('action') == 'reopen' and
+                       command.get('state') == 'confirmed' and command.get('sourceGoal') == goal_identity(goal)
+                       for key, command in self.goal_commands.items()):
+                    return None
+            return goal
+        return None
+
     def _overlay_native_goal(self, session, thread_id, view):
+        view['canEditCompletedGoal'] = True
+        view['goalArchived'] = False
         if self.host != "local" or session.runtime == "cli":
             return view
         native_goal = normalize_goal(read_native_goal(self.codex_home, thread_id))
         if native_goal:
             view["goal"] = native_goal
         elif native_goal_absent(self.codex_home, thread_id):
-            view["goal"] = None
+            view["goal"] = self._completed_goal_snapshot(session)
+            view['goalArchived'] = view['goal'] is not None
         elif view.get("goal") and self._cancelled_goal_objective(thread_id, view["goal"].get("objective", "")):
             view["goal"] = None
         return view
@@ -2364,6 +2396,7 @@ class Bridge:
 
     def _navigation_page(self, session, thread_id, **options):
         from bridge.features.sessions.timeline import PAGE_BYTES, encoded
+        goal_available = self._refresh_session_goal(session)
         result = self.message_navigation.window(thread_id, **options, excluded=self._goal_activation_ids(thread_id))
         view = normalize_state(result['state'], False)
         projection = Timeline()
@@ -2405,8 +2438,12 @@ class Bridge:
             session.navigation_windows[projection.epoch] = projection
             while len(session.navigation_windows) > 2:
                 session.navigation_windows.popitem(last=False)
+        with session.condition:
+            goal_view = self._overlay_native_goal(session, thread_id, session.view())
         projection.meta.update(host=self.host,
-            hostLabel='此电脑' if self.host == 'local' else self.hosts.hosts().get(self.host, {}).get('displayName', self.host))
+            hostLabel='此电脑' if self.host == 'local' else self.hosts.hosts().get(self.host, {}).get('displayName', self.host),
+            goal=goal_view.get('goal'), goalArchived=goal_view.get('goalArchived', False),
+            canEditCompletedGoal=True, goalRuntimeAvailable=goal_available)
         self._submission_meta(session, projection.meta)
         return {'epoch': projection.epoch, 'sequence': projection.sequence, 'rows': selected, 'meta': projection.meta,
                 **cursors, 'hasMore': bool(cursors['before']), 'hasNewer': bool(cursors['after']), 'files': self._navigation_files(projection),
@@ -2456,7 +2493,10 @@ class Bridge:
                 result = projection.changes(**options) if mode == 'changes' else projection.page(**options)
                 result['meta'] = dict(result['meta'], host=self.host,
                                       hostLabel='此电脑' if self.host == 'local' else self.hosts.hosts().get(self.host, {}).get('displayName', self.host),
-                                      goalRuntimeAvailable=goal_available)
+                                      goalRuntimeAvailable=goal_available,
+                                      goal=authoritative_view.get('goal'),
+                                      goalArchived=authoritative_view.get('goalArchived', False),
+                                      canEditCompletedGoal=True)
                 if linux_permissions.enabled(self.host):
                     result['meta']['linuxPermissionChecks'] = True
                     result['meta']['permissionMode'] = linux_permissions.current_mode(session.state)
@@ -2986,12 +3026,24 @@ class Bridge:
         with session.action_lock, self.goal_lock:
             prior = self.goal_commands.get(thread_id + ':' + request_id)
             native = self._native_goal_state(thread_id, strict=True)
+            completed_goal = None
+            if isinstance(expected, dict) and expected.get('nativeGoalAbsent') is True:
+                if action == 'edit':
+                    action = 'reopen'
+                if not prior:
+                    completed = self._completed_goal_snapshot(session)
+                    if (native is not None or not completed or expected.get('status') != 'complete' or
+                            goal_identity(expected) != goal_identity(completed)):
+                        raise ValueError('目标已发生变化，请刷新后重试')
+                    completed_goal = completed
+                    if objective is None:
+                        objective = completed['objective']
             if objective is None:
                 objective = (prior or {}).get('objective', (native or {}).get('objective', ''))
             response = self._goal_command(session, thread_id, request_id, action,
-                objective=objective, status=status, ui_locale=ui_locale, expected=expected)
+                objective=objective, status=status, ui_locale=ui_locale, expected=expected, completed_goal=completed_goal)
             if response.get('confirmed') and (action in ('pause', 'cancel') or
-                                             action == 'edit' and response.get('status') == 'paused'):
+                                             action in ('edit', 'reopen') and response.get('status') == 'paused'):
                 self._cancel_goal_activation_queues(thread_id)
             if response.get('confirmed') and action == 'edit':
                 goal = normalize_goal_result(response.get('result'))

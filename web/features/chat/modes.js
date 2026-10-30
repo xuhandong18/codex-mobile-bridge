@@ -19,7 +19,7 @@ class WorkModes {
     if(key===this.key){this.selection='default';this.cancelBusy=false;this.statusBusy=null;this.actionError='';this.render();}
   }
   expectedGoal(goal=this.view?.goal) {
-    return goal?Object.fromEntries(['objective','status','createdAt','createdAtMs','goalId','revision'].filter(k=>goal[k]!=null).map(k=>[k,goal[k]])):{};
+    return goal?{...Object.fromEntries(['objective','status','createdAt','createdAtMs','goalId','revision'].filter(k=>goal[k]!=null).map(k=>[k,goal[k]])),...(this.view?.goalArchived?{nativeGoalAbsent:true}:{})}:{};
   }
   async action(kind,fields,run) {
     if(this.busy())return;
@@ -79,7 +79,7 @@ class WorkModes {
     }
     if(this.actionError)this.goalRoot.append(node('p',this.actionError,'error'));
     if(goal&&goalSupported){
-      const canEdit=goal.status==='paused'||goal.status==='active'&&view.canEditActiveGoal!==false;
+      const canEdit=goal.status==='paused'||goal.status==='active'&&view.canEditActiveGoal!==false||goal.status==='complete'&&view.canEditCompletedGoal===true;
       const actions=node('div','','goal-actions');
       this.goalRoot.append(actions);
       if(['active','blocked','usageLimited','budgetLimited'].includes(goal.status)&&goal.activation!=='disarmed'){
@@ -94,7 +94,7 @@ class WorkModes {
       if(goal.status==='active'&&!canEdit)this.goalRoot.append(node('p',t('修改目标前请先暂停。'),'muted'));
       if(this.editing&&canEdit){
         const input=node('textarea','', 'goal-editor');input.value=this.editText;input.maxLength=4000;input.rows=3;input.disabled=this.busy();input.setAttribute('aria-label',t('目标内容'));input.oninput=()=>{this.editText=input.value;};
-        this.goalRoot.append(input,node('p',t(goal.status==='paused'?'修改目标内容会重置用量统计，保存后保持暂停。':'修改目标内容会重置用量统计，保存后继续执行。'),'muted'));
+        this.goalRoot.append(input,node('p',t(goal.status==='active'?'修改目标内容会重置用量统计，保存后继续执行。':'修改目标内容会重置用量统计，保存后保持暂停。'),'muted'));
         this.goalRoot.append(button(t('保存目标'),'goal-save primary',()=>this.saveEdit(),this.busy()),button(t('放弃修改'),'secondary',()=>{this.editing=false;this.render();},this.busy()));
         if(editSelection&&!this.busy()){input.focus({preventScroll:true});input.setSelectionRange(...editSelection);}
       }

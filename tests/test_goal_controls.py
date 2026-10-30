@@ -164,6 +164,110 @@ class GoalControlTests(unittest.TestCase):
         self.assertEqual(stub.edit_calls,[(THREAD,'Revised',12345,'active')])
         self.assertEqual(len(self.calls()),1)
 
+    def test_completed_goal_edit_saves_paused_and_can_resume_once(self):
+        self.create();stub=self.bridge.goal
+        stub.goals[THREAD].update(status='complete',tokenBudget=12345)
+        expected=copy.deepcopy(stub.goals[THREAD]);request_id=str(uuid.uuid4())
+        result=self.bridge.edit_goal(THREAD,'Revised',request_id,expected=expected)
+        self.bridge.edit_goal(THREAD,'Revised',request_id,expected=expected)
+        self.assertTrue(result['confirmed']);self.assertEqual(result['status'],'paused')
+        self.assertEqual(stub.edit_calls,[(THREAD,'Revised',12345,'paused')])
+        self.assertEqual(len(self.calls()),1)
+        self.assertIsNone(self.bridge.view(THREAD)['goalSubmission'])
+        self.bridge.set_goal_status(THREAD,'active',str(uuid.uuid4()))
+        self.assertEqual(len(self.calls()),2)
+        self.assertIsNone(self.bridge.view(THREAD)['goalSubmission'])
+
+    def test_completed_owner_goal_survives_native_absence_and_can_be_reopened(self):
+        import sqlite3
+        self.create();stub=self.bridge.goal
+        completed={**stub.goals[THREAD],'status':'complete','tokenBudget':12345}
+        stub.goals[THREAD]=None
+        session=self.live(threadGoal=None,completedThreadGoal=completed)
+        for command in self.bridge.goal_commands.values():
+            command['confirmedAt']=0
+        db=sqlite3.connect(self.root/'goals_1.sqlite')
+        db.execute('create table thread_goals(thread_id text primary key)');db.commit();db.close()
+        view=self.bridge.view(THREAD)
+        self.assertEqual(view['goal'],completed)
+        self.assertTrue(view['goalArchived'])
+        meta=self.bridge.timeline_read(THREAD)['meta']
+        self.assertEqual(meta['goal'],completed);self.assertTrue(meta['goalArchived'])
+        self.assertTrue(meta['canEditCompletedGoal'])
+        expected={**completed,'nativeGoalAbsent':True};request_id=str(uuid.uuid4())
+        result=self.bridge.edit_goal(THREAD,'Revised',request_id,expected=expected)
+        self.bridge.edit_goal(THREAD,'Revised',request_id,expected=expected)
+        self.assertEqual(result['status'],'paused')
+        self.assertEqual(stub.edit_calls,[(THREAD,'Revised',12345,'paused')])
+        self.assertEqual(len(self.calls()),1)
+
+    def test_archived_goal_lost_save_response_is_reconciled_without_replaying(self):
+        self.create();stub=self.bridge.goal
+        completed={**stub.goals[THREAD],'status':'complete','tokenBudget':12345}
+        stub.goals[THREAD]=None;self.live(threadGoal=None,completedThreadGoal=completed)
+        write=stub.edit_goal
+        def edit(*args):
+            write(*args)
+            raise GoalUnavailable('response lost after reopen')
+        expected={**completed,'nativeGoalAbsent':True};request_id=str(uuid.uuid4())
+        with patch.object(stub,'edit_goal',side_effect=edit):
+            with self.assertRaises(IPCError):
+                self.bridge.edit_goal(THREAD,'Revised',request_id,expected=expected)
+            response=self.bridge.edit_goal(THREAD,'Revised',request_id,expected=expected)
+        self.assertTrue(response['confirmed']);self.assertEqual(response['status'],'paused')
+        self.assertEqual(len(stub.edit_calls),1);self.assertEqual(len(self.calls()),1)
+
+    def test_archived_goal_clear_hides_snapshot_without_a_native_write(self):
+        self.create();stub=self.bridge.goal
+        completed={**stub.goals[THREAD],'status':'complete'}
+        stub.goals[THREAD]=None;session=self.live(threadGoal=None,completedThreadGoal=completed)
+        result=self.bridge.cancel_goal(THREAD,str(uuid.uuid4()),expected={**completed,'nativeGoalAbsent':True})
+        self.assertTrue(result['confirmed']);self.assertEqual(stub.clear_calls,[])
+        with patch('bridge.app.service.native_goal_absent',return_value=True):
+            self.assertIsNone(self.bridge.view(THREAD)['goal'])
+
+    def test_closing_reopened_goal_does_not_resurrect_its_completed_source(self):
+        self.create();stub=self.bridge.goal
+        completed={**stub.goals[THREAD],'status':'complete'}
+        stub.goals[THREAD]=None;self.live(threadGoal=None,completedThreadGoal=completed)
+        self.bridge.edit_goal(THREAD,'Revised',str(uuid.uuid4()),
+                              expected={**completed,'nativeGoalAbsent':True})
+        self.bridge.cancel_goal(THREAD,str(uuid.uuid4()))
+        with patch('bridge.app.service.read_native_goal',return_value=None), \
+                patch('bridge.app.service.native_goal_absent',return_value=True):
+            self.assertIsNone(self.bridge.view(THREAD)['goal'])
+
+    def test_completed_goal_timeline_reflects_native_changes_without_owner_sequence_change(self):
+        self.create();session=self.bridge.live[THREAD]
+        native={'objective':'Work','status':'complete'}
+        with patch('bridge.app.service.read_native_goal',side_effect=lambda *_:copy.deepcopy(native)):
+            first=self.bridge.timeline_read(THREAD)
+            sequence=session.sequence;native['status']='paused'
+            second=self.bridge.timeline_read(THREAD)
+        self.assertEqual(session.sequence,sequence)
+        self.assertEqual(first['meta']['goal']['status'],'complete')
+        self.assertEqual(second['meta']['goal']['status'],'paused')
+
+    def test_archived_goal_cannot_replace_a_new_native_goal(self):
+        self.create();stub=self.bridge.goal
+        completed={**stub.goals[THREAD],'status':'complete'}
+        self.live(completedThreadGoal=completed)
+        stub.goals[THREAD]={'objective':'New desktop goal','status':'active'}
+        with self.assertRaisesRegex(ValueError,'发生变化'):
+            self.bridge.edit_goal(THREAD,'Revised',str(uuid.uuid4()),
+                                  expected={**completed,'nativeGoalAbsent':True})
+        self.assertEqual(stub.edit_calls,[])
+
+    def test_archived_goal_cannot_reopen_when_native_state_is_unreadable(self):
+        self.create();stub=self.bridge.goal
+        completed={**stub.goals[THREAD],'status':'complete'}
+        self.live(threadGoal=None,completedThreadGoal=completed)
+        with patch.object(self.bridge,'_native_goal_state',side_effect=GoalUnavailable('offline')):
+            with self.assertRaises(GoalUnavailable):
+                self.bridge.edit_goal(THREAD,'Revised',str(uuid.uuid4()),
+                                      expected={**completed,'nativeGoalAbsent':True})
+        self.assertEqual(stub.edit_calls,[])
+
     def test_active_edit_updates_a_queued_start_and_retry_keeps_only_one_start(self):
         self.fixture.state['threadRuntimeStatus']={'type':'active'}
         created=self.create()

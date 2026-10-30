@@ -13,7 +13,7 @@ function fixture(saved=new Map()){
   const text=()=>all(goalRoot).map(n=>n.textContent).join('\n');
   return {panel,select,goalOption,hint,goalRoot,goalToggle,text,saved,statusCalls,find:predicate=>all(goalRoot).find(predicate),language:()=>vm.runInContext("BridgeI18n.setLanguage('en')",ctx)};
 }
-const idle={status:'idle',collaborationMode:'default',connected:true,host:'local'};
+const idle={status:'idle',collaborationMode:'default',connected:true,host:'local',canEditCompletedGoal:true};
 test('mode follows desktop until explicitly chosen and is isolated by host/thread',()=>{
   const ui=fixture();ui.panel.open('local|a');ui.panel.render({...idle,collaborationMode:'plan'},'send',false);
   assert.equal(ui.select.value,'plan');ui.select.value='goal';ui.select.onchange();
@@ -91,6 +91,18 @@ test('limited goals can pause and complete goals can be cleared',()=>{
  assert.ok(ui.find(n=>(n.className||'').includes('goal-status')));
  ui.panel.render({status:'idle',connected:true,host:'local',goal:{objective:'Work',status:'complete'}},'send',false);
  assert.match(ui.text(),/目标已完成/);assert.ok(ui.find(n=>(n.className||'').includes('goal-cancel')));
+});
+
+test('完成的目标保留入口并允许修改后继续',()=>{
+ const ui=fixture(),goal={objective:'原目标',status:'active',createdAt:100};
+ ui.panel.open('local|a');ui.panel.render({...idle,goal},'send',false);
+ ui.panel.render({...idle,goal:{...goal,status:'complete'}});
+ assert.equal(ui.goalRoot.hidden,false);assert.equal(ui.goalToggle.hidden,false);
+ assert.match(ui.text(),/目标已完成/);
+ const edit=ui.find(n=>(n.className||'').includes('goal-edit'));
+ assert.ok(edit,'目标完成后仍可修改');edit.onclick();
+ assert.equal(ui.find(n=>n.className==='goal-editor').value,'原目标');
+ assert.match(ui.text(),/保存后保持暂停/);
 });
 
 test('Goal mode is disabled when the desktop runtime is unavailable',()=>{

@@ -128,7 +128,9 @@ class GoalStateTests(unittest.TestCase):
         for current in (active, paused):
             self.assertEqual(plan_goal_command('edit', 'Revised', current), ('execute', '', current['status']))
             self.assertEqual(plan_goal_command('edit', 'Work', current), ('duplicate', '', current['status']))
-        for current in (None, complete, {'objective': 'Work', 'status': 'blocked'}):
+        self.assertEqual(plan_goal_command('edit', 'Revised', complete), ('execute', '', 'paused'))
+        self.assertEqual(plan_goal_command('edit', 'Work', complete), ('execute', '', 'paused'))
+        for current in (None, {'objective': 'Work', 'status': 'blocked'}):
             self.assertEqual(plan_goal_command('edit', 'Revised', current)[0], 'invalid')
 
     def test_owner_transport_is_authoritative_and_exposed_to_projection(self):

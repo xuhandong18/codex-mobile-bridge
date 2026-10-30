@@ -228,6 +228,21 @@ class NavigationBridgeTests(unittest.TestCase):
             self.assertTrue(next_page['navigationWindow'])
         self.assertTrue(all(call['method'] in ('initialize','thread-owner-discovery') for call in self.fixture.requests))
 
+    def test_navigation_keeps_completed_goal_controls_from_live_owner(self):
+        session=self.bridge.session(self.support.THREAD)
+        completed={'objective':'Completed objective','status':'complete','createdAt':100}
+        with session.condition:
+            session.state.update(threadGoal=None,completedThreadGoal=completed)
+            session.changed()
+        catalog=self.bridge.message_index(self.support.THREAD)
+        with patch('bridge.app.service.read_native_goal',return_value=None), \
+                patch('bridge.app.service.native_goal_absent',return_value=True):
+            page=self.bridge.timeline_read(self.support.THREAD,around=catalog['items'][0]['id'])
+        self.assertEqual(page['meta']['goal'],completed)
+        self.assertTrue(page['meta']['goalArchived'])
+        self.assertTrue(page['meta']['canEditCompletedGoal'])
+
+
     def test_navigation_embedded_image_has_a_scoped_preview(self):
         import base64
         data=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9foAAAAASUVORK5CYII=')

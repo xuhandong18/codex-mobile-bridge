@@ -6,11 +6,11 @@ const root=path.resolve(__dirname,'..'),web=path.join(root,'web'),assets=require
 const id='11111111-1111-4111-8111-111111111111',checks=[],errors=[],writes=[];
 const access={source:'desktop',runtime:'desktop',canSend:true,canReconnect:true,canUseGoal:true};
 const row={id,host:'local',title:'目标编辑测试',cwd:'/fixture',projectKey:'local|independent',projectName:'独立聊天',recency:1,updatedAt:1,access};
-let goal,failEdit=false;
+let goal,failEdit=false,goalArchived=false;
 const check=(ok,label)=>{assert.ok(ok,label);checks.push(label);};
 const readBody=async req=>{let text='';for await(const part of req)text+=part;return JSON.parse(text||'{}');};
 function page(){return {epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{...row,
-  connected:true,loadingHistory:false,historyComplete:true,status:'active',goal,goalRuntimeAvailable:true,
+  connected:true,loadingHistory:false,historyComplete:true,status:'active',goal,goalArchived,goalRuntimeAvailable:true,canEditCompletedGoal:true,
   requests:[],submissions:[],collaborationMode:'default',model:'fixture-model'}};}
 const server=http.createServer(async(req,res)=>{
   const p=new URL(req.url,'http://127.0.0.1').pathname;
@@ -26,12 +26,16 @@ const server=http.createServer(async(req,res)=>{
     else if(p.endsWith('/goal/edit')){
       const body=await readBody(req);writes.push({p,body});
       if(failEdit){failEdit=false;res.statusCode=409;return res.end(JSON.stringify({error:'保存失败，请重试'}));}
-      if(body.expected.objective!==goal.objective||body.expected.status!==goal.status){
+      if(body.expected.objective!==goal.objective||body.expected.status!==goal.status||!!body.expected.nativeGoalAbsent!==goalArchived){
         res.statusCode=409;return res.end(JSON.stringify({error:'目标已发生变化，请刷新后重试'}));
       }
       await new Promise(resolve=>setTimeout(resolve,120));
-      goal={...goal,objective:body.objective,tokensUsed:0};value={confirmed:true,status:goal.status,result:goal};
-    }else if(p.endsWith('/send')||p.endsWith('/stop')||p.endsWith('/goal/status')){
+      goal={...goal,objective:body.objective,status:goal.status==='complete'?'paused':goal.status,tokensUsed:0};goalArchived=false;value={confirmed:true,status:goal.status,result:goal};
+    }else if(p.endsWith('/goal/status')){
+      const body=await readBody(req);writes.push({p,body});
+      assert.equal(body.status,'active');assert.equal(goal.status,'paused');
+      goal={...goal,status:'active'};value={confirmed:true,status:'active',result:goal};
+    }else if(p.endsWith('/send')||p.endsWith('/stop')){
       writes.push({p,body:await readBody(req)});res.statusCode=500;value={error:'编辑目标不应触发此操作'};
     }else if(p.endsWith('/reconnect')){req.resume();value={ok:true,connected:true};}
     else if(p.endsWith('/catalog'))value={kind:'models',models:[],currentModel:'fixture-model'};
@@ -85,6 +89,31 @@ const server=http.createServer(async(req,res)=>{
       await tab.locator('.goal-edit').click();await tab.locator('.goal-editor').fill('暂停后修改');await tab.locator('.goal-save').click();
       await tab.waitForFunction(()=>!workModes.busy()&&!workModes.editing&&state.goal.objective==='暂停后修改');
       check(goal.status==='paused'&&writes.at(-1).body.expected.status==='paused','暂停目标保存后保持暂停 '+label);
+      for(const archived of [false,true]){
+        const completedLabel=label+(archived?' 完成记录':' 原生完成目标');
+        goal={...goal,objective:'已完成的目标',status:'complete'};goalArchived=archived;
+        await tab.evaluate(({goal,goalArchived})=>renderState({...state,goal,goalArchived}),{goal,goalArchived});
+        check(await tab.locator('.goal-edit').isVisible(),'完成后保留修改入口 '+completedLabel);
+        await tab.locator('.goal-close').click();
+        check(await tab.locator('#goal-toggle').isVisible(),'隐藏完成目标后仍有打开入口 '+completedLabel);
+        await tab.reload();
+        await tab.waitForFunction(()=>state?.goal?.status==='complete');
+        await tab.locator('#goal-toggle').click();
+        check(await tab.locator('.goal-edit').isVisible(),'重载后可以重新打开完成目标 '+completedLabel);
+        await tab.evaluate(()=>chatTimeline?.dispose());
+        await tab.locator('.goal-edit').click();
+        check(await tab.locator('.goal-editor').inputValue()==='已完成的目标','修改自动带出完成目标正文 '+completedLabel);
+        await tab.locator('.goal-editor').fill('继续完善目标');
+        const before=writes.length;await tab.locator('.goal-save').click();
+        await tab.waitForFunction(()=>!workModes.busy()&&!workModes.editing&&state.goal.status==='paused');
+        check(writes.length===before+1&&writes.at(-1).p.endsWith('/goal/edit'),'保存完成目标只发送一次修改 '+completedLabel);
+        check(!!writes.at(-1).body.expected.nativeGoalAbsent===archived,'完成记录按实际来源核验 '+completedLabel);
+        check(goal.objective==='继续完善目标'&&goal.tokenBudget===800000,'保存完成目标保留正文和预算 '+completedLabel);
+        await tab.locator('.goal-status').click();
+        await tab.waitForFunction(()=>!workModes.busy()&&state.goal.status==='active');
+        check(writes.length===before+2&&writes.at(-1).p.endsWith('/goal/status'),'手动恢复后继续目标 '+completedLabel);
+      }
+      check(writes.every(w=>!w.p.endsWith('/send')&&!w.p.endsWith('/stop')),'操作没有额外发言或中断回复 '+label);
       await context.close();
     }
     check(errors.length===0,'浏览器没有脚本异常：'+errors.join('; '));
