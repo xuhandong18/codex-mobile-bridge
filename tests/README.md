@@ -41,6 +41,8 @@ HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据�
 
 测试名仍保持在 `tests/` 顶层，方便按前缀发现并复用既有夹具。平台测试的模拟结果不能替代对应操作系统的实机结果。
 
+新建 Codex 项目运行 `python -B scripts/test-backend.py --source-only -p test_native_projects.py`，并联动 `test_projects.py`、`test_projects_http.py`、`test_project_directories.py` 和 `test_windows_project_ui.py`。覆盖桌面 `schemaVersion: 2` 同时返回本地、远程和无磁盘路径的 ChatGPT 项目时，两种原生创建通路均能完成本地项目与分区的核验；远程、云端项目不能充当本地创建回执，损坏的本地记录、未知项目类型和重复身份仍拒绝操作，写入结果未知不重放。夹具使用合成数据，不创建真实项目或执行真实桌面窗口操作。
+
 需要真实符号链接的夹具通过 `symlink_support.require_symlink_support()` 检查能力。Windows 账户缺少该权限（WinError 1314）时，仅跳过对应检查并显示原因；不修改系统安全策略，也不把这些检查算作通过。
 
 认证持久化保护运行 `python -B scripts/test-backend.py --source-only -p test_auth.py`，并联动 `test_login_security.py`、`test_pairing.py`。覆盖完整 JSON 强制落盘后才替换、首次保存与旧数据补建备份、落盘及替换失败时保留主文件和清理临时文件、全零/非法/缺失主文件不自动恢复旧权限，以及损坏主文件不覆盖有效备份。夹具使用合成数据和真实临时文件；故障注入不代表已完成真实断电或蓝屏测试。

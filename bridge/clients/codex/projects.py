@@ -40,10 +40,17 @@ def local_roots(result):
 def project_rows(native, *, unknown=False):
     rows = native.call('list_projects', {}).get('projects')
     if not isinstance(rows, list) or any(not isinstance(row, dict) or
-            any(not isinstance(row.get(key), str) or not row[key] for key in ('projectId', 'label', 'path')) for row in rows):
+            any(not isinstance(row.get(key), str) or not row[key] for key in ('projectId', 'label')) or
+            row.get('projectKind', 'local') not in ('local', 'remote', 'chatgpt') for row in rows):
         raise ToolError('桌面项目列表无法核验，请检查 Codex 项目列表', unknown=unknown)
     if len({row['projectId'] for row in rows}) != len(rows):
         raise ToolError('桌面项目身份不唯一，请检查 Codex 项目列表', unknown=unknown)
+    # Newer desktops include ChatGPT projects without paths and remote projects
+    # whose paths belong to another host. Only local projects can verify this write.
+    rows = [row for row in rows if row.get('projectKind', 'local') == 'local']
+    if any(not isinstance(row.get('path'), str) or not row['path'] or
+           row.get('hostId', 'local') != 'local' for row in rows):
+        raise ToolError('桌面项目列表无法核验，请检查 Codex 项目列表', unknown=unknown)
     return rows
 
 

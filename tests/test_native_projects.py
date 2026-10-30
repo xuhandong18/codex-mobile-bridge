@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.clients.codex.desktop_tools import DesktopTools, ToolError
-from bridge.clients.codex.projects import NativeProjects, within
+from bridge.clients.codex.projects import NativeProjects, project_rows, within
 from bridge.features.sessions.projects import Projects
 
 
@@ -252,6 +252,87 @@ class NativeProjectDelegationTests(unittest.TestCase):
         creator.project_creator.assert_called_once_with('Codex.exe', self.request['name'], self.request['cwd'])
         self.assertNotIn('create_project', [call.args[0] for call in native.call.call_args_list])
         self.assertEqual([call.args[0] for call in native.call.call_args_list], ['list_hosts','list_projects','list_projects','list_projects','move_project_to_sidebar_section','list_threads'])
+
+    def test_mixed_desktop_and_chatgpt_projects_allow_both_native_creation_paths(self):
+        # schemaVersion 2 includes cloud projects without a filesystem path.
+        # A remote project can also use the same path/name on another host.
+        others = [
+            {'projectId':'cloud-fixture', 'projectKind':'chatgpt', 'label':'Cloud', 'hostId':None},
+            {'projectId':'remote-fixture', 'projectKind':'remote', 'label':self.request['name'],
+             'path':self.request['cwd'], 'hostId':'ssh-fixture'},
+            {'projectId':'existing', 'projectKind':'local', 'label':'Existing',
+             'path':str(self.root), 'hostId':'local'},
+        ]
+        local = {**self.row, 'projectKind':'local', 'hostId':'local'}
+        for scoped in (False, True):
+            with self.subTest(scoped=scoped):
+                native, ui = Mock(), Mock(return_value={'submitted':True})
+                native.call.side_effect = [
+                    {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)] if scoped else []}]},
+                    *([{'projectId':self.identifier, 'rootPaths':[str(self.folder)]}] if scoped else [
+                        {'schemaVersion':2, 'projects':others},
+                        {'schemaVersion':2, 'projects':[local, *others]},
+                    ]),
+                    {'schemaVersion':2, 'projects':[local, *others]}, {},
+                    {'sections':[{'sectionId':'threads', 'itemKeys':['codex:project:'+self.identifier]}]},
+                ]
+                with patch.object(DesktopTools, 'connect', return_value=native):
+                    result = NativeProjects(self.bridge, project_creator=ui)(self.request, Mock())
+                self.assertEqual(result, self.project)
+                self.assertEqual(ui.call_count, 0 if scoped else 1)
+                self.assertEqual(sum(call.args[0] == 'create_project' for call in native.call.call_args_list),
+                                 1 if scoped else 0)
+                native.call.assert_any_call('move_project_to_sidebar_section',
+                    {'projectId':self.identifier, 'sectionId':None})
+                native.close.assert_called_once()
+
+    def test_remote_or_cloud_project_cannot_confirm_a_local_creation(self):
+        for kind in ('remote', 'chatgpt'):
+            native = Mock()
+            native.call.side_effect = [
+                {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)]}]},
+                {'projectId':self.identifier, 'rootPaths':[str(self.folder)]},
+                {'schemaVersion':2, 'projects':[
+                    {**self.row, 'projectKind':kind, 'hostId':'ssh-fixture' if kind == 'remote' else None}]},
+            ]
+            with self.subTest(kind=kind), patch.object(DesktopTools, 'connect', return_value=native), \
+                    self.assertRaises(ToolError) as caught:
+                NativeProjects(self.bridge)(self.request, Mock())
+            self.assertTrue(caught.exception.unknown)
+            self.assertNotIn('move_project_to_sidebar_section', [call.args[0] for call in native.call.call_args_list])
+            native.close.assert_called_once()
+
+    def test_mixed_project_lists_still_reject_invalid_local_records_before_creation(self):
+        cloud = {'projectId':'cloud-fixture', 'projectKind':'chatgpt', 'label':'Cloud', 'hostId':None}
+        local = {**self.row, 'projectKind':'local', 'hostId':'local'}
+        invalid = [
+            None, [], {**local, 'path':None}, {**local, 'path':''}, {**local, 'label':None},
+            {**local, 'projectId':''}, {**local, 'hostId':'ssh-fixture'},
+            {**local, 'projectKind':'unsupported'}, {**local, 'projectKind':None},
+            {**local, 'projectId':cloud['projectId']},
+        ]
+        for row in invalid:
+            native, ui = Mock(), Mock()
+            native.call.side_effect = [
+                {'hosts':[{'hostId':'local', 'workspaceRoots':[]}]},
+                {'schemaVersion':2, 'projects':[cloud, row]},
+            ]
+            with self.subTest(row=row), patch.object(DesktopTools, 'connect', return_value=native), \
+                    self.assertRaises(ToolError) as caught:
+                NativeProjects(self.bridge, project_creator=ui)(self.request, Mock())
+            self.assertFalse(caught.exception.unknown)
+            ui.assert_not_called()
+            native.close.assert_called_once()
+
+    def test_project_list_validation_preserves_unknown_receipt_status(self):
+        native = Mock()
+        native.call.return_value = {'projects':[
+            {**self.row, 'projectKind':'local'},
+            {**self.row, 'projectKind':'chatgpt'},
+        ]}
+        with self.assertRaises(ToolError) as caught:
+            project_rows(native, unknown=True)
+        self.assertTrue(caught.exception.unknown)
 
     def test_new_directory_project_finishes_only_after_custom_section_is_saved(self):
         section_id = str(uuid.uuid4())
