@@ -1,6 +1,5 @@
 """Read-only discovery and owner-following of verifiable native side chats."""
 import copy
-import os
 import re
 import sqlite3
 import threading
@@ -10,6 +9,7 @@ import uuid
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.features.sessions.model import apply_patches
 from bridge.features.sessions.store import StoreUnavailable
+from bridge.features.workspace.files import path_identity
 from bridge.platforms.desktop_logs import codex_log_files
 
 
@@ -152,7 +152,7 @@ class NativeSideChatSync:
                 metadata = self.parent_lookup(parent)
                 if (metadata.get('origin') != 'desktop' or not metadata.get('model_provider')
                         or metadata['model_provider'] != state.get('modelProvider')
-                        or os.path.normcase(os.path.normpath(metadata['cwd'])) != os.path.normcase(os.path.normpath(state.get('cwd', '')))):
+                        or not state.get('cwd') or path_identity(metadata['cwd']) != path_identity(state['cwd'])):
                     raise ValueError('Native side conversation identity mismatch')
                 self.last_saved = self.save(parent, child, state, revision)
                 self.states[child] = revision, state

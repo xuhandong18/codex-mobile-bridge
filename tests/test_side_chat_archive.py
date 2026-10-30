@@ -176,7 +176,7 @@ class SideChatPersistenceTests(unittest.TestCase):
         view = {'id': child, 'cwd': str(self.root), 'provider': 'custom', 'title': 'Recovered',
                 'turns': [{'id': 't', 'messages': [{'id': 'm', 'role': 'user', 'text': 'saved'}]}]}
         (folder/'snapshot.json').write_text(json.dumps([{'parent': self.parent, 'slot': '', 'view': view}]), encoding='utf-8')
-        lookup = lambda parent: {'cwd': str(self.root), 'model_provider': 'custom', 'origin': 'desktop'}
+        lookup = lambda parent: {'cwd': ('\\\\?\\'+str(self.root)) if os.name == 'nt' else str(self.root), 'model_provider': 'custom', 'origin': 'desktop'}
         self.manager.archive.import_snapshots(lookup)
         self.manager.archive.import_snapshots(lookup)
         self.assertEqual(len(self.manager.archive.list(self.parent)['items']), 1)
@@ -249,6 +249,13 @@ class NativeSideChatSyncTests(unittest.TestCase):
             self.event({'type': 'snapshot', 'revision': 1, 'conversationState': {**self.state, key: value}})
         self.save.assert_not_called()
         self.assertEqual(self.store.list(self.parent)['items'], [])
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows path alias representation')
+    def test_windows_extended_path_is_same_verified_workspace(self):
+        self.lookup.return_value['cwd'] = '\\\\?\\'+str(self.root)
+        self.event({'type': 'snapshot', 'revision': 1, 'conversationState': self.state})
+        self.save.assert_called_once()
+        self.assertEqual(self.sync.status()['state'], 'connected')
 
     def test_routing_logs_are_only_bounded_hints_and_partial_lines_are_not_consumed(self):
         path = self.root/'routing.log'

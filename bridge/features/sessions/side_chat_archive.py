@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from bridge.features.workspace.files import path_identity
 
 
 def identifier(value):
@@ -26,7 +27,7 @@ class SideChatArchive:
     def __init__(self, directory, home, host):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.profile = hashlib.sha256(os.path.normcase(str(Path(home).resolve())).encode()).hexdigest()
+        self.profile = hashlib.sha256(str(path_identity(home)).encode()).hexdigest()
         self.host = host
         self.lock = threading.RLock()
         self.db = sqlite3.connect(str(self.directory/'side-chats.sqlite3'), check_same_thread=False, timeout=3)
@@ -178,7 +179,7 @@ class SideChatArchive:
                 if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or path.stat().st_size > 32*1024*1024:
                     continue
                 data = path.read_bytes()
-                digest = hashlib.sha256(data).hexdigest()
+                digest = hashlib.sha256(b'side-snapshot-import-v2\0'+data).hexdigest()
                 with self.lock:
                     prior = self.db.execute('SELECT digest FROM imports WHERE profile=? AND host=? AND path=?',
                                             (self.profile, self.host, str(path))).fetchone()
@@ -222,7 +223,7 @@ class SideChatArchive:
             return
         if parent_lookup:
             meta = parent_lookup(parent)
-            if os.path.normcase(os.path.normpath(meta['cwd'])) != os.path.normcase(os.path.normpath(view['cwd'])) or meta['model_provider'] != view['provider']:
+            if path_identity(meta['cwd']) != path_identity(view['cwd']) or meta['model_provider'] != view['provider']:
                 return
         existing = self.read(parent, child)
         if existing and not existing.get('recovered'):
