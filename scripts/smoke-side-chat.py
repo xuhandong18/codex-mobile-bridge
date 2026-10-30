@@ -21,6 +21,9 @@ from bridge.features.sessions.side_chat import SideChat, SideRuntime, check_runt
 
 ROOT = Path(__file__).resolve().parents[1]
 captured = []
+pause_next_response = False
+paused_request = threading.Event()
+release_response = threading.Event()
 def report_error(kind, value, trace):
     if hasattr(value, 'rpc_error'): print('Synthetic RPC error:', value.rpc_error, flush=True)
     sys.__excepthook__(kind, value, trace)
@@ -30,8 +33,14 @@ sys.excepthook = report_error
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_POST(self):
+        global pause_next_response
         data = self.rfile.read(int(self.headers['Content-Length']))
         captured.append(json.loads(data))
+        if pause_next_response:
+            pause_next_response = False
+            paused_request.set()
+            if not release_response.wait(25):
+                raise TimeoutError('Synthetic response was not released')
         response = {'id': 'resp_fixture', 'object': 'response', 'created_at': 0, 'status': 'completed',
                     'model': 'fixture-model', 'output': [], 'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}}
         item = {'id': 'msg_fixture', 'type': 'message', 'role': 'assistant', 'status': 'completed',
@@ -131,11 +140,27 @@ enabled=false
             modes=[c.get('text','') for item in captured[1].get('input',[]) if item.get('role')=='developer' for c in item.get('content',[]) if c.get('text','').startswith('<collaboration_mode>')]
             assert modes and 'default mode' in modes[-1].lower()
             print('PASS: real Skill context, Plan/Default modes, permission updates, and queued turn execution.')
+            pause_next_response = True
+            chat.send('STEER_RUNNING_MARKER', str(uuid.uuid4()))
+            assert paused_request.wait(15), 'Synthetic turn did not reach the model fixture'
+            for text in ['STEER_FIRST_MARKER', 'STEER_SECOND_MARKER', 'STEER_FIRST_MARKER']:
+                assert chat.send(text, str(uuid.uuid4()), mode='steer', work_mode=None)['status'] == 'accepted'
+            release_response.set()
+            deadline = time.monotonic()+25
+            while time.monotonic()<deadline:
+                steer_view = chat.view()
+                if steer_view['status']=='idle': break
+                time.sleep(.05)
+            assert steer_view['status']=='idle', 'Synthetic steered turn did not finish'
+            texts=[message['text'] for message in steer_view['turns'][-1]['messages'] if message['role']=='user']
+            assert texts==['STEER_RUNNING_MARKER','STEER_FIRST_MARKER','STEER_SECOND_MARKER','STEER_FIRST_MARKER'], texts
+            print('PASS: real runtime accepts distinct steering submissions and preserves repeated intentional text in the side view.')
             listed = chat.runtime.request('thread/list', {'limit': 100})
             assert chat.id not in [t['id'] for t in listed['data']]
             assert path.read_bytes() == original, 'Parent history changed'
             print('PASS: real runtime ephemeral fork, inherited context and boundary, custom-provider turn via loopback, streamed response, hidden history, parent unchanged.')
         finally:
+            release_response.set()
             chat.close()
         assert chat.runtime.process.poll() is not None
         assert not chat.view()['turns'] and not chat.view()['connected']

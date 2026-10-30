@@ -172,7 +172,7 @@ def normalize_item(item):
         if kind == "steeringUserMessage":
             item = {**item, "content": item.get("input", [])}
         submission_request_id = request_id(item)
-        if request_id:
+        if submission_request_id:
             row["requestId"] = str(submission_request_id)
         text = user_display_text(user_text_content(item.get("content", [])))
         if is_user_context(text):

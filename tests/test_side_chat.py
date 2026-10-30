@@ -389,6 +389,21 @@ class SideAttachmentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.attachment(self.parent, self.child, 'preview', identifier)
 
+    def test_steer_attachment_echo_keeps_one_message_and_its_preview(self):
+        chat = self.manager.chats[(self.parent, '')]
+        chat.send('running', str(uuid.uuid4()))
+        identifier = str(uuid.uuid4())
+        self.manager.attachment(self.parent, self.child, 'put', identifier, 'notes.txt', b'hello')
+        submission = str(uuid.uuid4())
+        chat.send('read this', submission, [identifier], mode='steer', work_mode=None)
+        inputs = chat.runtime.calls[-1][1]['input']
+        chat.runtime.emit('item/started', turnId='turn', item={
+            'id': 'native-steer', 'type': 'userMessage', 'content': inputs})
+        messages = [message for message in chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+        self.assertEqual([message['text'] for message in messages], ['running', 'read this'])
+        self.assertEqual(messages[-1]['attachments'][0]['id'], identifier)
+        self.assertEqual(sum(m == 'turn/steer' for m, _ in chat.runtime.calls), 1)
+
     def test_upload_scope_cannot_cross_parent_or_recreated_child(self):
         identifier = str(uuid.uuid4())
         self.manager.attachment(self.parent, self.child, 'put', identifier, 'notes.txt', b'hello')
@@ -479,6 +494,84 @@ class SideComposerTests(unittest.TestCase):
         self.assertTrue(any(m['text']=='follow' for m in self.chat.view()['turns'][0]['messages']))
         self.chat.send('follow', identifier, mode='steer', work_mode=None)
         self.assertEqual(sum(m == 'turn/steer' for m, _ in self.chat.runtime.calls), 1)
+
+    def test_native_steer_echo_is_shown_once(self):
+        self.chat.send('running', str(uuid.uuid4()))
+        original = self.chat.runtime.request
+
+        def echo(method, params):
+            result = original(method, params)
+            if method == 'turn/steer':
+                self.chat.runtime.emit('item/started', turnId='turn', item={
+                    'id': 'native-' + params['clientUserMessageId'], 'type': 'userMessage',
+                    'clientUserMessageId': params['clientUserMessageId'], 'content': params['input']})
+            return result
+
+        with patch.object(self.chat.runtime, 'request', side_effect=echo):
+            self.chat.send('试一下这一条', str(uuid.uuid4()), mode='steer', work_mode=None)
+            self.chat.send('现在又不会了', str(uuid.uuid4()), mode='steer', work_mode=None)
+        self.assertEqual(sum(m == 'turn/steer' for m, _ in self.chat.runtime.calls), 2)
+        messages = [message['text'] for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+        self.assertEqual(messages, ['running', '试一下这一条', '现在又不会了'])
+
+    def test_native_steer_echo_without_client_id_keeps_repeated_submissions(self):
+        self.chat.send('running', str(uuid.uuid4()))
+        submissions = [str(uuid.uuid4()) for _ in range(3)]
+        texts = ['same text', 'another message', 'same text']
+        for identifier, text in zip(submissions, texts):
+            self.chat.send(text, identifier, mode='steer', work_mode=None)
+        for index, text in enumerate(texts):
+            item = {'id': 'native-' + str(index), 'type': 'userMessage',
+                    'content': [{'type': 'text', 'text': text}]}
+            self.chat.runtime.emit('item/started', turnId='turn', item=item)
+            self.chat.runtime.emit('item/completed', turnId='turn', item=item)
+            messages = [message['text'] for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+            self.assertEqual(messages, ['running', *texts])
+        for _ in range(3):
+            messages = [message['text'] for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+            self.assertEqual(messages, ['running', *texts])
+        self.assertEqual(sum(m == 'turn/steer' for m, _ in self.chat.runtime.calls), 3)
+
+    def test_steer_echo_supports_client_id_aliases_and_steering_items(self):
+        self.chat.send('running', str(uuid.uuid4()))
+        for field in ('clientId', 'clientUserMessageId', 'client_id'):
+            identifier = str(uuid.uuid4())
+            self.chat.send(field, identifier, mode='steer', work_mode=None)
+            self.chat.runtime.emit('item/started', turnId='turn', item={
+                'id': 'native-' + field, 'type': 'steeringUserMessage', 'status': 'accepted',
+                field: identifier, 'input': [{'type': 'text', 'text': field}]})
+        messages = [message['text'] for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+        self.assertEqual(messages, ['running', 'clientId', 'clientUserMessageId', 'client_id'])
+
+    def test_steer_echo_and_final_item_with_same_submission_show_once(self):
+        self.chat.send('running', str(uuid.uuid4()))
+        identifier = str(uuid.uuid4())
+        self.chat.send('follow', identifier, mode='steer', work_mode=None)
+        for kind in ('steeringUserMessage', 'userMessage'):
+            self.chat.runtime.emit('item/started', turnId='turn', item={
+                'id': kind, 'type': kind, 'status': 'accepted', 'clientUserMessageId': identifier,
+                'input' if kind == 'steeringUserMessage' else 'content': [{'type': 'text', 'text': 'follow'}]})
+        messages = [message['text'] for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+        self.assertEqual(messages, ['running', 'follow'])
+
+    def test_missing_opening_echo_cannot_overwrite_the_steer_echo(self):
+        self.chat.send('running', str(uuid.uuid4()))
+        self.chat.state['turns'][0]['items'] = []
+        self.chat.send('follow', str(uuid.uuid4()), mode='steer', work_mode=None)
+        self.chat.runtime.emit('item/started', turnId='turn', item={
+            'id': 'native-follow', 'type': 'userMessage', 'content': [{'type': 'text', 'text': 'follow'}]})
+        messages = [message for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+        self.assertEqual([message['text'] for message in messages], ['running', 'follow'])
+        self.assertNotIn('requestId', messages[-1], 'An absent client id must not become the string None')
+
+    def test_steer_echo_does_not_consume_another_submission_with_same_text(self):
+        self.chat.send('running', str(uuid.uuid4()))
+        self.chat.send('follow', str(uuid.uuid4()), mode='steer', work_mode=None)
+        self.chat.runtime.emit('item/started', turnId='turn', item={
+            'id': 'native-other', 'clientUserMessageId': 'another-submission',
+            'type': 'userMessage', 'content': [{'type': 'text', 'text': 'follow'}]})
+        messages = [message['text'] for message in self.chat.view()['turns'][0]['messages'] if message['role'] == 'user']
+        self.assertEqual(messages, ['running', 'follow', 'follow'])
 
     def test_goal_invalid_skills_and_cancelled_queue_cannot_send(self):
         from unittest.mock import Mock

@@ -320,29 +320,53 @@ class SideChat:
         if self.on_interaction:
             self.on_interaction(self.parent, self.recency)
 
+    @staticmethod
+    def _submission_message(messages, key, submission, claimed):
+        candidates = [message for message in messages if message.get('role') == 'user'
+                      and message.get('kind') in ('userMessage', 'steeringUserMessage')
+                      and not message.get('isUserContext') and id(message) not in claimed]
+        identified = [message for message in candidates
+                      if message.get('requestId') == key or (not message.get('requestId') and message.get('id') == key)]
+        user = identified[0] if identified else next((message for message in candidates
+            if not message.get('requestId') and message.get('text') == submission['text']), None)
+        if user is not None:
+            claimed.add(id(user))
+            # Some runtimes expose both steering and final user items for the
+            # same client id. Only a verified submission identity can collapse
+            # multiple native records; equal text alone never collapses them.
+            duplicate_ids = {id(message) for message in identified[1:]}
+            if duplicate_ids:
+                messages[:] = [message for message in messages if id(message) not in duplicate_ids]
+        return user
+
     def view(self):
         with self.lock:
             result = normalize_state(self.state, self.ready and not self.closed and not self.error)
             result['waitingForUser'] = waiting_for_user(self.state) if result['connected'] else None
             result['waitingObservedAt'] = getattr(self, 'waiting_observed_at', 0)
             for turn in result['turns']:
+                claimed = set()
                 submissions = [(key, row) for key, row in self.submissions.items() if row.get('turnId') == turn['id']]
                 primary = next(((key, row) for key, row in submissions if row.get('mode') != 'steer'), None)
                 if primary:
                     key, submission = primary
-                    user = next((message for message in turn['messages'] if message['role'] == 'user'), None)
+                    user = self._submission_message(turn['messages'], key, submission, claimed)
                     if user is None:
                         user = {'id': 'side-user-' + key, 'role': 'user', 'kind': 'userMessage'}
                         turn['messages'].insert(0, user)
+                        claimed.add(id(user))
                     user.update(text=submission['text'], attachments=submission.get('attachments', []))
                 for key, submission in submissions:
                     if submission.get('mode') != 'steer' or submission['status'] != 'accepted':
                         continue
-                    # The native steer item uses the client id when it is echoed.
-                    user = next((message for message in turn['messages'] if message['id'] == key), None)
+                    # Native item ids need not equal the client submission id.
+                    # Without a client id, consume each matching echo once in
+                    # this turn so intentional repeated text remains distinct.
+                    user = self._submission_message(turn['messages'], key, submission, claimed)
                     if user is None:
                         user = {'id': key, 'role': 'user', 'kind': 'steeringUserMessage'}
                         turn['messages'].append(user)
+                        claimed.add(id(user))
                     user.update(text=submission['text'], attachments=submission.get('attachments', []))
             # Never direct an unsupported sidecar request to an unrelated desktop tab.
             for request in result['requests']:
