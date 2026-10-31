@@ -57,7 +57,7 @@ class NewChatProjectPicker {
   }
   open(){
     if(this.button.disabled)return;
-    this.query.value='';this.panel.hidden=false;this.button.setAttribute('aria-expanded','true');this.render();this.query.focus();
+    this.query.value='';this.panel.hidden=false;this.button.setAttribute('aria-expanded','true');this.render();
   }
   close(focus=true){
     const opened=!this.panel.hidden;this.panel.hidden=true;this.button.setAttribute('aria-expanded','false');
