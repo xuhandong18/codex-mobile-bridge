@@ -23,6 +23,7 @@
 .markdown-body th,.markdown-body td{padding:10px 12px;min-width:100px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 .markdown-body th{background:#e9eee5;font-weight:600}.markdown-body tr:last-child td{border-bottom:0}
 .markdown-body .align-left{text-align:left}.markdown-body .align-center{text-align:center}.markdown-body .align-right{text-align:right}
+.markdown-body .chat-followup-item{list-style:none}.markdown-body .chat-followup{max-width:100%;min-height:40px;padding:9px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--accent);font:inherit;line-height:1.5;white-space:normal;overflow-wrap:anywhere;text-align:left;cursor:pointer}.markdown-body .chat-followup:hover{border-color:var(--accent)}.markdown-body .chat-followup:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 
 .math-display{display:block;max-width:100%;overflow-x:auto;overflow-y:hidden;margin:16px 0;white-space:nowrap;overflow-wrap:normal;word-break:normal}
 .math-display .katex-display{margin:0;padding:6px 0;text-align:left}.math-display .katex-display>.katex{text-align:left}

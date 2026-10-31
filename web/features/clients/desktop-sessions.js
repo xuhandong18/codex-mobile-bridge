@@ -257,12 +257,19 @@ class DesktopSessionsView {
   }
   resizeInput(){if(this.composerBody.hidden)return;this.input.style.height='auto';this.input.style.height=Math.min(160,Math.max(48,this.input.scrollHeight||48))+'px';}
   collapseComposer(value){this.composerBody.hidden=value;this.form.classList.toggle('is-collapsed',value);this.composerToggle.setAttribute('aria-expanded',String(!value));this.label(this.composerToggle,value?'展开输入区':'收起输入区');this.composerToggle.title=BridgeI18n.t(value?'展开输入区':'收起输入区');if(!value)this.resizeInput();}
+  fillFollowup(provider,sid,workspace,prompt){
+    if(this.provider!==provider||this.sid!==sid||this.workbench.current!==workspace||!this.isChatOpen||!this.canMutate()||this.busy||this.state?.readOnly||this.state?.expired||this.state?.capabilities?.send===false)return;
+    try{window.ChatFollowups.fill(this.input,prompt,{quotes:this.workbench.fileQuotes,reveal:()=>{this.workbench.select('chat');this.collapseComposer(false);}});}
+    catch(error){this.notify(error.message);}
+  }
   renderMessages(messages){
+    const provider=this.provider,sid=this.sid,workspace=this.workbench.current;
     this.lastMessages=messages;const atBottom=this.messages.scrollHeight-this.messages.scrollTop-this.messages.clientHeight<100,top=this.messages.scrollTop,nodes=[],next=new Map();
     for(const [index,message] of messages.entries()){
-      const key=String(message.id??index),stamp=JSON.stringify([message,BridgeI18n.language(),this.sessionFiles]);const prior=this.messageNodes.get(key);let node=prior?.stamp===stamp?prior.node:null;
+      const complete=!message.truncated&&message.status!=='inProgress'&&message.turnStatus!=='inProgress'&&!(index===messages.length-1&&this.state?.status==='active');
+      const key=String(message.id??index),stamp=JSON.stringify([message,BridgeI18n.language(),this.sessionFiles,complete]);const prior=this.messageNodes.get(key);let node=prior?.stamp===stamp?prior.node:null;
       if(!node){const activity=['activity','reasoning'].includes(message.role);node=this.node(activity?'details':'article',activity?'activity timeline-row':'message timeline-row '+message.role);if(activity){node.open=!!prior?.node.open;node.append(this.node('summary','',BridgeI18n.t(message.title||(message.role==='reasoning'?'思考摘要':'执行过程'))));node.append(this.node('pre','activity-body',message.text||''));}
-        else{const who=message.role==='user'?BridgeI18n.t('你'):message.role==='error'?BridgeI18n.t('执行错误'):[this.provider==='claude'?'Claude':'DeepSeek',message.model&&[message.model,message.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');node.append(this.node('span','who',who));const body=this.node('div','message-body');renderMarkdown(body,message.text||'',this.sessionFiles||[],file=>this.workbench.url(this.workbench.current,'download',file.path));node.append(body);const actions=this.node('div','message-actions');const copy=this.button('复制',()=>window.BridgeClipboard.copy(async()=>message.text||'',copy));copy.classList.add('message-copy');actions.append(copy,this.button('引用',()=>{this.workbench.selectionTargets.addText(message.text||'');}));node.append(actions);}
+        else{const who=message.role==='user'?BridgeI18n.t('你'):message.role==='error'?BridgeI18n.t('执行错误'):[this.provider==='claude'?'Claude':'DeepSeek',message.model&&[message.model,message.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');node.append(this.node('span','who',who));const body=this.node('div','message-body');renderMarkdown(body,message.text||'',this.sessionFiles||[],file=>this.workbench.url(this.workbench.current,'download',file.path),{complete,onFollowup:message.role==='assistant'?prompt=>this.fillFollowup(provider,sid,workspace,prompt):undefined});node.append(body);const actions=this.node('div','message-actions');const copy=this.button('复制',()=>window.BridgeClipboard.copy(async()=>message.text||'',copy));copy.classList.add('message-copy');actions.append(copy,this.button('引用',()=>{this.workbench.selectionTargets.addText(message.text||'');}));node.append(actions);}
       }
       node.hidden=message.role==='reasoning'?(document.documentElement.dataset.showProcess==='false'||document.documentElement.dataset.showReasoning==='false'):message.role==='activity'&&document.documentElement.dataset.showProcess==='false';next.set(key,{stamp,node});nodes.push(node);
     }

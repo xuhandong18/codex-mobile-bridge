@@ -5,8 +5,37 @@
   markdown.use(texmath, {engine:window.katex, delimiters:['brackets','dollars']});
   const tags = new Set(['p','h1','h2','h3','h4','h5','h6','ul','ol','li','strong','em','s','blockquote','hr','br','table','thead','tbody','tr','th','td']);
 
+  function followup(source) {
+    const match = /^:codex-followup\[([^\]\r\n]+)\]\{prompt=("(?:[^"\\\r\n]|\\.)*")\}$/u.exec(source.trim());
+    if (!match) return null;
+    try {
+      const label = markdown.utils.unescapeAll(match[1]), prompt = JSON.parse(match[2]);
+      return label.trim() && prompt.trim() ? {label, prompt} : null;
+    } catch { return null; }
+  }
+
+  // Insert through the existing input events; never submit or replace a draft.
+  window.ChatFollowups = {
+    fill(input, prompt, {quotes, reveal = () => {}} = {}) {
+      if (input.disabled || input.readOnly) return false;
+      const value = input.value + (input.value ? '\n\n' : '') + prompt;
+      if (quotes) quotes.validate(quotes.text(value));
+      else if (input.maxLength > 0 && value.length > input.maxLength) {
+        throw Error(typeof BridgeI18n === 'undefined' ? '文字和文件引用合计过长，请缩小选区或删除部分引用' : BridgeI18n.t('文字和文件引用合计过长，请缩小选区或删除部分引用'));
+      }
+      input.value = value;
+      reveal();
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      input.focus();
+      input.setSelectionRange(value.length, value.length);
+      return true;
+    }
+  };
+
   // Build nodes from parsed tokens; model output never becomes executable HTML.
   window.renderMarkdown = function(node, text, files = [], fileUrl = () => '', options = {}) {
+    const source = String(text || '');
+    const lastContentLine = options.complete === false ? source.trimEnd().split(/\r\n|\r|\n/).length : 0;
     const body = document.createElement('div');
     body.className = 'markdown-body';
     const headingAnchors = new Set();
@@ -38,10 +67,28 @@
     let codeIndex=0;
     function appendTokens(tokens, root) {
       const parents = [root];
-      for (const token of tokens) {
+      for (let index = 0; index < tokens.length; index++) {
+        const token = tokens[index];
         if (token.hidden) continue;
         const parent = parents[parents.length - 1];
-        if (token.type === 'inline') {
+        // Match a whole list item before inline parsing unescapes its attributes.
+        const action = typeof options.onFollowup === 'function' && token.type === 'list_item_open' &&
+          !parents.some(node => node.tagName === 'BLOCKQUOTE') &&
+          // A preview or streaming tail can still acquire a continuation later.
+          (options.complete !== false || token.map?.[1] < lastContentLine) &&
+          tokens[index+1]?.type === 'paragraph_open' && tokens[index+2]?.type === 'inline' &&
+          tokens[index+3]?.type === 'paragraph_close' && tokens[index+4]?.type === 'list_item_close' &&
+          followup(tokens[index+2].content);
+        if (action) {
+          const item = document.createElement('li'), button = document.createElement('button');
+          item.className = 'chat-followup-item';
+          button.className = 'chat-followup'; button.type = 'button'; button.textContent = action.label;
+          button.onclick = event => {
+            event.preventDefault(); event.stopPropagation();
+            if (button.isConnected) options.onFollowup(action.prompt);
+          };
+          item.append(button); parent.append(item); index += 4;
+        } else if (token.type === 'inline') {
           appendTokens(token.children || [], parent);
         } else if (token.type.startsWith('math_')) {
           const display = token.block || token.type === 'math_inline_double';
@@ -143,7 +190,7 @@
         }
       }
     }
-    appendTokens(parse(String(text || '')), body);
+    appendTokens(parse(source), body);
     node.append(body);
   };
 })();

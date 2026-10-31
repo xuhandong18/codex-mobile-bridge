@@ -210,6 +210,11 @@ class SideChatPanel {
     this.status.hidden=!this.status.textContent;
   }
   canReceiveQuote(){return !this.disposed&&!this.busy&&!this.pending&&!this.runningSendChoice&&!this.state?.expired&&!this.state?.readOnly&&!this.state?.saveError&&(!this.state?.id?!this.tab?.titleChild:this.state.connected===true);}
+  fillFollowup(child,prompt){
+    if(!child||this.state?.id!==child||!this.canReceiveQuote()||!this.session.files.includes(this.tab)||!this.workbench.isVisible(this.session,this.tab))return;
+    try{window.ChatFollowups.fill(this.input,prompt,{quotes:this.fileQuotes,reveal:()=>this.collapse(false)});}
+    catch(error){this.workbench.notify(error.message);}
+  }
   dialog(title){
     const n=(...a)=>this.workbench.node(...a),dialog=n('dialog','picker'),head=n('div','picker-head');
     head.append(n('h2','',BridgeI18n.t(title)),this.workbench.button('×',()=>dialog.close(),BridgeI18n.t('关闭')));dialog.append(head);
@@ -296,7 +301,7 @@ class SideChatPanel {
         const card=this.workbench.node('article','wb-side-message '+message.role);
         if(['user','assistant','error'].includes(message.role)){
           card.append(this.workbench.node('small','',message.role==='user'?BridgeI18n.t('你'):message.role==='error'?BridgeI18n.t('执行错误'):this.session.provider==='deepseek'?'DeepSeek':'Codex'));
-          const text=this.workbench.node('div','message-body');renderMarkdown(text,message.text||'');card.append(text);
+          const text=this.workbench.node('div','message-body');renderMarkdown(text,message.text||'',[],()=>'',{complete:!message.truncated&&turn.status!=='inProgress'&&turn.status!=='active'&&message.status!=='inProgress',onFollowup:message.role==='assistant'?prompt=>this.fillFollowup(state.id,prompt):undefined});card.append(text);
           if(message.attachments?.length){const list=this.workbench.node('div','attachment-list');for(const file of message.attachments){
             const chip=this.workbench.node('div','attachment-chip');if(file.image){const image=this.workbench.node('img','attachment-thumb');image.src=this.uploadUrl(state.id,file.id,'preview');image.alt=file.name;image.dataset.imagePreview=image.src+'&variant=original';image.dataset.imageName=file.name;image.tabIndex=0;image.setAttribute('role','button');chip.append(image);}
             chip.append(this.workbench.raw(this.workbench.node('strong','',file.name)));list.append(chip);
