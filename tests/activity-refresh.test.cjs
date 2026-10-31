@@ -67,13 +67,18 @@ test('仍有实时侧边运行时，汇总绿点使用新确认的状态说明',
   assert.deepEqual(activity.indicator('local|chat'),{kind:'running',label:'运行中'});
 });
 
-for(const kind of ['awaiting','completed','ended'])test(kind+'提示在缓冲与到期后都保留原有优先级',()=>{
+for(const kind of ['awaiting','completed','ended'])test(kind+'提示在缓冲与到期后都保留蓝红优先级',()=>{
   const {activity,at}=fixture();
   activity.update([row({status:'active',turnStatus:'inProgress'})]);
   activity.update([row({waitingForUser:kind==='awaiting',turnStatus:kind==='ended'?'failed':'completed'})]);
-  assert.equal(activity.indicator('local|chat')?.kind,kind);
+  const expected=kind==='awaiting'?'completed':kind;
+  assert.equal(activity.indicator('local|chat')?.kind,expected);
   activity.update([unavailable()]);at(30000);
-  assert.equal(activity.indicator('local|chat')?.kind,kind);
+  assert.equal(activity.indicator('local|chat')?.kind,expected);
+  if(kind==='awaiting'){
+    activity.read('local|chat');
+    assert.equal(activity.indicator('local|chat')?.kind,'awaiting');
+  }
 });
 
 test('缓冲期间吸收共享已读记录，并继续阻止基于离线状态的已读同步',()=>{

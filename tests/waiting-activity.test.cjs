@@ -4,7 +4,7 @@ const {SessionActivity}=require('../web/features/chat/activity.js');
 const fixture=()=>new SessionActivity({storage:{getItem:()=>null,setItem(){},removeItem(){}}});
 const row=(changes={})=>({id:'main',host:'local',connected:true,status:'active',turnId:'turn',turnStatus:'inProgress',...changes});
 
-test('正式待处理请求优先显示红色，阅读不能清除，解除后恢复蓝绿',()=>{
+test('未读完成优先显示蓝色，读完后恢复红色且阅读不能解除等待',()=>{
   const activity=fixture();
   activity.update([row({waitingForUser:true})]);
   assert.deepEqual(activity.indicator('local|main'),{kind:'awaiting',label:'等待你回复或处理'});
@@ -13,9 +13,13 @@ test('正式待处理请求优先显示红色，阅读不能清除，解除后�
   activity.update([row({waitingForUser:false})]);
   assert.equal(activity.indicator('local|main').kind,'running');
   activity.update([row({status:'idle',turnStatus:'completed',waitingForUser:true})]);
+  assert.equal(activity.indicator('local|main').kind,'completed');
+  activity.read('local|main');
+  assert.equal(activity.indicator('local|main').kind,'awaiting');
+  activity.read('local|main');
   assert.equal(activity.indicator('local|main').kind,'awaiting');
   activity.update([row({status:'idle',turnStatus:'completed',waitingForUser:false})]);
-  assert.equal(activity.indicator('local|main').kind,'completed');
+  assert.equal(activity.indicator('local|main'),null);
 });
 
 test('主侧和派生聊天独立等待，缺失状态及断线不清除已确认的红色',()=>{
@@ -29,6 +33,42 @@ test('主侧和派生聊天独立等待，缺失状态及断线不清除已确�
   assert.equal(activity.indicator('local|main').kind,'running');
   activity.update([row({waitingSubagents:2})]);
   assert.equal(activity.indicator('local|main').kind,'awaiting');
+});
+
+test('主侧任一聊天未读完成均优先于另一聊天等待，分别阅读后恢复红绿',()=>{
+  for(const completedMain of [true,false]){
+    const activity=fixture(),parent=row({waitingForUser:!completedMain});
+    const side={id:'side',connected:true,status:'active',turnId:'side-turn',turnStatus:'inProgress',waitingForUser:completedMain};
+    activity.update([{...parent,sideChats:[side]}]);
+    if(completedMain)activity.update([{...parent,status:'idle',turnStatus:'completed'}]);
+    else activity.updateSideChat(parent,{...side,status:'idle',turnStatus:'completed'});
+    const completedKey=completedMain?'local|main':'local|main/side/side',waitingKey=completedMain?'local|main/side/side':'local|main';
+    assert.equal(activity.indicator('local|main').kind,'completed');
+    activity.read(waitingKey);
+    assert.equal(activity.indicator('local|main').kind,'completed');
+    activity.read(completedKey);
+    assert.equal(activity.indicator('local|main').kind,'awaiting');
+    if(completedMain)activity.updateSideChat(parent,{...side,waitingForUser:false});
+    else activity.update([{...parent,waitingForUser:false}]);
+    assert.equal(activity.indicator('local|main').kind,'running');
+  }
+});
+
+test('未读完成和手工未读均优先于派生等待，失败不会盖住红色等待',()=>{
+  const activity=fixture();
+  activity.update([row({waitingSubagents:1})]);
+  activity.update([row({status:'idle',turnStatus:'completed',waitingSubagents:1})]);
+  assert.equal(activity.indicator('local|main').kind,'completed');
+  activity.read('local|main');
+  assert.equal(activity.indicator('local|main').kind,'awaiting');
+  activity.markUnread('local|main');
+  assert.equal(activity.indicator('local|main').kind,'completed');
+  activity.read('local|main',{explicit:true});
+  assert.equal(activity.indicator('local|main').kind,'awaiting');
+  activity.update([row({status:'idle',turnId:'failed-turn',turnStatus:'failed'})]);
+  assert.equal(activity.indicator('local|main').kind,'awaiting');
+  activity.update([row({status:'idle',turnId:'failed-turn',turnStatus:'failed',waitingSubagents:0})]);
+  assert.equal(activity.indicator('local|main').kind,'ended');
 });
 
 test('普通正文、工具和失败不制造等待状态',()=>{

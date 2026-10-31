@@ -71,15 +71,20 @@ const server=http.createServer(async(req,res)=>{
       check(recency===1,'主侧等待状态不推进聊天排序时间');
       mainWaiting=false;await refresh();await indicator('running');
 
+      sides[1].requests=[{id:'other-waiting',method:'item/tool/requestUserInput',params:{questions:[{id:'q2',question:'Choose'}]}}];
+      await refresh();await indicator('awaiting');
       sides[0].status='idle';sides[0].turns[0].status='completed';await refresh();await indicator('completed');
       check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.completed').count()===1,'任一侧边完成优先显示蓝点');
+      check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.completed').evaluate(node=>getComputedStyle(node).backgroundColor)==='rgb(59, 130, 246)','另一个侧边仍等待时显示蓝色');
+      check(recency===1,'蓝红优先级变化不推进聊天排序时间');
       if(screenshots&&mode==='codex'&&width===390)await page.screenshot({path:path.join(screenshots,'blue-390.png')});
       await page.locator('#sessions .session[data-id="'+parent+'"]').click();
       await page.waitForFunction(()=>workbench.current?.files.length===2&&state?.connected);
       await indicator('completed');check(true,'打开主聊天仍保留侧边未读');
       await page.locator('#sidebar .sidebar-toggle').click();
       await page.locator('#chat .wb-tab[data-tab="sidechat:'+firstSlot+'"] [role=tab]').click();
-      await indicator('running');check(true,'阅读完成的侧边后恢复绿点');
+      await indicator('awaiting');check(true,'阅读完成的侧边后恢复另一个侧边的红色等待');
+      sides[1].requests=[];await refresh();await indicator('running');check(true,'剩余请求解除后恢复绿点');
       await refresh();await indicator('running');check(true,'真实详情轮次结构已读后再次查询不复活蓝点');
       await page.locator('#sidebar .sidebar-toggle').click();
       await page.locator('.wb-side-composer:visible textarea').fill('更新侧边交互时间');

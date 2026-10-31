@@ -79,13 +79,15 @@ class SessionActivity {
   }
   indicator(key){
     const indicators=[key,...(this.rows[key]?.sideKeys||[])].map(id=>this.ownIndicator(id)).filter(Boolean);
-    return ['awaiting','completed','ended','running','unknown'].map(kind=>indicators.find(row=>row.kind===kind&&!row.stale)||indicators.find(row=>row.kind===kind)).find(Boolean)||null;
+    return ['completed','awaiting','ended','running','unknown'].map(kind=>indicators.find(row=>row.kind===kind&&!row.stale)||indicators.find(row=>row.kind===kind)).find(Boolean)||null;
   }
   ownIndicator(key){
     const row=this.rows[key];if(!row)return null;
-    if(row.waitingForUser||row.waitingSubagents>0)return {kind:'awaiting',label:'等待你回复或处理'};
     if(row.manualUnread)return {kind:'completed',label:'未读'};
-    if(row.pending){const status=row.pending.split(':').at(-1);return {kind:status==='completed'?'completed':'ended',label:status==='completed'?'已完成，未查看':status==='failed'?'运行失败，未查看':'已停止，未查看'};}
+    const pendingStatus=row.pending?.split(':').at(-1);
+    if(pendingStatus==='completed')return {kind:'completed',label:'已完成，未查看'};
+    if(row.waitingForUser||row.waitingSubagents>0)return {kind:'awaiting',label:'等待你回复或处理'};
+    if(row.pending)return {kind:'ended',label:pendingStatus==='failed'?'运行失败，未查看':'已停止，未查看'};
     if(row.offline){
       const failedAt=this.refreshes.get(key)?.failedAt;
       if(!Number.isFinite(failedAt)||this.now()-failedAt>=30000)return {kind:'unknown',label:row.offlineReason==='timeout'?'读取运行状态超时':'运行状态暂不可用'};
