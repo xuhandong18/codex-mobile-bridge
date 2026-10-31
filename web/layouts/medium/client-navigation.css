@@ -2,6 +2,7 @@
 @media(min-width:721px) and (max-width:1100px){.app.chat-open{grid-template-columns:minmax(0,1fr)}.app.chat-open>#sidebar{display:none}.desktop-sessions:not(.ds-open){grid-template-columns:minmax(0,1fr)}.desktop-sessions:not(.ds-open)>.ds-main{display:none}.desktop-sessions.ds-open{grid-template-columns:minmax(0,1fr)}.desktop-sessions.ds-open>.ds-list{display:none}#back{display:block}}
 
 .sidebar-toggle{display:flex;align-items:center;justify-content:center;flex:none;width:36px;min-height:40px;padding:6px}
+.sidebar-backdrop{display:none}
 .list-heading:has(>.sidebar-toggle){grid-template-columns:auto minmax(0,auto) minmax(0,1fr) auto auto;gap:4px}
 @media(min-width:721px){
   .app.sidebar-open:not(.desktop-mode),.app.sidebar-open .desktop-sessions{display:grid;grid-template-columns:clamp(250px,28vw,310px) minmax(0,1fr)}
@@ -13,6 +14,7 @@
   .app.sidebar-open #back,.app.sidebar-open .ds-head .ds-back{display:none!important}
 }
 @media(max-width:720px){
+  .app.sidebar-open.chat-open:not(.desktop-mode)>.sidebar-backdrop,.app.sidebar-open.desktop-mode:has(.desktop-sessions.ds-open)>.sidebar-backdrop{display:block;position:absolute;inset:0;z-index:29;border:0;padding:0;background:transparent;cursor:default}
   .app.sidebar-open.chat-open>#sidebar,.app.sidebar-open .desktop-sessions.ds-open>.ds-list{display:flex;position:absolute;inset:0 auto 0 0;width:min(310px,88%);height:100%;z-index:30;box-shadow:8px 0 28px #0003}
   .app.sidebar-open,.desktop-sessions{position:relative}
 }

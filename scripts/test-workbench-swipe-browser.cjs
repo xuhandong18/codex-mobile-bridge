@@ -49,8 +49,10 @@ const server=http.createServer(async(req,res)=>{
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     const results=[];
-    for(const [width,height] of [[390,844],[820,1180],[844,390],[1440,1000]])for(const provider of ['codex','deepseek']){
+    const sizes=process.argv.includes('--sidebar-only')?[[390,844],[720,844],[721,844],[820,1180],[844,390],[1440,1000]]:[[390,844],[820,1180],[844,390],[1440,1000]];
+    for(const [width,height] of sizes)for(const provider of ['codex','deepseek']){
       const context=await browser.newContext({viewport:{width,height},hasTouch:true}),page=await context.newPage();
+      await context.addInitScript(()=>localStorage.setItem('navigation:sidebar','closed'));
       page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(10000);
       await page.goto('http://127.0.0.1:'+server.address().port+'/#'+id+'~local');await page.waitForFunction(()=>state?.connected);
       if(provider!=='codex'){
@@ -78,7 +80,74 @@ const server=http.createServer(async(req,res)=>{
       };
       const main=provider==='codex'?'#composer':'.ds-composer';
       const timeline=provider==='codex'?'#timeline':'.ds-messages';
-      for(const area of ['.wb-side-messages','.wb-side-head','.wb-side-content>.wb-status']){
+      const drawer=provider==='codex'?'#sidebar':'.ds-list';
+      const toggle=provider==='codex'?'#chat>.chat-head>.sidebar-toggle':'.ds-conversation>.chat-head>.sidebar-toggle';
+      const edgeSwipe=async(x=6,dy=0)=>{
+        const y=Math.min(height-80,220);
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+        for(let i=1;i<=6;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+100*i/6,y:y+dy*i/6}]});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      };
+      await select(tabs.first);
+      const savedDraft=await page.locator(main+' textarea').inputValue();
+      await page.locator(toggle).tap();
+      check(await page.locator(drawer).isVisible(),'导航按钮打开列表');
+      await page.locator(drawer+' .list-heading').tap({position:{x:100,y:5}});
+      check(await page.locator(drawer).isVisible(),'导航内部点击保持展开');
+      await page.evaluate(()=>{window.sidebarOutsideClicks=0;swipeWorkbench.chat.addEventListener('click',()=>window.sidebarOutsideClicks++);});
+      await page.touchscreen.tap(width-8,Math.min(height-80,220));
+      if(width<=720){
+        check(!await page.locator(drawer).isVisible(),'点击导航外侧收起抽屉');
+        check(await page.evaluate(()=>sidebarOutsideClicks)===0,'收起点击不会穿透到聊天内容');
+        await edgeSwipe();
+        check(await page.locator(drawer).isVisible(),'屏幕左边缘右滑打开抽屉');
+        check(await active()===tabs.first,'边缘右滑不会切换工作台标签');
+        await page.evaluate(()=>document.querySelector('.sidebar-backdrop').click());
+        check(await page.locator(drawer).isVisible(),'边缘滑动结束后的合成点击不会立即关闭');
+        await page.waitForTimeout(420);await page.touchscreen.tap(width-8,220);
+        check(!await page.locator(drawer).isVisible(),'滑动打开后点击外侧仍可收起');
+        const guards=await page.evaluate(()=>{
+          const checks=[],target=swipeWorkbench.chat.querySelector('.chat-head');
+          const touch=(type,points,changed=points,node=target)=>{
+            const make=point=>new Touch({identifier:point.id??1,target:node,clientX:point.x,clientY:point.y});
+            node.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,touches:points.map(make),changedTouches:changed.map(make)}));
+          };
+          const start=(node=target,x=6)=>touch('touchstart',[{x,y:80}],undefined,node);
+          const end=(node=target,x=110,y=80)=>touch('touchend',[],[{x,y}],node);
+          const check=label=>{assertClosed();checks.push(label);};
+          const assertClosed=()=>{if(sidebarNavigation.isOpen())throw Error('无关手势打开了导航');};
+          start();touch('touchmove',[{x:10,y:130}]);end();check('纵向滚动不打开导航');
+          start();touch('touchmove',[{x:60,y:80},{id:2,x:80,y:90}]);end();check('多指不打开导航');
+          start();touch('touchcancel',[]);end();check('取消手势不打开导航');
+          start();end(target,25);check('轻点和短滑不打开导航');
+          start(target,40);end();check('非边缘右滑不打开导航');
+          start();end(target,-60);check('左滑不打开导航');
+          const input=swipeWorkbench.mainPane.querySelector('textarea');start(input);end(input);check('输入框编辑手势不打开导航');
+          const text=document.createTextNode('选中的聊天文字');target.append(text);
+          const range=document.createRange();range.selectNodeContents(text);getSelection().removeAllRanges();getSelection().addRange(range);
+          start();end();check('选中文字时不打开导航');getSelection().removeAllRanges();text.remove();
+          const dialog=document.createElement('dialog');document.body.append(dialog);dialog.showModal();start();end();check('对话框打开时不触发导航');dialog.close();dialog.remove();
+          return checks;
+        });
+        checks.push(...guards);
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:6,y:220}]});
+        await page.waitForTimeout(650);
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:110,y:220}]});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        check(!await page.locator(drawer).isVisible(),'长按后拖动不打开导航');
+      }else{
+        check(await page.locator(drawer).isVisible()&&!await page.locator('.sidebar-backdrop').isVisible(),'宽屏外侧操作保留并排导航');
+        await page.locator(drawer+' .sidebar-toggle').tap();
+        check(await active()===tabs.first,'宽屏导航开合保留当前标签');
+        await edgeSwipe();check(!await page.locator(drawer).isVisible(),'宽屏不启用抽屉边缘手势');
+      }
+      if(width<=720)check(await active()===tabs.first,'抽屉导航开合保留当前标签');
+      check(await page.locator(main+' textarea').inputValue()===savedDraft,'导航开合保留聊天草稿');
+      await select('chat');
+      if(process.argv.includes('--sidebar-only')){
+        results.push({width,height,provider,passed:checks.length});await context.close();continue;
+      }
+      for(const area of ['.wb-side-messages','.wb-side-head','.wb-side-content']){
         await select('chat');await swipe(timeline,-100);check(await active()===tabs.first,'主聊天消息区左滑');
         await swipe(area,100);check(await active()==='chat','侧边聊天 '+area+' 右滑返回');
       }

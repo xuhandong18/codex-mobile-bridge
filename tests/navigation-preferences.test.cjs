@@ -6,7 +6,7 @@ function fixture(){
   const media={matches:true,addEventListener(name,fn){changes[name]=fn;}};
   const context=vm.createContext({matchMedia:()=>media,BridgeI18n:{t:x=>x},localStorage:{getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)},
     document:{createElement:()=>({setAttribute(){}}),addEventListener(){},querySelector:()=>null},setTimeout:fn=>{tasks.set(++nextTimer,fn);return nextTimer;},clearTimeout:id=>tasks.delete(id),Date,Math,
-    root:{classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},querySelectorAll:()=>[{prepend(button){buttons.push(button);}}],addEventListener(name,fn){events[name]=fn;}}});
+    root:{classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},querySelectorAll:()=>[{prepend(button){buttons.push(button);}}],append(){},addEventListener(name,fn){events[name]=fn;}}});
   vm.runInContext(scripts,context);return {context,values,buttons,classes,media,changes,events,tasks,run:code=>vm.runInContext(code,context)};
 }
 test('sidebar choice survives viewport changes and new controller instances',()=>{
