@@ -127,7 +127,7 @@ test('newly rendered gray dots trigger a read while existing gray dots do not re
   let periodic;const context=vm.createContext({AbortController,setInterval:fn=>periodic=fn,activityBusy:false,activityInFlight:new Set(),state:null,currentId:null,chatKey:(id,host)=>host+'|'+id,t:value=>value,
     $:()=>({querySelectorAll:()=>[button]}),sessionActivity:{indicator:()=>({kind:'unknown',label:'运行状态暂不可用'})},scheduleActivityRefresh:()=>scheduled++,
     el:(tag,cls)=>({classList:{contains:value=>cls.split(' ').includes(value)},setAttribute(){},remove(){dot=null;}})});
-  vm.runInContext(source.slice(source.indexOf('function renderActivity(){'),source.indexOf('async function refreshActivity(')),context);
+  vm.runInContext(source.slice(source.indexOf('function renderActivity('),source.indexOf('async function refreshActivity(')),context);
   vm.runInContext('renderActivity()',context);assert.equal(scheduled,1);
   vm.runInContext('renderActivity()',context);assert.equal(scheduled,1);
   dot=null;context.activityBusy=true;context.activityInFlight.add('local|chat');vm.runInContext('renderActivity()',context);assert.equal(scheduled,1,'An in-flight read already handles the new gray status');
@@ -143,4 +143,43 @@ test('a failed HTTP read releases the lock without automatic resubmission',async
   ui.at(29000);await ui.periodic();assert.equal(ui.activity.indicator('local|visible')?.stale,true);
   ui.at(30000);await ui.periodic();assert.equal(ui.activity.indicator('local|visible')?.kind,'unknown');
   assert.equal(ui.timers.size,0,'Grace and expiry cannot schedule rapid retries');
+});
+
+test('分区只读检查屏幕内已展开项目的隐藏聊天，排除折叠、屏外项目和其他视图',async()=>{
+  const ui=fixture(),groups=[],pages=new Map(),mode={value:'codex'};
+  ui.context.$=id=>id==='sessions'?ui.root:id==='list-mode'?mode:{hidden:false};
+  ui.root.querySelectorAll=selector=>selector==='.session'?ui.nodes:groups;
+  ui.context.projectRows=key=>ui.rows.filter(row=>row.projectKey===key);
+  ui.context.projectPage=key=>{if(!pages.has(key))pages.set(key,{});return pages.get(key);};
+  const group=(key,{open=true,top=0,collapsed=false}={})=>({dataset:{projectKey:key},open,closest:()=>collapsed?{}:null,getClientRects:()=>[{}],getBoundingClientRect:()=>({top,bottom:top+50,left:0,right:240})});
+  groups.push(group('visible'),group('closed',{open:false}),group('outside',{top:400}),group('parent-closed',{collapsed:true}));
+  ui.rows.push(...['visible','closed','outside','parent-closed'].map(projectKey=>({id:'hidden-'+projectKey,host:'local',projectKey})));
+  await ui.refresh();
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[0].body)),{hosts:{local:['visible','hidden-visible']}});
+  mode.value='project';await ui.refresh();assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[1].body)),{hosts:{local:['visible']}});
+  mode.value='codex';groups[0].open=false;await ui.refresh();assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[2].body)),{hosts:{local:['visible']}});
+});
+
+test('分区隐藏聊天分批轮换并为多个可见项目保留份额，在途聊天不重复查询',async()=>{
+  const ui=fixture(),pages=new Map(),groups=['a','b'].map(projectKey=>({dataset:{projectKey},open:true,closest:()=>null,getClientRects:()=>[{}],getBoundingClientRect:()=>({top:10,bottom:40,left:0,right:240})}));
+  ui.nodes.length=0;
+  ui.context.$=id=>id==='sessions'?ui.root:id==='list-mode'?{value:'codex'}:{hidden:false};
+  ui.root.querySelectorAll=selector=>selector==='.session'?[]:groups;
+  ui.rows.push(...['a','b'].flatMap(projectKey=>Array.from({length:100},(_,i)=>({id:projectKey+i,host:'local',projectKey}))));
+  ui.context.projectRows=key=>ui.rows.filter(row=>row.projectKey===key);
+  ui.context.projectPage=key=>{if(!pages.has(key))pages.set(key,{});return pages.get(key);};
+  ui.context.activityInFlight.add('local|a0');
+  for(let i=0;i<4;i++)await ui.refresh();
+  const all=new Set(ui.calls.flatMap(call=>call.body.hosts.local));
+  assert.equal(all.size,199,'除正在查询的聊天外，两项目的全部候选都得到检查');
+  assert.ok(!all.has('a0'));
+  for(const call of ui.calls){assert.equal(call.body.hosts.local.length,64);for(const prefix of ['a','b'])assert.equal(call.body.hosts.local.filter(id=>id.startsWith(prefix)).length,32);}
+});
+
+test('分区状态更新通过列表重绘同步可见聊天，绘制圆点时不递归重绘',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');let renders=0;
+  const context=vm.createContext({$:id=>id==='list-mode'?{value:'codex'}:{querySelectorAll:()=>[]},renderList:()=>renders++,state:null,currentId:null});
+  vm.runInContext(source.slice(source.indexOf('function renderActivity('),source.indexOf('async function refreshActivity(')),context);
+  context.renderActivity();assert.equal(renders,1);
+  context.renderActivity(false);assert.equal(renders,1);
 });

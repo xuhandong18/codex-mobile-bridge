@@ -57,6 +57,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 ## Node 与浏览器
 
+分区项目的状态筛选运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs`，覆盖红绿蓝橙灰及主侧汇总标记、无标记置顶聊天、状态与已读变化、十条普通聊天分页、跨全局页补查、按项目视图隔离，以及屏幕内已展开项目的隐藏状态发现、轮换批量、并发去重和折叠/屏外排除。真实页面验证为 `node scripts/test-project-status-browser.cjs`，在 390、820、1280 像素下实际点击加载更多、折叠重开并刷新，检查未显示聊天的新标记自动出现、加载进度独立及不提交聊天写入；使用合成 API 和已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`。
+
 项目选择器的主题回归也由 `node scripts/test-new-chat-projects-browser.cjs` 执行，在手机窄屏、横屏、平板和电脑等五种尺寸下切换深色、浅色和跟随系统，核对按钮、列表和吸顶分区标题与原生输入框使用相同的主题表面色，检查普通/选中条目的名称、主机和目录文字对比度，以及真实悬停、键盘焦点和切换时的选择保留。`--screenshots` 同时生成带 `-dark` 后缀的深色测试截图。
 
 新建聊天的项目分组选择运行 `node --test tests/new-chat-projects.test.cjs tests/sidebar-sync.test.cjs tests/cli-access-ui.test.cjs`，真实页面验证为 `node scripts/test-new-chat-projects-browser.cjs`。后者以 74 个桌面项目、同名远程项目及两台主机的 CLI 目录，在 320、390、820、1440 像素宽度和手机横屏中逐项对比选择器与侧栏的分区、置顶、原生条目顺序及同步项目顺序；实际操作搜索、方向键/回车、Escape、外部关闭、语言切换和项目旁“＋”预选，覆盖元数据失败回退、无 CLI 项目、取消重开及晚到回包。只使用合成数据，不创建真实聊天或改写导航；可用 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定已有运行时，`--screenshots` 写入 `.tmp/new-chat-projects/`。

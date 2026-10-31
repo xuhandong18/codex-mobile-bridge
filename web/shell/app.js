@@ -121,7 +121,9 @@ function readVisibleChat(view=state){
   sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus,waitingForUser:view.waitingForUser,requests:view.requests,waitingObservedAt:view.waitingObservedAt}],chatKey());
   sessionActivity.read(chatKey(),{sync:false});renderActivity();
 }
-function renderActivity(){let unknownAppeared=false;for(const button of $('sessions').querySelectorAll('.session')){
+function renderActivity(updateList=true){
+  if(updateList&&$('list-mode').value==='codex'){renderList();return;}
+  let unknownAppeared=false;for(const button of $('sessions').querySelectorAll('.session')){
   const key=chatKey(button.dataset.id,button.dataset.host),previous=button.querySelector('.session-indicator'),indicator=sessionActivity.indicator(key);
   if(indicator?.kind==='unknown'&&!previous?.classList.contains('unknown')&&!activityInFlight.has(key))unknownAppeared=true;
   previous?.remove();
@@ -139,6 +141,24 @@ async function refreshActivity(){
     if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key)||activityInFlight.has(key))continue;
     const ids=hosts[host]??=[];if(!ids.includes(id))ids.push(id);
   }
+  // Status-only projects must also discover badges on their hidden chats.
+  // Inspect loaded metadata in bounded, rotating batches; never activate chats.
+  const projects=$('list-mode').value==='codex'?[...root.querySelectorAll('.project-group')].filter(group=>{
+    if(!group.open||group.closest('details:not([open]),[hidden]')||!group.getClientRects().length)return false;
+    const rect=group.getBoundingClientRect();
+    return rect.bottom>top&&rect.top<bottom&&rect.right>left&&rect.left<right;
+  }):[];
+  for(const group of projects){
+    const rows=projectRows(group.dataset.projectKey),page=projectPage(group.dataset.projectKey);
+    const batch=Math.max(1,Math.floor(64/projects.length));let added=0;
+    for(let count=0;count<rows.length&&added<batch;count++){
+      const index=(page.activityOffset||0)%rows.length,row=rows[index],key=chatKey(row.id,row.host),ids=hosts[row.host]??=[];
+      if(ids.length>=64)break;
+      page.activityOffset=index+1;
+      if(!activityInFlight.has(key)&&!ids.includes(row.id)){ids.push(row.id);added++;}
+    }
+  }
+  for(const host of Object.keys(hosts))if(!hosts[host].length)delete hosts[host];
   if(!Object.keys(hosts).length)return;
   if(activityRequests.size>=4){activityRefreshPending=true;return;}
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
@@ -332,22 +352,23 @@ async function toggleProjectPin(row,pinned=!isProjectPinned(row)){
   listRenderStamp='';renderList();
 }
 function projectPage(key){
-  if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,loading:false});
+  if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,statusLimit:0,loading:false,activityOffset:0});
   return projectChatPages.get(key);
 }
 async function loadProjectChats(key){
   const page=projectPage(key);
   if(page.loading||listLoading)return;
-  const target=page.limit+10,filter=listFilterKey;
+  const native=$('list-mode').value==='codex',limitKey=native?'statusLimit':'limit';
+  const target=page[limitKey]+10,filter=listFilterKey;
   page.loading=true;listRenderStamp='';renderList();
   try{
     // The existing API reads cumulative global pages. Keep reading metadata until
     // this project has its next ten rows, even if other projects fill a page.
-    while(projectRows(key).filter(row=>!isProjectPinned(row)).length<target&&listHasMore){
+    while(projectRows(key).filter(row=>native?!sessionActivity.indicator(chatKey(row.id,row.host)):!isProjectPinned(row)).length<target&&listHasMore){
       if(await loadList()===false)return;
       if(projectChatPages.get(key)!==page||filter!==listFilterKey)return;
     }
-    if(projectChatPages.get(key)===page&&filter===listFilterKey)page.limit=target;
+    if(projectChatPages.get(key)===page&&filter===listFilterKey)page[limitKey]=target;
   }catch(error){toast(error.message);}
   finally{page.loading=false;listRenderStamp='';renderList();}
 }
@@ -360,16 +381,19 @@ function collapseSidebarGroups(){
 }
 function renderList(){
   if(typeof syncListModeTabs==='function')syncListModeTabs();
-  const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,listLoading,[...projectChatPages].filter(([,page])=>page.limit!==5||page.loading)]:null;
-  const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position])]);
-  if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity();return;}
+  const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,listLoading,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.loading])]:null;
+  const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,$('list-mode').value==='codex'&&!!sessionActivity.indicator(chatKey(row.id,row.host))])]);
+  if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity(false);return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
+  // A native toggle event can still be queued when a status refresh rebuilds
+  // the list. Prefer the connected node's current state over saved storage.
+  const groupOpen=new Map([...$('sessions').querySelectorAll('.sidebar-section, .project-group')].map(group=>[group.dataset.projectKey?'group:'+group.dataset.projectKey:'sidebar-section:'+group.dataset.section,group.open]));
   $('sessions').replaceChildren();
   const native=$('list-mode').value==='codex',grouped=native||$('list-mode').value==='project', groups=new Map(),sectionRoots=new Map();
   const rememberGroup=(details,key,fallback)=>{
     let saved;try{saved=localStorage.getItem(key);}catch{}
-    details.open=saved==='closed'?false:saved==='open'?true:fallback;
+    details.open=groupOpen.has(key)?groupOpen.get(key):saved==='closed'?false:saved==='open'?true:fallback;
     details.ontoggle=()=>{if(details.isConnected===false)return;try{localStorage.setItem(key,details.open?'open':'closed');}catch{}scheduleActivityRefresh();};
   };
   if(native){
@@ -444,14 +468,20 @@ function renderList(){
     const pins=projectPins.read(key),pinned=items.filter(node=>pins.has(node.dataset.id));
     // listRows is already recent-first; pins always precede ordinary pagination.
     const page=projectPage(key),ordered=items.filter(node=>!pins.has(node.dataset.id));
-    root.replaceChildren(summary,...pinned,...ordered.slice(0,page.limit));
-    if(ordered.length>page.limit||listHasMore){
+    let hasMore=ordered.length>page.limit;
+    if(native){
+      const all=[...pinned,...ordered],marked=node=>!!sessionActivity.indicator(chatKey(node.dataset.id,node.dataset.host));
+      const ordinary=all.filter(node=>!marked(node)),shown=new Set(ordinary.slice(0,page.statusLimit));
+      root.replaceChildren(summary,...all.filter(node=>marked(node)||shown.has(node)));
+      hasMore=ordinary.length>page.statusLimit;
+    }else root.replaceChildren(summary,...pinned,...ordered.slice(0,page.limit));
+    if(hasMore||listHasMore){
       const more=el('button','plain project-load-more',t(page.loading?'正在读取…':'加载更多'));more.type='button';more.disabled=page.loading||!!listLoading;
       more.onclick=()=>loadProjectChats(key);root.append(more);
     }
   }
   if(native)for(const root of sectionRoots.values())if(root.children.length===1&&!sidebarData.sections.some(section=>section.id===root.dataset.section))root.hidden=true;
-  if(!listRows.length&&!groups.size)$('sessions').append(el('p','muted',t(listComplete?'没有找到聊天。':listReadFinished?'暂不可用':'正在读取…')));renderActivity();$('sessions').scrollTop=scrollTop;scheduleActivityRefresh();
+  if(!listRows.length&&!groups.size)$('sessions').append(el('p','muted',t(listComplete?'没有找到聊天。':listReadFinished?'暂不可用':'正在读取…')));renderActivity(false);$('sessions').scrollTop=scrollTop;scheduleActivityRefresh();
 }
 async function loadList(reset=false){
   if(!reset&&(listLoading||!listHasMore))return false;

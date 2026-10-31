@@ -27,7 +27,7 @@ function fixture(){
   const activity=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});
   let now=BASE+12000,activityRows=[],serverRows=[];
   const nodes={
-    search:{value:''},archived:{checked:false},app:{hidden:false,classList:{contains:()=>false}},
+    'list-mode':{value:'recent'},search:{value:''},archived:{checked:false},app:{hidden:false,classList:{contains:()=>false}},
     sessions:{clientWidth:240,clientHeight:300,scrollTop:0,
       getBoundingClientRect:()=>({top:0,left:0,right:240,bottom:300}),
       querySelectorAll:()=>context.listRows.map(value=>({dataset:{id:value.id,host:value.host},

@@ -2,6 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
+const {SessionActivity}=require('../web/features/chat/activity.js');
 const source=fs.readFileSync('web/shell/app.js','utf8');
 const render=source.slice(source.indexOf('function sidebarEntry('),source.indexOf('async function loadList('));
 class Element{
@@ -26,9 +27,10 @@ function fixture(mode='codex'){
   const selected=[];
   const context={$:id=>nodes[id],el:(...args)=>new Element(...args),localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},t:x=>x,BridgeI18n:{locale:()=> 'zh'},
     currentId:null,currentHost:'local',availableSources:[],listSource:'all',listRenderStamp:'',listComplete:true,listReadFinished:true,listHasMore:false,listLoading:0,listFilterKey:'fixture',projectChatPages:new Map(),
-    renderActivity(){},scheduleActivityRefresh(){},sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),sidebarPreferences:{change:async edit=>edit()},
+    renderActivity(){},scheduleActivityRefresh(){},chatKey:(id,host)=>host+'|'+id,sessionActivity:new SessionActivity({storage:{getItem:()=>null,setItem(){}}}),sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),sidebarPreferences:{change:async edit=>edit()},
     sidebarData:{sections:[{id:'custom',name:'Daily',itemKeys:['codex:project:p'],hostSectionIds:{local:'native'}}],projects:[{key:'local|p',name:'Project',host:'local',cwd:'/work'},{key:'local|empty',name:'Empty',host:'local',cwd:'/empty'}]},
     listRows:[{id:'thread',host:'local',projectKey:'local|p',projectName:'Project',title:'Chat',recency:1},{id:'direct',host:'local',projectKey:'local|p',projectName:'Project',thread_section_id:'native',title:'Direct',recency:2}]};
+  context.sessionActivity.update(context.listRows.map(row=>({...row,connected:true,status:'active'})));
   vm.createContext(context);vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.projectPins=vm.runInContext('new SidebarProjectPins(localStorage,"project-pins:")',context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
 }
 test('native sections contain projects, empty projects and directly assigned threads',()=>{
@@ -44,16 +46,17 @@ test('native sections contain projects, empty projects and directly assigned thr
   assert.equal(prevented,true);assert.equal(selected[0].key,'local|p');
 });
 
-test('native project chats keep recent order before pagination despite older desktop positions',()=>{
+test('native project shows all marked chats in recent order despite older desktop positions',()=>{
   const {context,nodes}=fixture();
   context.listRows=Array.from({length:9},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i,section_position:8-i}));
   context.sidebarData.threadOrders={p:{threadIds:context.listRows.map(row=>row.id).reverse()}};
+  context.sessionActivity.update(context.listRows.map(row=>({...row,connected:true,status:'active'})));
   context.renderList();
   const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
   const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
-  assert.deepEqual(ids(),['chat-0','chat-1','chat-2','chat-3','chat-4']);
+  assert.deepEqual(ids(),context.listRows.map(row=>row.id));
   context.listRows[8].recency=200;context.listRows.sort((a,b)=>b.recency-a.recency);context.renderList();
-  assert.deepEqual(ids(),['chat-8','chat-0','chat-1','chat-2','chat-3']);
+  assert.deepEqual(ids(),context.listRows.map(row=>row.id));
 });
 
 test('native direct section and pinned chats keep recent order while projects retain their positions',()=>{
@@ -72,7 +75,7 @@ test('native direct section and pinned chats keep recent order while projects re
   assert.deepEqual(section('pinned').children.slice(1).map(node=>node.dataset.id),['pinned-new','pinned-old']);
 });
 
-for(const mode of ['codex','project'])test('project pins have independent recent order and do not consume ordinary pagination in '+mode+' mode',async()=>{
+for(const mode of ['project'])test('project pins have independent recent order and do not consume ordinary pagination in '+mode+' mode',async()=>{
   const {context,nodes}=fixture(mode);
   context.listRows=Array.from({length:20},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
   const original=JSON.stringify(context.listRows);
@@ -89,7 +92,7 @@ for(const mode of ['codex','project'])test('project pins have independent recent
   await assert.rejects(context.toggleProjectPin(stale),/侧栏条目已变化/);
 });
 
-for(const mode of ['codex','project'])test('project chats ignore legacy manual order and keep pins before recent ordinary chats in '+mode+' mode',()=>{
+for(const mode of ['project'])test('project chats ignore legacy manual order and keep pins before recent ordinary chats in '+mode+' mode',()=>{
   const {context,nodes}=fixture(mode);
   context.listRows=Array.from({length:9},(_,i)=>({id:'chat-'+i,host:'local',projectKey:'local|p',projectName:'Project',title:'Chat '+i,recency:100-i}));
   context.localStorage.setItem('legacy|project-thread-order:local|p',JSON.stringify(context.listRows.map(row=>row.id).reverse()));
@@ -122,6 +125,67 @@ test('each project displays five chats then ten more per click without expanding
     context.listRows[0].title+='!';context.renderList();assert.equal(count('local|p'),expected);
   }
   assert.equal(more('local|p'),undefined);
+});
+
+test('分区项目默认只显示各种状态标记，普通聊天和无标记置顶聊天点击后分页显示',async()=>{
+  const {context,nodes}=fixture();
+  context.listRows=Array.from({length:32},(_,i)=>({id:'chat-'+i,host:'local',title:'Chat '+i,projectKey:'local|p',projectName:'Project',recency:100-i}));
+  context.listRows.push({id:'other',host:'local',title:'Other',projectKey:'local|other',projectName:'Other'});
+  const activity=context.sessionActivity;
+  activity.update([
+    {id:'chat-25',host:'local',connected:true,status:'idle',waitingForUser:true},
+    {id:'chat-26',host:'local',connected:true,status:'active'},
+    {id:'chat-27',host:'local',connected:false,status:'unknown'},
+    {id:'chat-28',host:'local',connected:true,status:'idle',completionToken:'turn:interrupted'},
+  ]);
+  activity.markUnread('local|chat-29');
+  activity.updateSideChat({id:'chat-30',host:'local'},{id:'side',connected:true,status:'active'});
+  context.projectPins.toggle('local|p','chat-26');context.projectPins.toggle('local|p','chat-24');
+  const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
+  const ids=()=>group('local|p').children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  const more=()=>group('local|p').children.find(node=>node.className==='plain project-load-more');
+  context.renderList();
+  const marked=['chat-26','chat-25','chat-27','chat-28','chat-29','chat-30'];
+  assert.deepEqual(ids(),marked,'红绿蓝橙灰及侧边汇总标记均默认显示，带标记的置顶优先');
+  assert.equal(group('local|other').children.filter(node=>node.dataset.id).length,0);
+  const ordinary=['chat-24',...Array.from({length:24},(_,i)=>'chat-'+i),'chat-31'];
+  for(const count of [10,20,26]){
+    await more().onclick();
+    assert.deepEqual(new Set(ids()),new Set([...marked,...ordinary.slice(0,count)]));
+    assert.equal(ids()[0],'chat-24','加载后仍保持项目置顶优先');
+    assert.equal(group('local|other').children.filter(node=>node.dataset.id).length,0,'加载进度不影响其他项目');
+    context.listRows[0].title+='!';context.renderList();
+    assert.equal(ids().length,marked.length+count,'刷新保留加载进度');
+  }
+  assert.equal(more(),undefined);
+});
+
+test('状态增减和已读操作立即改变分区项目默认列表，其他视图保留原分页',()=>{
+  const {context,nodes}=fixture();
+  const project=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const ids=()=>project().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['thread']);
+  context.sessionActivity.update([{id:'thread',host:'local',connected:true,status:'idle'}]);context.renderList();
+  assert.deepEqual(ids(),[]);
+  context.sessionActivity.markUnread('local|thread');context.renderList();assert.deepEqual(ids(),['thread']);
+  context.sessionActivity.read('local|thread',{explicit:true});context.renderList();assert.deepEqual(ids(),[]);
+  nodes['list-mode'].value='project';context.renderList();assert.deepEqual(ids(),['thread','direct']);
+  nodes['list-mode'].value='codex';context.renderList();assert.deepEqual(ids(),[],'按项目的默认五条不会泄漏到分区视图');
+});
+
+test('分区加载更多只计无标记聊天，并跨全局分页补足十条',async()=>{
+  const {context,nodes}=fixture();context.listHasMore=true;
+  let reads=0;
+  context.loadList=async()=>{
+    reads++;
+    if(reads===1){context.listRows.push({...context.listRows[0],id:'marked'});context.sessionActivity.markUnread('local|marked');}
+    else{context.listRows.push(...Array.from({length:12},(_,i)=>({...context.listRows[0],id:'idle-'+i})));context.listHasMore=false;}
+    return true;
+  };
+  await context.loadProjectChats('local|p');assert.equal(reads,2);
+  const group=nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  assert.equal(group.children.filter(node=>node.dataset.id).length,12,'两条带标记聊天不占十条普通聊天名额');
+  assert.equal(context.projectPage('local|p').statusLimit,10);
 });
 
 test('project pagination continues past global pages containing only other projects and retries failures',async()=>{
@@ -162,6 +226,15 @@ test('a detached project cannot overwrite the remembered open state with a delay
   const current=nodes.sessions.children[0];current.open=true;current.ontoggle();
   old.isConnected=false;old.ontoggle();
   context.listRows[0].title='Again';context.renderList();assert.equal(nodes.sessions.children[0].open,true);
+});
+
+test('分区状态刷新保留刚展开但尚未派发 toggle 事件的项目',()=>{
+  const {context,nodes}=fixture();
+  const project=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  project().open=false;project().ontoggle();
+  project().open=true;
+  context.listRows[0].title='Updated';context.renderList();
+  assert.equal(project().open,true,'立即采用当前节点的展开状态，不被旧的已折叠存储覆盖');
 });
 
 function bindSidebarMenu({context}){

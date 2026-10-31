@@ -1,0 +1,86 @@
+'use strict';
+// 使用生产页面与合成只读接口，不连接真实客户端或聊天。
+const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
+const {chromium}=require('playwright');
+const web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
+const rows=Array.from({length:40},(_,i)=>({id:'11111111-1111-4111-8111-'+String(i+1).padStart(12,'0'),host:'local',title:'项目聊天 '+i,
+  cwd:'/fixture',projectKey:'local|fixture',projectName:'状态项目',recency:100-i,access:{source:'desktop'}}));
+rows.push(...Array.from({length:7},(_,i)=>({...rows[i],id:'22222222-2222-4222-8222-'+String(i+1).padStart(12,'0'),projectKey:'local|other',projectName:'其他项目'})));
+let states=new Map();const writes=[],errors=[],checks=[],reads=[];
+const check=(value,expected,label)=>{assert.deepEqual(value,expected,label);checks.push(label);};
+const setState=(index,value)=>states.set(rows[index].id,value);
+const reset=()=>{states=new Map();setState(25,{status:'active'});setState(26,{waitingForUser:true});setState(27,{completionToken:'blue:completed'});setState(28,{completionToken:'orange:failed'});setState(29,{connected:false,status:'unknown'});setState(30,{sideChats:[{id:'side',connected:true,status:'active'}]});};
+const server=http.createServer(async(req,res)=>{
+  const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
+  if(p.startsWith('/api/')){
+    let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):null;
+    if(req.method!=='GET'&&p!=='/api/activity')writes.push(p);
+    let value={};
+    if(p==='/api/auth')value={authenticated:true,csrf:'fixture',listCacheIdentity:'d'.repeat(64),computer:{name:'Fixture'},uiLanguage:'zh'};
+    else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
+    else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
+    else if(p==='/api/sidebar-preferences')value={revision:0,fields:{}};
+    else if(p==='/api/sessions')value={sessions:rows,complete:true,remoteHosts:[],availableSources:['desktop'],sidebar:{sections:[{id:'work',name:'工作',itemKeys:['codex:project:fixture','codex:project:other']}],projects:[{key:'local|fixture',host:'local',name:'状态项目',cwd:'/fixture'},{key:'local|other',host:'local',name:'其他项目',cwd:'/other'}]}};
+    else if(p==='/api/activity'){
+      reads.push(body.hosts);
+      value={sessions:(body.hosts.local||[]).map(id=>({id,host:'local',connected:true,status:'idle',...states.get(id)}))};
+    }
+    res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));return;
+  }
+  const files=assets[p]||((p.startsWith('/vendor/')||/^\/client-icons\/(codex|claude|deepseek)\.png$/.test(p))&&!p.includes('..')?p.slice(1):null);
+  if(!files){res.writeHead(404);res.end();return;}
+  res.setHeader('Content-Type',p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':p==='/'?'text/html; charset=utf-8':'application/octet-stream');
+  res.end(Buffer.concat([].concat(files).map(file=>fs.readFileSync(path.join(web,file)))));
+});
+(async()=>{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
+  try{
+    browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
+    for(const width of [390,820,1280]){
+      reset();const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();page.setDefaultTimeout(10000);
+      page.on('pageerror',error=>errors.push(error.message));
+      await context.addInitScript(()=>{localStorage.setItem('list-mode','codex');localStorage.setItem('navigation:sidebar','open');});
+      await page.goto('http://127.0.0.1:'+server.address().port+'/');
+      const group=page.locator('#sessions .project-group[data-project-key="local|fixture"]'),other=page.locator('#sessions .project-group[data-project-key="local|other"]');
+      await page.waitForFunction(()=>listReadFinished&&document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===6);
+      const ids=()=>group.locator(':scope > .session').evaluateAll(nodes=>nodes.map(node=>node.dataset.id));
+      check(await ids(),rows.slice(25,31).map(row=>row.id),'默认显示全部红绿蓝橙灰及侧边状态 '+width);
+      check(await group.locator('.session-indicator').evaluateAll(nodes=>nodes.map(node=>node.className.split(' ').at(-1))),['running','awaiting','completed','ended','unknown','running'],'圆点类型与筛选一致 '+width);
+      check(await other.locator(':scope > .session').count(),0,'无状态项目只保留加载更多 '+width);
+      check(await group.locator('.project-load-more').isVisible(),true,'默认仍可加载普通聊天 '+width);
+      setState(4,{status:'active'});await page.evaluate(()=>refreshActivity());
+      await page.waitForFunction(id=>!!document.querySelector('.session[data-id="'+id+'"] .running'),rows[4].id);
+      check((await ids())[0],rows[4].id,'隐藏聊天开始运行后自动出现 '+width);
+      setState(4,{status:'idle'});await page.evaluate(()=>refreshActivity());
+      await page.waitForFunction(id=>!document.querySelector('.session[data-id="'+id+'"]'),rows[4].id);
+      await page.evaluate(id=>{sessionActivity.read('local|'+id,{explicit:true});renderActivity();},rows[27].id);
+      check((await ids()).includes(rows[27].id),false,'已读且没有其他状态的聊天回到加载更多 '+width);
+      await group.locator('.project-load-more').click();
+      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===15);
+      check(await ids(),[...rows.slice(0,10),...rows.slice(25,27),...rows.slice(28,31)].map(row=>row.id),'首次点击增加十条普通聊天并保持最近顺序 '+width);
+      check(await other.locator(':scope > .session').count(),0,'项目加载进度独立 '+width);
+      await group.locator(':scope > summary .project-name').click();
+      await page.waitForFunction(()=>!document.querySelector('.project-group[data-project-key="local|fixture"]').open);
+      await group.locator(':scope > summary .project-name').click();
+      await page.waitForFunction(()=>document.querySelector('.project-group[data-project-key="local|fixture"]').open);
+      check(await group.locator(':scope > .session').count(),15,'折叠再展开保留已加载条数 '+width);
+      await page.evaluate(()=>loadList(true));
+      check(await group.locator(':scope > .session').count(),15,'自动列表刷新保留已加载条数 '+width);
+      for(const count of [25,35,40]){
+        await group.locator('.project-load-more').click();
+        await page.waitForFunction(count=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===count,count);
+      }
+      check(await group.locator('.project-load-more').count(),0,'加载完毕移除加载更多 '+width);
+      await page.locator('#list-mode').evaluate(node=>{node.value='project';node.dispatchEvent(new Event('change'));});
+      check(await group.locator(':scope > .session').count(),5,'按项目视图仍默认五条 '+width);
+      await page.locator('#list-mode').evaluate(node=>{node.value='codex';node.dispatchEvent(new Event('change'));});
+      check(await group.locator(':scope > .session').count(),40,'切回分区保留该视图加载进度 '+width);
+      await page.reload();await page.waitForFunction(()=>listReadFinished&&document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===5);
+      check(await group.locator(':scope > .session').count(),5,'新页面恢复仅显示状态聊天 '+width);
+      await context.close();
+    }
+    check(writes,[],'所有操作均未创建、激活聊天或提交业务写入');check(errors,[],'浏览器无脚本异常');
+    check(reads.every(hosts=>(hosts.local||[]).length<=64),true,'状态发现遵守单主机批量上限');
+    console.log(JSON.stringify({passed:checks.length,checks},null,2));
+  }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
+})().catch(error=>{console.error(error);server.close();process.exitCode=1;});
