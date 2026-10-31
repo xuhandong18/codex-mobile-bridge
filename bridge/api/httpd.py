@@ -844,7 +844,10 @@ class Handler(BaseHTTPRequestHandler):
                         body['archiveId'] = query['archiveId'][0]
                     if action == 'history':
                         body['offset'] = int(query.get('offset', ['0'])[0])
-                return self.output(200, bridge.side_chat(side_match[1], owner, action, body))
+                result = bridge.side_chat(side_match[1], owner, action, body)
+                if not write and result.get('id') and not desktop_workspace:
+                    self.chat_snapshot(bridge, side_match[1] + '/side/' + result['id'], result)
+                return self.output(200, result)
             agent_match = re.fullmatch(r"/api/sessions/([0-9a-f-]{36})/subagents", path)
             if agent_match:
                 if write: return self.output(405, {'error': '子智能体面板仅查看现有任务'})
@@ -987,7 +990,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.output(200, bridge.linux_permission_options(thread_id))
                 if action == 'timeline':
                     options = {key: query[key][0] for key in ('around', 'after') if query.get(key)}
-                    return self.output(200, bridge.timeline_read(thread_id, limit=int(query.get('limit', ['20'])[0]), before=query.get('before', [None])[0], **options))
+                    result = bridge.timeline_read(thread_id, limit=int(query.get('limit', ['20'])[0]), before=query.get('before', [None])[0], **options)
+                    return self.output(200, self.chat_snapshot(bridge, thread_id, result))
                 if action == 'message-index':
                     return self.output(200, bridge.message_index(thread_id, cursor=query.get('cursor', [None])[0], limit=int(query.get('limit', ['200'])[0]), since=query.get('since', [None])[0]))
                 if action == 'detail':
@@ -999,7 +1003,7 @@ class Handler(BaseHTTPRequestHandler):
                 if action is None:
                     if query.get('metadata') == ['1']:
                         return self.output(200, bridge.session_metadata(thread_id))
-                    return self.output(200, bridge.view(thread_id, background=True))
+                    return self.output(200, self.chat_snapshot(bridge, thread_id, bridge.view(thread_id, background=True)))
                 if action == "catalog":
                     kind = query.get("kind", [None])[0]
                     try:
@@ -1210,6 +1214,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def chat_snapshot(self, bridge, thread_id, value):
+        if isinstance(getattr(bridge, 'host', None), str):
+            self.server.chat_read_state.observe(bridge.host, thread_id, value.get('meta', value))
+        return value
+
     def poll(self, bridge, thread_id, after):
         session = bridge.session(thread_id, background=True)
         with session.condition:
@@ -1220,7 +1229,7 @@ class Handler(BaseHTTPRequestHandler):
                 changed = session.sequence != after
             if not self.authorized():
                 return
-            self.output(200, {"state": bridge.view(thread_id, attach=False, background=True) if changed else None})
+            self.output(200, {"state": self.chat_snapshot(bridge, thread_id, bridge.view(thread_id, attach=False, background=True)) if changed else None})
         finally:
             with session.condition:
                 session.viewers -= 1
@@ -1234,7 +1243,7 @@ class Handler(BaseHTTPRequestHandler):
             with session.condition:
                 session.condition.wait_for(lambda: session.sequence != after or epoch != session.timeline.epoch or bridge.closed.is_set(), timeout=12)
             if self.authorized():
-                self.output(200, bridge.timeline_read(thread_id, 'changes', after=after, epoch=epoch, start=start))
+                self.output(200, self.chat_snapshot(bridge, thread_id, bridge.timeline_read(thread_id, 'changes', after=after, epoch=epoch, start=start)))
         finally:
             with session.condition:
                 session.viewers -= 1
@@ -1267,7 +1276,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                     break
                 if updated:
-                    view = bridge.view(thread_id, attach=False, background=True)
+                    view = self.chat_snapshot(bridge, thread_id, bridge.view(thread_id, attach=False, background=True))
                     payload = json.dumps(view, ensure_ascii=False, separators=(",", ":"))
                     self.wfile.write(f"id: {sequence}\nevent: state\ndata: {payload}\n\n".encode())
                 else:

@@ -3,6 +3,50 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {SessionActivity}=require('../web/features/chat/activity.js');
 const source=fs.readFileSync(require.resolve('../web/shell/app.js'),'utf8');
 
+test('手机首次看到平板产生的未读完成记录时显示蓝点，旧历史不制造未读',()=>{
+ const values=new Map(),storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};
+ let phone=new SessionActivity({storage});
+ const done={id:'chat',host:'local',connected:true,status:'idle',turnId:'tablet-result',turnStatus:'completed',readCompletions:[]};
+ phone.update([done]);assert.equal(phone.indicator('local|chat'),null,'没有新完成证据的旧历史只建立基线');
+ phone.update([{...done,completionToken:'tablet-result:completed'}]);
+ assert.equal(phone.indicator('local|chat')?.kind,'completed','手机未观察运行过程也应显示共享未读蓝点');
+ phone=new SessionActivity({storage});assert.equal(phone.indicator('local|chat')?.kind,'completed');
+ phone.update([{...done,completionToken:'tablet-result:completed',readCompletions:['tablet-result:completed']}]);
+ assert.equal(phone.indicator('local|chat'),null,'其他设备实际阅读后才清除蓝点');
+ phone.update([{...done,completionToken:'tablet-result:completed'}]);assert.equal(phone.indicator('local|chat'),null,'旧响应不能撤销已读');
+ const fresh=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});
+ fresh.update([{...done,completionToken:'tablet-result:completed'}]);
+ assert.equal(fresh.indicator('local|chat')?.kind,'completed','完全没有本地记录的新设备也显示蓝点');
+ fresh.update([{id:'chat',host:'local',connected:false,status:'unknown',completionToken:'tablet-result:completed'}]);
+ assert.equal(fresh.indicator('local|chat')?.kind,'completed','短暂断线保留已确认完成');
+});
+
+test('首次加载的侧边共享完成独立显示，已读与主机身份仍隔离',()=>{
+ const activity=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});
+ const parent={id:'chat',host:'local',connected:true,status:'active',turnId:'main',turnStatus:'inProgress'};
+ const side={id:'side',connected:true,status:'idle',turnId:'one',turnStatus:'failed',completionToken:'one:failed',readCompletions:[]};
+ activity.update([{...parent,sideChats:[side]}]);
+ assert.equal(activity.indicator('local|chat')?.kind,'ended');
+ activity.update([{...parent,host:'remote',sideChats:[{...side,readCompletions:['one:failed']}]}]);
+ assert.equal(activity.indicator('remote|chat')?.kind,'running');
+ assert.equal(activity.indicator('local|chat')?.kind,'ended');
+ activity.update([{...parent,sideChats:[{...side,readCompletions:['one:failed']}]}]);
+ assert.equal(activity.indicator('local|chat')?.kind,'running');
+});
+
+test('共享完成摘要重复到达不能覆盖较新的本地未读，也不能复活已确认的旧蓝点',()=>{
+ const activity=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});
+ const done={id:'chat',host:'local',connected:true,status:'idle',turnId:'old',turnStatus:'completed',completionToken:'old:completed'};
+ activity.update([done]);
+ activity.update([{...done,turnId:'new',completionToken:undefined}]);
+ assert.equal(activity.rows['local|chat'].pending,'new:completed');
+ activity.update([{...done,connected:false,status:'unknown'}]);
+ assert.equal(activity.rows['local|chat'].pending,'new:completed','较旧的共享标记不能顶掉已经收到的新结果');
+ activity.read('local|chat',{explicit:true});
+ activity.update([{...done,turnId:'new'}]);
+ assert.equal(activity.indicator('local|chat'),null,'读完新结果后重复的旧共享标记不能再次提醒');
+});
+
 test('平板读完后，手机从共享已读记录清除相同轮次的蓝点，刷新不复活',()=>{
  const storage=()=>{const values=new Map();return {getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)};};
  const receipts=[],saved=storage(),tablet=new SessionActivity({storage:storage(),onRead:(key,row)=>receipts.push(row.turnId+':'+row.turnStatus)});

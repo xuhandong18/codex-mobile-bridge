@@ -154,6 +154,21 @@ class ReadStateHttpTests(unittest.TestCase):
         self.server.bridge.store.get.assert_called_once_with(SID)
         self.assertNotIn('readCompletions', self.server.bridge.activity.return_value[0])
 
+    def test_tablet_timeline_completion_reaches_phone_without_a_running_phone_baseline(self):
+        tablet, phone = self.login(), self.login()
+        view = {'connected': True, 'status': 'active', 'turnId': 'tablet-turn', 'turnStatus': 'inProgress', 'waitingObservedAt': 1}
+        self.server.bridge.timeline_read = Mock(return_value={'meta': view, 'rows': []})
+        path = f'/api/sessions/{SID}/timeline'
+        self.assertEqual(self.request('GET', path, headers=tablet)[0], 200)
+        view = {**view, 'status': 'idle', 'turnStatus': 'completed', 'waitingObservedAt': 2}
+        self.server.bridge.timeline_read.return_value = {'meta': view, 'rows': []}
+        self.assertEqual(self.request('GET', path, headers=tablet)[0], 200)
+        self.server.bridge.activity = Mock(return_value=[{'id': SID, 'host': 'local', **view}])
+        result = self.request('POST', '/api/activity', {'hosts': {'local': [SID]}}, phone)
+        self.assertEqual(result[0], 200)
+        self.assertEqual(result[2]['sessions'][0]['completionToken'], 'tablet-turn:completed')
+        self.assertEqual(result[2]['sessions'][0]['readCompletions'], [], '仅返回聊天内容不能登记用户已读')
+
     def test_side_read_has_its_own_receipt_and_never_calls_native_main_read(self):
         headers = self.login()
         manager = self.server.desktop_sessions = Mock()
@@ -187,6 +202,56 @@ class ReadStateHttpTests(unittest.TestCase):
 
 
 class SharedReadTests(unittest.TestCase):
+    def test_new_completion_is_shared_with_a_late_device_but_initial_history_is_not(self):
+        store = SharedReadState(None)
+        self.addCleanup(store.close)
+        done = {'id': SID, 'host': 'local', 'connected': True, 'status': 'idle',
+                'turnId': 'old', 'turnStatus': 'completed', 'waitingObservedAt': 1}
+        self.assertIsNone(store.activity([done])[0].get('completionToken'))
+        running = {**done, 'status': 'active', 'turnId': 'new', 'turnStatus': 'inProgress', 'waitingObservedAt': 2}
+        store.activity([running])
+        finished = {**done, 'turnId': 'new', 'waitingObservedAt': 3}
+        self.assertEqual(store.activity([finished])[0]['completionToken'], 'new:completed')
+        late = store.activity([finished])[0]
+        self.assertEqual(late['completionToken'], 'new:completed')
+        self.assertEqual(late['readCompletions'], [])
+        store.remember('local', SID, body(turnId='new'))
+        self.assertEqual(store.activity([finished])[0]['readCompletions'], ['new:completed'])
+        store.activity([running])  # A delayed running response must not replace the latest observation.
+        self.assertEqual(store.activity([done])[0]['completionToken'], 'new:completed')
+        self.assertIsNone(store.activity([{**finished, 'host': 'remote'}])[0].get('completionToken'))
+        self.assertNotIn('completionToken', finished, 'Cached summaries must not be mutated')
+
+    def test_completion_observed_in_chat_view_survives_restart_and_side_is_independent(self):
+        with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as directory:
+            store = SharedReadState(directory)
+            main = {'connected': True, 'status': 'active', 'turns': [{'id': 'main', 'status': 'inProgress'}]}
+            store.observe('local', SID, main)
+            store.observe('local', SID, {**main, 'status': 'idle', 'turns': [{'id': 'main', 'status': 'completed'}]})
+            side = {'id': 'one', 'connected': True, 'status': 'active', 'turnId': 'side', 'turnStatus': 'inProgress'}
+            store.activity([{'id': SID, 'host': 'local', 'sideChats': [side]}])
+            store.close()
+            store = SharedReadState(directory)
+            try:
+                row = store.activity([{'id': SID, 'host': 'local', 'connected': False, 'status': 'unknown',
+                    'sideChats': [{**side, 'status': 'idle', 'turnStatus': 'interrupted'}]}])[0]
+                self.assertEqual(row['completionToken'], 'main:completed')
+                self.assertEqual(row['sideChats'][0]['completionToken'], 'side:interrupted')
+                self.assertEqual(row['readCompletions'], [])
+                self.assertEqual(row['sideChats'][0]['readCompletions'], [])
+            finally:
+                store.close()
+
+    def test_main_view_without_descendant_fields_cannot_complete_a_running_subtree(self):
+        store = SharedReadState(None)
+        self.addCleanup(store.close)
+        row = {'id': SID, 'host': 'local', 'connected': True, 'parentStatus': 'idle', 'status': 'active',
+               'turnId': 'main', 'turnStatus': 'completed', 'runningSubagents': 1}
+        store.activity([row])
+        store.observe('local', SID, {k: v for k, v in {**row, 'status': 'idle'}.items() if k not in ('runningSubagents', 'parentStatus')})
+        self.assertIsNone(store.activity([row])[0]['completionToken'])
+        self.assertEqual(store.activity([{**row, 'status': 'idle', 'runningSubagents': 0}])[0]['completionToken'], 'main:completed')
+
     def test_receipts_survive_restart_and_are_isolated_by_host_chat_and_side(self):
         with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as directory:
             store = SharedReadState(directory)

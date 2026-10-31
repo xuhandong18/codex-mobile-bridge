@@ -1,4 +1,5 @@
 """A read acknowledgement identifies exactly the terminal turn the user saw."""
+import json
 import sqlite3
 import threading
 import uuid
@@ -16,6 +17,8 @@ class SharedReadState:
         self.db.execute('CREATE TABLE IF NOT EXISTS completions ('
                         'sequence INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT NOT NULL, '
                         'chat TEXT NOT NULL, token TEXT NOT NULL, UNIQUE(host, chat, token))')
+        self.db.execute('CREATE TABLE IF NOT EXISTS completion_activity ('
+                        'host TEXT NOT NULL, chat TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(host, chat))')
         self.db.commit()
 
     def close(self):
@@ -40,15 +43,53 @@ class SharedReadState:
     def activity(self, rows):
         # Copy cached summaries: a late activity reply must not mutate another reader.
         result = []
-        with self.lock:
+        with self.lock, self.db:
             for row in rows:
                 host, chat = row['host'], row['id']
-                item = {**row, 'readCompletions': self.read(host, chat)}
+                item = {**row, 'readCompletions': self.read(host, chat), 'completionToken': self._observe(host, chat, row)}
                 if isinstance(row.get('sideChats'), list):
-                    item['sideChats'] = [{**child, 'readCompletions': self.read(host, chat + '/side/' + child['id'])}
+                    item['sideChats'] = [{**child, 'readCompletions': self.read(host, chat + '/side/' + child['id']),
+                                         'completionToken': self._observe(host, chat + '/side/' + child['id'], child)}
                                          for child in row['sideChats']]
                 result.append(item)
         return result
+
+    def observe(self, host, chat, row):
+        """Share new completions even with devices that never saw the run.
+
+        The first confirmed snapshot only establishes a baseline. Observations
+        never acknowledge reading, activate an owner, or load any chat history.
+        """
+        with self.lock, self.db:
+            return self._observe(host, chat, row)
+
+    def _observe(self, host, chat, row):
+        saved = self.db.execute('SELECT state FROM completion_activity WHERE host=? AND chat=?', (host, chat)).fetchone()
+        previous = json.loads(saved[0]) if saved else {}
+        completion = previous.get('completion')
+        if not (row.get('activityConnected') or row.get('connected')) or row.get('status') in (None, 'unknown'):
+            return completion
+        observed = row.get('waitingObservedAt')
+        if observed is not None and previous.get('observedAt') is not None and observed < previous['observedAt']:
+            return completion
+        last = (row.get('turns') or [{}])[-1]
+        turn_id, turn_status = row.get('turnId') or last.get('id'), row.get('turnStatus') or last.get('status')
+        parent_status = row.get('parentStatus', row['status'])
+        terminal = parent_status != 'active' and turn_status in ('completed', 'failed', 'interrupted')
+        token = turn_id + ':' + turn_status if terminal and turn_id else previous.get('token')
+        descendants = row.get('runningSubagents', previous.get('runningSubagents', 0))
+        subtree_finished = previous.get('runningSubagents', 0) > 0 and not descendants
+        was_active = previous.get('parentStatus') == 'active' or subtree_finished
+        if terminal and turn_id and previous and (was_active or previous.get('turnKnown') and token != previous.get('token')):
+            completion = token
+        current = {'parentStatus': parent_status, 'runningSubagents': descendants, 'token': token,
+                   'turnKnown': bool(turn_status) or previous.get('turnKnown', False), 'completion': completion,
+                   'observedAt': observed if observed is not None else previous.get('observedAt')}
+        if current != previous:
+            self.db.execute('INSERT INTO completion_activity(host, chat, state) VALUES (?, ?, ?) '
+                            'ON CONFLICT(host, chat) DO UPDATE SET state=excluded.state',
+                            (host, chat, json.dumps(current, separators=(',', ':'))))
+        return completion
 
 
 def validate_read_state(body, *, codex=False):

@@ -22,6 +22,13 @@ class SessionActivity {
         if(previous.readCompletions?.includes(previous.pending))previous.pending=null;
         this.rows[key]=previous;
       }
+      // A different device may have observed the run. Gateway completion
+      // evidence is independent of this device's historical baseline.
+      if(row.completionToken&&row.completionToken!==previous?.completionToken){
+        previous={...previous,completionToken:row.completionToken};
+        if(!previous.readCompletions?.includes(row.completionToken))previous.pending=row.completionToken;
+        this.rows[key]=previous;
+      }
       const running=parentStatus==='active'||row.runningSubagents>0;
       const terminal=parentStatus!=='active'&&['completed','failed','interrupted'].includes(row.turnStatus);
       if(!(row.activityConnected??row.connected)||!row.status||row.status==='unknown'){
