@@ -261,8 +261,54 @@ function bindSidebarMenu({context}){
   vm.runInContext(fs.readFileSync('web/features/chat/sidebar-management.js','utf8'),context);
   context.sidebarManagement=new context.SidebarManagementUI({snapshot:()=>context.sidebarData});
   context.ChatContextMenu=class{constructor(_root,items){context.menuItems=items;}};
-  vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nfunction currentSidebarEntry(')),context);
+  vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nasync function changeSidebarPlacement(')),context);
 }
+
+for(const native of [true,false])test('项目菜单隐藏无状态聊天并保留其他项目和加载更多入口，原生菜单='+native,async()=>{
+  const f=fixture(),{context,nodes}=f;
+  context.listRows.push(...Array.from({length:12},(_,i)=>({...context.listRows[0],id:'idle-'+i})),{...context.listRows[0],id:'other',projectKey:'local|other'});
+  context.sessionActivity.markUnread('local|idle-11');
+  context.renderList();bindSidebarMenu(f);
+  if(!native)context.sidebarManagement=null;
+  await context.loadProjectChats('local|p');await context.loadProjectChats('local|other');
+  const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
+  const ids=key=>group(key).children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  context.sessionActivity.read('local|idle-11',{explicit:true});context.renderList();
+  const beforeRows=JSON.stringify(context.listRows),other=ids('local|other');
+  assert.ok(ids('local|p').includes('idle-0'));
+  group('local|p').open=false;group('local|p').ontoggle();
+  const action=context.menuItems(group('local|p').children[0]).find(row=>row.label==='隐藏无状态聊天');
+  assert.ok(action);action.run();
+  assert.deepEqual(ids('local|p'),['thread'],'收起加载出的普通聊天及已读保留聊天，保留有状态聊天');
+  assert.equal(group('local|p').open,false,'保留项目折叠状态');
+  assert.deepEqual(ids('local|other'),other,'只收起当前项目');
+  assert.equal(JSON.stringify(context.listRows),beforeRows,'只修改本页面显示，不改聊天和归属');
+  context.listRows[0].title='Updated';context.renderList();assert.deepEqual(ids('local|p'),['thread']);
+  assert.ok(group('local|p').children.some(node=>node.className==='plain project-load-more'));
+  await context.loadProjectChats('local|p');assert.equal(ids('local|p').length,11,'仍可再次加载十条普通聊天');
+});
+
+test('隐藏无状态聊天使在途加载更多失效，旧回包不会重新展开',async()=>{
+  const f=fixture(),{context,nodes}=f;bindSidebarMenu(f);context.listHasMore=true;
+  let finish;context.loadList=()=>new Promise(resolve=>finish=resolve);
+  const pending=context.loadProjectChats('local|p');
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  context.menuItems(group().children[0]).find(row=>row.label==='隐藏无状态聊天').run();
+  context.listRows.push(...Array.from({length:15},(_,i)=>({...context.listRows[0],id:'late-'+i})));
+  context.listHasMore=false;finish(true);await pending;
+  assert.equal(context.projectPage('local|p').statusLimit,0);
+  assert.deepEqual(group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id),['thread']);
+});
+
+test('无状态聊天隐藏入口仅属于分区项目，过期项目操作不会影响现有项目',()=>{
+  const f=fixture(),{context,nodes}=f;bindSidebarMenu(f);
+  const group=nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const action=context.menuItems(group.children[0]).find(row=>row.label==='隐藏无状态聊天');
+  assert.ok(!context.menuItems(group.children.find(node=>node.dataset.id)).some(row=>row.label==='隐藏无状态聊天'));
+  nodes['list-mode'].value='project';assert.ok(!context.menuItems(group.children[0]).some(row=>row.label==='隐藏无状态聊天'));
+  context.sidebarData.projects=[];context.listRows=[];
+  assert.throws(()=>action.run(),/侧栏条目已变化/);
+});
 
 for(const mode of ['codex','project'])test('project and chat menus do not offer manual chat ordering in '+mode+' mode',()=>{
   const f=fixture(mode),{context,nodes}=f;

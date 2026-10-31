@@ -84,6 +84,27 @@ const server=http.createServer(async(req,res)=>{
       check(await group.locator(':scope > .session').count(),5,'按项目视图仍默认五条 '+width);
       await page.locator('#list-mode').evaluate(node=>{node.value='codex';node.dispatchEvent(new Event('change'));});
       check(await group.locator(':scope > .session').count(),40,'切回分区保留该视图加载进度 '+width);
+      await other.locator('.project-load-more').click();
+      check(await other.locator(':scope > .session').count(),7,'其他项目可独立展开普通聊天 '+width);
+      const projectName=group.locator(':scope > summary .project-name');await projectName.scrollIntoViewIfNeeded();
+      await page.evaluate(async()=>{await refreshActivity();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));});
+      if(width===1280)await projectName.click({button:'right'});
+      else{
+        const rect=await projectName.boundingBox(),event={pointerId:7,pointerType:'touch',isPrimary:true,clientX:rect.x+10,clientY:rect.y+10,bubbles:true};
+        await projectName.dispatchEvent('pointerdown',event);
+        await page.getByRole('dialog',{name:'侧栏操作',exact:true}).waitFor();
+        await projectName.dispatchEvent('pointerup',event);
+      }
+      await page.getByRole('dialog',{name:'侧栏操作',exact:true}).getByRole('button',{name:'隐藏无状态聊天',exact:true}).click();
+      check(await ids(),[rows[25],rows[26],rows[28],rows[30]].map(row=>row.id),'项目右键或长按隐藏加载出的普通聊天和已读保留聊天 '+width);
+      check(await other.locator(':scope > .session').count(),7,'隐藏操作不影响其他项目 '+width);
+      await page.evaluate(()=>loadList(true));
+      check(await group.locator(':scope > .session').count(),4,'刷新不会重新展开刚隐藏的聊天 '+width);
+      // 等待触屏长按后的防穿透保护结束，再进行下一次独立点击。
+      if(width!==1280)await page.waitForTimeout(950);
+      await group.locator('.project-load-more').click();
+      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===14);
+      check(await group.locator(':scope > .session').count(),14,'隐藏后仍可重新加载十条普通聊天 '+width);
       activityGate=new Promise(resolve=>releaseActivity=resolve);
       await page.reload();await page.waitForFunction(()=>listReadFinished&&activityBusy);
       check(await ids(),[rows[25],rows[26],rows[28],rows[30]].map(row=>row.id),'刷新页面后只恢复明确状态，灰点和已读保留均不展开 '+width);

@@ -225,6 +225,7 @@ const en={
 "在项目内置顶":"Pin in project",
 "取消项目内置顶":"Unpin from project",
 "项目内置顶":"Pinned in project",
+"隐藏无状态聊天":"Hide chats without status",
 "无法保存项目内置顶，请检查设备存储权限。":"Could not save project pins. Check device storage permissions.",
 "添加到会话":"Add to chat",
 "打开导航栏":"Open sidebar",

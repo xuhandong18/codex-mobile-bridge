@@ -359,6 +359,12 @@ function projectPage(key){
   if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,statusLimit:0,statusChats:new Set(),loading:false,activityOffset:0});
   return projectChatPages.get(key);
 }
+function hideProjectChats(item){
+  const current=currentSidebarEntry(item),page=projectPage(current.id);
+  // Replace the page so a pending load-more response cannot reopen hidden rows.
+  projectChatPages.set(current.id,{...page,statusLimit:0,statusChats:new Set(),loading:false});
+  listRenderStamp='';renderList();
+}
 async function loadProjectChats(key){
   const page=projectPage(key);
   if(page.loading||listLoading)return;
@@ -823,9 +829,9 @@ new ChatContextMenu($('sessions'),target=>{
   const nativeActions=sidebarManagement?.items(target);
   if(nativeActions!==null&&nativeActions!==undefined){
     const summary=target.closest('summary[data-project-key]');
-    return nativeActions.length&&summary?[...nativeActions,...sidebarProjectOrderActions(sidebarEntry('project',{
-      key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName
-    }))]:nativeActions;
+    if(!nativeActions.length||!summary)return nativeActions;
+    const project=sidebarEntry('project',{key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName});
+    return [...nativeActions,...sidebarProjectDisplayActions(project),...sidebarProjectOrderActions(project)];
   }
   const button=target.closest('.session');
   if(!button){
@@ -853,13 +859,16 @@ function sidebarPlacementActions(item){
   const pinTarget=sidebarPlacements.pinTarget(item,(sidebarData.sections||[]).map(section=>section.id),item.native);
   const items=[{label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,pinTarget)},
     {label:'移动到分区…',run:()=>openSidebarPlacement(item)}];
-  if(item.kind==='project')items.push(...sidebarProjectOrderActions(item));
+  if(item.kind==='project')items.push(...sidebarProjectDisplayActions(item),...sidebarProjectOrderActions(item));
   return items;
 }
 function sidebarProjectOrderActions(item){
   const {ids}=sectionProjectRows(item),index=ids.indexOf(item.id);
   return index<0?[]:[{label:'上移',disabled:index===0,run:()=>shiftSectionProject(item,-1)},
     {label:'下移',disabled:index===ids.length-1,run:()=>shiftSectionProject(item,1)}];
+}
+function sidebarProjectDisplayActions(item){
+  return $('list-mode').value==='codex'?[{label:'隐藏无状态聊天',run:()=>hideProjectChats(item)}]:[];
 }
 function currentSidebarEntry(item){
   let row;
