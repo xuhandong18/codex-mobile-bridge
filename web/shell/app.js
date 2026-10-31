@@ -18,6 +18,7 @@ let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listA
 let listComplete=false, listReadFinished=false, listIdentity='', listFilterKey='';
 let listHostIds=[],sidebarData={sections:[],projects:[]};
 const createdChats=new Map();
+const createdChatVisibility=new Set();
 const projectChatPages=new Map();
 const sidebarPreferencePrefix=window.BridgeRelayBase||location.origin||location.host||'gateway';
 const sidebarPreferences=new SidebarPreferences({request:api,prefix:sidebarPreferencePrefix,onChange:()=>{listRenderStamp='';renderList();}});
@@ -83,7 +84,7 @@ function renderHostErrors(hosts){
 function clearListSnapshot(){
   sidebarPreferences.reset();
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(/^codex-list-v[12]:/.test(key||''))sessionStorage.removeItem(key);}
-  createdChats.clear();projectChatPages.clear();
+  createdChats.clear();createdChatVisibility.clear();projectChatPages.clear();
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
@@ -304,6 +305,7 @@ function rememberCreatedChat(result,attempt){
     projectName:project?.name||t('独立聊天'),hostLabel:project?.hostLabel||t('此电脑'),cwd:project?.cwd||'',
     recency:Date.now(),archived:false,access:{source:attempt.kind==='cli'?'cli':'desktop'}};
   createdChats.set(chatKey(row.id,host),row);
+  createdChatVisibility.add(chatKey(row.id,host));
   listRows=[row,...listRows.filter(item=>item.id!==row.id||item.host!==host)];
   listRenderStamp='';renderList();
 }
@@ -374,7 +376,7 @@ async function loadProjectChats(key){
   try{
     // The existing API reads cumulative global pages. Keep reading metadata until
     // this project has its next ten rows, even if other projects fill a page.
-    while(projectRows(key).filter(row=>native?!page.statusChats.has(chatKey(row.id,row.host))&&!hasProjectStatus(row.id,row.host):!isProjectPinned(row)).length<target&&listHasMore){
+    while(projectRows(key).filter(row=>native?!page.statusChats.has(chatKey(row.id,row.host))&&!createdChatVisibility.has(chatKey(row.id,row.host))&&!hasProjectStatus(row.id,row.host):!isProjectPinned(row)).length<target&&listHasMore){
       if(await loadList()===false)return;
       if(projectChatPages.get(key)!==page||filter!==listFilterKey)return;
     }
@@ -484,7 +486,7 @@ function renderList(){
       // Keep admitted chats for this page so reading or a later status change
       // does not move the list. Unknown alone never expands a hidden chat.
       for(const node of all)if(hasProjectStatus(node.dataset.id,node.dataset.host))page.statusChats.add(chatKey(node.dataset.id,node.dataset.host));
-      const marked=node=>page.statusChats.has(chatKey(node.dataset.id,node.dataset.host));
+      const marked=node=>page.statusChats.has(chatKey(node.dataset.id,node.dataset.host))||createdChatVisibility.has(chatKey(node.dataset.id,node.dataset.host));
       const ordinary=all.filter(node=>!marked(node)),shown=new Set(ordinary.slice(0,page.statusLimit));
       root.replaceChildren(summary,...all.filter(node=>marked(node)||shown.has(node)));
       hasMore=ordinary.length>page.statusLimit;
@@ -913,6 +915,7 @@ async function manageChat(row,action){
     saveDraft();chatTimeline?.dispose();chatTimeline=null;currentId=null;state=null;workbench.reset();$('chat').hidden=true;$('welcome').hidden=false;$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);
   }
   createdChats.delete(chatKey(row.id,row.host));
+  createdChatVisibility.delete(chatKey(row.id,row.host));
   listRows=listRows.filter(chat=>chat.id!==row.id||chat.host!==row.host);listRenderStamp='';renderList();loadList(true).catch(error=>toast(error.message));
   toast(action==='delete'?'聊天已删除':action==='archive'?'聊天已归档':'聊天已取消归档');
 }

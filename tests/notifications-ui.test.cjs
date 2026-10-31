@@ -501,7 +501,9 @@ test('list snapshot is restored only after matching authenticated gateway and se
   assert.equal(second.run('listIdentity'),first.run('listIdentity'));
   assert.equal(second.run('currentListFilter()'),first.run('currentListFilter()'));
   assert.equal(second.run('restoreListSnapshot()'),true);assert.equal(second.nodes.get('sessions').children[0].dataset.id,'saved');
+  second.run("createdChatVisibility.add('local|created')");
   second.run('clearListSnapshot()');assert.equal(sessionStore.size,0);
+  assert.equal(second.run('createdChatVisibility.size'),0,'登录身份清理同时丢弃新聊天的页面显示保留');
 });
 
 test('LAN HTTP list snapshots use the server identity without Web Crypto',async()=>{

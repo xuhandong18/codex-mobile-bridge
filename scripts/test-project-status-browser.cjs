@@ -6,10 +6,10 @@ const web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
 const rows=Array.from({length:40},(_,i)=>({id:'11111111-1111-4111-8111-'+String(i+1).padStart(12,'0'),host:'local',title:'项目聊天 '+i,
   cwd:'/fixture',projectKey:'local|fixture',projectName:'状态项目',recency:100-i,access:{source:'desktop'}}));
 rows.push(...Array.from({length:7},(_,i)=>({...rows[i],id:'22222222-2222-4222-8222-'+String(i+1).padStart(12,'0'),projectKey:'local|other',projectName:'其他项目'})));
-let states=new Map(),activityGate=null,releaseActivity;const writes=[],errors=[],checks=[],reads=[];
+let states=new Map(),activityGate=null,releaseActivity,createdRow=null;const writes=[],errors=[],checks=[],reads=[];
 const check=(value,expected,label)=>{assert.deepEqual(value,expected,label);checks.push(label);};
 const setState=(index,value)=>states.set(rows[index].id,value);
-const reset=()=>{states=new Map();setState(25,{status:'active'});setState(26,{waitingForUser:true});setState(27,{completionToken:'blue:completed'});setState(28,{completionToken:'orange:failed'});setState(29,{connected:false,status:'unknown'});setState(30,{sideChats:[{id:'side',connected:true,status:'active'}]});};
+const reset=()=>{states=new Map();createdRow=null;setState(25,{status:'active'});setState(26,{waitingForUser:true});setState(27,{completionToken:'blue:completed'});setState(28,{completionToken:'orange:failed'});setState(29,{connected:false,status:'unknown'});setState(30,{sideChats:[{id:'side',connected:true,status:'active'}]});};
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
   if(p.startsWith('/api/')){
@@ -20,7 +20,7 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
     else if(p==='/api/sidebar-preferences')value={revision:0,fields:{}};
-    else if(p==='/api/sessions')value={sessions:rows,complete:true,remoteHosts:[],availableSources:['desktop'],sidebar:{sections:[{id:'work',name:'工作',itemKeys:['codex:project:fixture','codex:project:other']}],projects:[{key:'local|fixture',host:'local',name:'状态项目',cwd:'/fixture'},{key:'local|other',host:'local',name:'其他项目',cwd:'/other'}]}};
+    else if(p==='/api/sessions')value={sessions:createdRow?[createdRow,...rows]:rows,complete:true,remoteHosts:[],availableSources:['desktop'],sidebar:{sections:[{id:'work',name:'工作',itemKeys:['codex:project:fixture','codex:project:other']}],projects:[{key:'local|fixture',host:'local',name:'状态项目',cwd:'/fixture'},{key:'local|other',host:'local',name:'其他项目',cwd:'/other'}]}};
     else if(p==='/api/activity'){
       reads.push(body.hosts);
       if(activityGate)await activityGate;
@@ -105,9 +105,29 @@ const server=http.createServer(async(req,res)=>{
       await group.locator('.project-load-more').click();
       await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===14);
       check(await group.locator(':scope > .session').count(),14,'隐藏后仍可重新加载十条普通聊天 '+width);
+      const createdId='33333333-3333-4333-8333-333333333333';
+      await page.evaluate(id=>{newChatProjects=sidebarData.projects;rememberCreatedChat({id,host:'local'},{project:'local|fixture',kind:'desktop',title:'新建保留聊天',autoTitle:false});},createdId);
+      const created=group.locator('.session[data-id="'+createdId+'"]');
+      check(await created.isVisible(),true,'合成创建回执到达后无状态新聊天立即显示 '+width);
+      check(await created.locator('.session-indicator').count(),0,'新聊天保留显示不制造状态圆点 '+width);
+      await page.evaluate(()=>loadList(true));
+      check(await created.count(),1,'后台列表尚未发现新聊天时仍保留 '+width);
+      createdRow={...rows[0],id:createdId,title:'新建保留聊天',recency:200};
+      await page.evaluate(()=>loadList(true));
+      check(await page.evaluate(id=>createdChats.has('local|'+id),createdId),false,'权威列表已经接管新聊天元数据 '+width);
+      await projectName.click({button:'right'});
+      await page.getByRole('dialog',{name:'侧栏操作',exact:true}).getByRole('button',{name:'隐藏无状态聊天',exact:true}).click();
+      check(await created.isVisible(),true,'隐藏无状态聊天仍保留本页面新建聊天 '+width);
+      check(await group.locator(':scope > .session').count(),5,'只保留四条状态聊天及一条新聊天 '+width);
+      await page.evaluate(()=>loadList(true));
+      check(await created.isVisible(),true,'列表接管和重复刷新不会移除新聊天 '+width);
+      await group.locator('.project-load-more').click();
+      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===15);
+      check(await group.locator(':scope > .session').count(),15,'新聊天不占加载更多的十条名额 '+width);
       activityGate=new Promise(resolve=>releaseActivity=resolve);
       await page.reload();await page.waitForFunction(()=>listReadFinished&&activityBusy);
       check(await ids(),[rows[25],rows[26],rows[28],rows[30]].map(row=>row.id),'刷新页面后只恢复明确状态，灰点和已读保留均不展开 '+width);
+      check(await created.count(),0,'重新加载页面结束新聊天的本页面显示保留 '+width);
       releaseActivity();activityGate=null;
       await page.evaluate(()=>refreshActivity());
       check(await group.locator(':scope > .session').count(),4,'重新读取状态后没有大批聊天消失 '+width);

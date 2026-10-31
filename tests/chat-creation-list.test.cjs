@@ -7,7 +7,7 @@ function fixture({preferences={},settings=async()=>({confirmed:true}),openError=
   $('new-chat-project').value='local|p';$('new-chat-title').value='New chat';$('new-chat-title').dataset.edited='true';$('new-chat-type').value='desktop';
   const context={$,t:x=>x,creatingChat:false,setLanguageBusy(){},newChatSettings:{loading:false,value:()=>preferences,key:'local|desktop',model:{value:''},defaults:{remember(){}}},
     sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},localStorage:{setItem(){}},
-    newChatScopes:new Map(),newChatProjects:[{key:'local|p',name:'Project',host:'local',cwd:'/project'}],listRows:[],sidebarData:{projects:[],sections:[]},listRenderStamp:'',createdChats:new Map(),listSource:'all',renderSourceFilter(){},
+    newChatScopes:new Map(),newChatProjects:[{key:'local|p',name:'Project',host:'local',cwd:'/project'}],listRows:[],sidebarData:{projects:[],sections:[]},listRenderStamp:'',createdChats:new Map(),createdChatVisibility:new Set(),listSource:'all',renderSourceFilter(){},
     waitForCreatedChat:read,confirm:()=>true,sessionUrl:(id,action)=>'/'+action,uuid:()=>id,chatKey:(id,host)=>host+'|'+id,
     api:async(url,body)=>{calls.push({url,body});return url==='/api/sessions'?{id,host:'local',message:'Created'}:url==='/&metadata=1'?{id,host:'local'}:settings(url,body);},toast:message=>notices.push(message),renderList(){},
     loadList:()=>new Promise(()=>{}),document:{querySelector:()=>({disabled:false})},
@@ -73,6 +73,7 @@ test('模型确认仍在等待时权限独立提交，所有写入只执行一�
 test('a confirmed new chat appears before its background list refresh returns',async()=>{
   const ui=fixture();await ui.submit();
   assert.equal(ui.context.listRows.filter(row=>row.id===ui.id).length,1);
+  assert.equal(ui.context.createdChatVisibility.has('local|'+ui.id),true);
   assert.deepEqual(ui.calls.map(call=>call.url),['/api/sessions','/&metadata=1']);
 });
 

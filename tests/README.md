@@ -59,6 +59,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 项目菜单的“隐藏无状态聊天”由 `tests/sidebar-sync.test.cjs` 验证原生及回退菜单、项目隔离、已读保留聊天收回、重新加载和在途加载更多失效；`node scripts/test-project-status-browser.cjs` 在手机／平板长按及电脑右键中实际点击该入口，检查显示、后台刷新和再次加载，均不操作真实聊天。
 
+新聊天页面保留另由 `tests/chat-creation-list.test.cjs`、`tests/sidebar-sync.test.cjs` 和 `tests/notifications-ui.test.cjs` 验证：确认创建后即使没有状态也立即显示，临时元数据被权威列表接管、项目分页重建和隐藏无状态聊天后继续保留，不占普通分页名额，并按主机隔离、在身份清理时丢弃。上述浏览器驱动在三种尺寸注入合成创建回执，检查未进入列表和进入权威列表后的显示、隐藏入口例外、十条分页及页面重载恢复默认筛选，不创建真实聊天。
+
 分区项目的状态筛选运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs`，覆盖红绿蓝橙及主侧汇总标记、初始灰点不自动展开、已读和状态消失后本页面保留、新页面恢复默认筛选、无标记置顶聊天、十条普通聊天分页及保留聊天不占名额、跨全局页补查、按项目视图隔离，以及屏幕内已展开项目的隐藏状态发现、轮换批量、并发去重和折叠/屏外排除。真实页面验证为 `node scripts/test-project-status-browser.cjs`，在 390、820、1280 像素下阻塞首次状态读取并预置整页灰点缓存，检查读取前后不批量闪现；另验证已读只清除蓝点而保留聊天、刷新页面才移除保留、加载更多、折叠重开、隐藏聊天新标记发现、加载进度独立及不提交聊天写入。使用合成 API 和已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`。
 
 项目选择器的主题回归也由 `node scripts/test-new-chat-projects-browser.cjs` 执行，在手机窄屏、横屏、平板和电脑等五种尺寸下切换深色、浅色和跟随系统，核对按钮、列表和吸顶分区标题与原生输入框使用相同的主题表面色，检查普通/选中条目的名称、主机和目录文字对比度，以及真实悬停、键盘焦点和切换时的选择保留。`--screenshots` 同时生成带 `-dark` 后缀的深色测试截图。

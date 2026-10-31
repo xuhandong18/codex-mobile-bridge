@@ -26,12 +26,14 @@ function fixture(mode='codex'){
   const nodes={sessions:new Element('div'),'list-mode':{value:mode},search:{value:''},archived:{checked:false}};
   const selected=[];
   const context={$:id=>nodes[id],el:(...args)=>new Element(...args),localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},t:x=>x,BridgeI18n:{locale:()=> 'zh'},
-    currentId:null,currentHost:'local',availableSources:[],listSource:'all',listRenderStamp:'',listComplete:true,listReadFinished:true,listHasMore:false,listLoading:0,listFilterKey:'fixture',projectChatPages:new Map(),
+    currentId:null,currentHost:'local',availableSources:[],listSource:'all',listRenderStamp:'',listComplete:true,listReadFinished:true,listHasMore:false,listLoading:0,listFilterKey:'fixture',projectChatPages:new Map(),createdChats:new Map(),createdChatVisibility:new Set(),
     renderActivity(){},scheduleActivityRefresh(){},chatKey:(id,host)=>host+'|'+id,sessionActivity:new SessionActivity({storage:{getItem:()=>null,setItem(){}}}),sessionAccess:x=>x||{source:'desktop'},sourceLabel:()=>'',dateText:()=>'',openChat:async()=>{},toast(){},openNewChat:p=>selected.push(p),sidebarPreferences:{change:async edit=>edit()},
     sidebarData:{sections:[{id:'custom',name:'Daily',itemKeys:['codex:project:p'],hostSectionIds:{local:'native'}}],projects:[{key:'local|p',name:'Project',host:'local',cwd:'/work'},{key:'local|empty',name:'Empty',host:'local',cwd:'/empty'}]},
     listRows:[{id:'thread',host:'local',projectKey:'local|p',projectName:'Project',title:'Chat',recency:1},{id:'direct',host:'local',projectKey:'local|p',projectName:'Project',thread_section_id:'native',title:'Direct',recency:2}]};
   context.sessionActivity.update(context.listRows.map(row=>({...row,connected:true,status:'active'})));
-  vm.createContext(context);vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.projectPins=vm.runInContext('new SidebarProjectPins(localStorage,"project-pins:")',context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
+  context.newChatProjects=context.sidebarData.projects;
+  vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function rememberCreatedChat('),source.indexOf('function sidebarEntry(')),context);
+  vm.runInContext(fs.readFileSync('web/features/chat/session-list.js','utf8'),context);context.projectPins=vm.runInContext('new SidebarProjectPins(localStorage,"project-pins:")',context);context.sidebarPlacements=vm.runInContext('new SidebarPlacements(localStorage,"fixture:")',context);context.sectionProjectOrder=vm.runInContext('new SidebarItemOrder(localStorage,"project-order:")',context);vm.runInContext(render,context);context.renderList();return {context,nodes,selected};
 }
 test('native sections contain projects, empty projects and directly assigned threads',()=>{
   const {nodes,selected}=fixture();
@@ -308,6 +310,35 @@ test('无状态聊天隐藏入口仅属于分区项目，过期项目操作不�
   nodes['list-mode'].value='project';assert.ok(!context.menuItems(group.children[0]).some(row=>row.label==='隐藏无状态聊天'));
   context.sidebarData.projects=[];context.listRows=[];
   assert.throws(()=>action.run(),/侧栏条目已变化/);
+});
+
+test('新建聊天没有状态也立即显示，列表接管和隐藏普通聊天后继续保留',async()=>{
+  const f=fixture(),{context,nodes}=f;bindSidebarMenu(f);
+  context.listRows.push(...Array.from({length:12},(_,i)=>({...context.listRows[0],id:'idle-'+i})));
+  const attempt={project:'local|p',kind:'desktop',title:'New chat',autoTitle:false};
+  context.rememberCreatedChat({id:'created',host:'local'},attempt);
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const ids=()=>group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['created','thread'],'尚无运行状态时立即显示新聊天');
+  assert.equal(context.sessionActivity.indicator('local|created'),null,'保留显示不制造状态圆点');
+  const pending=context.mergeCreatedChats(context.listRows.filter(row=>row.id!=='created'),'local','',false,'all');
+  assert.ok(pending.some(row=>row.id==='created'),'后台列表暂未包含新聊天时仍保留');
+  context.listRows=context.mergeCreatedChats(context.listRows.map(row=>row.id==='created'?{...row,title:'Native title'}:row),'local','',false,'all');context.renderList();
+  assert.equal(context.createdChats.size,0,'权威列表接管后不继续使用临时元数据');
+  await context.loadProjectChats('local|p');assert.equal(ids().length,12,'新聊天不占普通聊天的十条分页名额');
+  context.menuItems(group().children[0]).find(row=>row.label==='隐藏无状态聊天').run();
+  assert.deepEqual(ids(),['created','thread'],'隐藏操作保留新聊天');
+  context.sessionActivity.update([{id:'created',host:'local',connected:true,status:'idle'}]);
+  context.projectChatPages.clear();context.listRenderStamp='';context.renderList();
+  assert.deepEqual(ids(),['created','thread'],'本页面筛选和项目分页重建后仍保留');
+});
+
+test('新建聊天的显示保留按主机隔离，不使其他主机的同名标识聊天展开',()=>{
+  const {context,nodes}=fixture();
+  context.listRows.push({...context.listRows[0],id:'created',host:'ssh',projectKey:'ssh|p'});
+  context.rememberCreatedChat({id:'created',host:'local'},{project:'local|p',kind:'desktop',title:'New chat'});
+  const ids=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key).children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  assert.ok(ids('local|p').includes('created'));assert.deepEqual(ids('ssh|p'),[]);
 });
 
 for(const mode of ['codex','project'])test('project and chat menus do not offer manual chat ordering in '+mode+' mode',()=>{
