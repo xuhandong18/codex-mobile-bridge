@@ -351,8 +351,12 @@ async function toggleProjectPin(row,pinned=!isProjectPinned(row)){
   await sidebarPreferences.change(()=>{if(projectPins.read(row.projectKey).has(row.id)!==pinned)projectPins.toggle(row.projectKey,row.id);});
   listRenderStamp='';renderList();
 }
+function hasProjectStatus(id,host){
+  const indicator=sessionActivity.indicator(chatKey(id,host));
+  return !!indicator&&indicator.kind!=='unknown';
+}
 function projectPage(key){
-  if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,statusLimit:0,loading:false,activityOffset:0});
+  if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,statusLimit:0,statusChats:new Set(),loading:false,activityOffset:0});
   return projectChatPages.get(key);
 }
 async function loadProjectChats(key){
@@ -364,7 +368,7 @@ async function loadProjectChats(key){
   try{
     // The existing API reads cumulative global pages. Keep reading metadata until
     // this project has its next ten rows, even if other projects fill a page.
-    while(projectRows(key).filter(row=>native?!sessionActivity.indicator(chatKey(row.id,row.host)):!isProjectPinned(row)).length<target&&listHasMore){
+    while(projectRows(key).filter(row=>native?!page.statusChats.has(chatKey(row.id,row.host))&&!hasProjectStatus(row.id,row.host):!isProjectPinned(row)).length<target&&listHasMore){
       if(await loadList()===false)return;
       if(projectChatPages.get(key)!==page||filter!==listFilterKey)return;
     }
@@ -382,7 +386,7 @@ function collapseSidebarGroups(){
 function renderList(){
   if(typeof syncListModeTabs==='function')syncListModeTabs();
   const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,listLoading,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.loading])]:null;
-  const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,$('list-mode').value==='codex'&&!!sessionActivity.indicator(chatKey(row.id,row.host))])]);
+  const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,$('list-mode').value==='codex'&&hasProjectStatus(row.id,row.host)])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity(false);return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
@@ -470,7 +474,11 @@ function renderList(){
     const page=projectPage(key),ordered=items.filter(node=>!pins.has(node.dataset.id));
     let hasMore=ordered.length>page.limit;
     if(native){
-      const all=[...pinned,...ordered],marked=node=>!!sessionActivity.indicator(chatKey(node.dataset.id,node.dataset.host));
+      const all=[...pinned,...ordered];
+      // Keep admitted chats for this page so reading or a later status change
+      // does not move the list. Unknown alone never expands a hidden chat.
+      for(const node of all)if(hasProjectStatus(node.dataset.id,node.dataset.host))page.statusChats.add(chatKey(node.dataset.id,node.dataset.host));
+      const marked=node=>page.statusChats.has(chatKey(node.dataset.id,node.dataset.host));
       const ordinary=all.filter(node=>!marked(node)),shown=new Set(ordinary.slice(0,page.statusLimit));
       root.replaceChildren(summary,...all.filter(node=>marked(node)||shown.has(node)));
       hasMore=ordinary.length>page.statusLimit;

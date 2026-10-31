@@ -127,7 +127,7 @@ test('each project displays five chats then ten more per click without expanding
   assert.equal(more('local|p'),undefined);
 });
 
-test('分区项目默认只显示各种状态标记，普通聊天和无标记置顶聊天点击后分页显示',async()=>{
+test('分区项目默认显示明确状态，初始灰点和普通置顶聊天点击后分页显示',async()=>{
   const {context,nodes}=fixture();
   context.listRows=Array.from({length:32},(_,i)=>({id:'chat-'+i,host:'local',title:'Chat '+i,projectKey:'local|p',projectName:'Project',recency:100-i}));
   context.listRows.push({id:'other',host:'local',title:'Other',projectKey:'local|other',projectName:'Other'});
@@ -145,11 +145,11 @@ test('分区项目默认只显示各种状态标记，普通聊天和无标记�
   const ids=()=>group('local|p').children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
   const more=()=>group('local|p').children.find(node=>node.className==='plain project-load-more');
   context.renderList();
-  const marked=['chat-26','chat-25','chat-27','chat-28','chat-29','chat-30'];
-  assert.deepEqual(ids(),marked,'红绿蓝橙灰及侧边汇总标记均默认显示，带标记的置顶优先');
+  const marked=['chat-26','chat-25','chat-28','chat-29','chat-30'];
+  assert.deepEqual(ids(),marked,'红绿蓝橙及侧边汇总标记默认显示，带标记的置顶优先');
   assert.equal(group('local|other').children.filter(node=>node.dataset.id).length,0);
-  const ordinary=['chat-24',...Array.from({length:24},(_,i)=>'chat-'+i),'chat-31'];
-  for(const count of [10,20,26]){
+  const ordinary=['chat-24',...Array.from({length:24},(_,i)=>'chat-'+i),'chat-27','chat-31'];
+  for(const count of [10,20,27]){
     await more().onclick();
     assert.deepEqual(new Set(ids()),new Set([...marked,...ordinary.slice(0,count)]));
     assert.equal(ids()[0],'chat-24','加载后仍保持项目置顶优先');
@@ -160,17 +160,37 @@ test('分区项目默认只显示各种状态标记，普通聊天和无标记�
   assert.equal(more(),undefined);
 });
 
-test('状态增减和已读操作立即改变分区项目默认列表，其他视图保留原分页',()=>{
+test('分区项目已显示的聊天在已读和状态消失后留在原处，新页面才恢复默认筛选',()=>{
   const {context,nodes}=fixture();
   const project=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
   const ids=()=>project().children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
   assert.deepEqual(ids(),['thread']);
   context.sessionActivity.update([{id:'thread',host:'local',connected:true,status:'idle'}]);context.renderList();
-  assert.deepEqual(ids(),[]);
+  assert.deepEqual(ids(),['thread']);
   context.sessionActivity.markUnread('local|thread');context.renderList();assert.deepEqual(ids(),['thread']);
-  context.sessionActivity.read('local|thread',{explicit:true});context.renderList();assert.deepEqual(ids(),[]);
+  context.sessionActivity.read('local|thread',{explicit:true});context.renderList();assert.deepEqual(ids(),['thread']);
+  context.listRenderStamp='';context.renderList();assert.deepEqual(ids(),['thread'],'普通重绘和后台刷新不会移除刚读完的聊天');
+  context.projectChatPages.clear();context.listRenderStamp='';context.renderList();assert.deepEqual(ids(),[],'新页面不保留无状态聊天');
   nodes['list-mode'].value='project';context.renderList();assert.deepEqual(ids(),['thread','direct']);
   nodes['list-mode'].value='codex';context.renderList();assert.deepEqual(ids(),[],'按项目的默认五条不会泄漏到分区视图');
+});
+
+test('首次未知的灰点不批量展开聊天，读取为空闲后列表保持稳定',async()=>{
+  const {context,nodes}=fixture();
+  context.listRows=Array.from({length:12},(_,i)=>({id:'gray-'+i,host:'local',title:'Gray '+i,projectKey:'local|p',projectName:'Project',recency:100-i}));
+  const ids=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p').children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
+  context.sessionActivity.update(context.listRows.map(row=>({...row,connected:false,status:'unknown'})));context.renderList();
+  assert.deepEqual(ids(),[],'尚未确认的灰点不使整个项目先展开');
+  context.sessionActivity.update(context.listRows.map(row=>({...row,connected:true,status:'idle'})));context.renderList();
+  assert.deepEqual(ids(),[],'状态读取结束后不会大批消失');
+  context.sessionActivity.update([{...context.listRows[11],connected:true,status:'active'}]);context.renderList();
+  assert.deepEqual(ids(),['gray-11'],'明确的运行状态仍能自动出现');
+  context.sessionActivity.update([{...context.listRows[11],connected:false,status:'unknown'}]);
+  context.sessionActivity.now=()=>1000000;context.renderList();
+  assert.equal(context.sessionActivity.indicator('local|gray-11').kind,'unknown','断线缓冲到期后确实显示灰点');
+  assert.deepEqual(ids(),['gray-11'],'已显示的聊天遇到断线灰点仍保留');
+  await context.loadProjectChats('local|p');
+  assert.equal(ids().length,11,'保留的聊天不占加载更多的十条名额');
 });
 
 test('分区加载更多只计无标记聊天，并跨全局分页补足十条',async()=>{

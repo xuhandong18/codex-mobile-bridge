@@ -57,7 +57,7 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 ## Node 与浏览器
 
-分区项目的状态筛选运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs`，覆盖红绿蓝橙灰及主侧汇总标记、无标记置顶聊天、状态与已读变化、十条普通聊天分页、跨全局页补查、按项目视图隔离，以及屏幕内已展开项目的隐藏状态发现、轮换批量、并发去重和折叠/屏外排除。真实页面验证为 `node scripts/test-project-status-browser.cjs`，在 390、820、1280 像素下实际点击加载更多、折叠重开并刷新，检查未显示聊天的新标记自动出现、加载进度独立及不提交聊天写入；使用合成 API 和已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`。
+分区项目的状态筛选运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs`，覆盖红绿蓝橙及主侧汇总标记、初始灰点不自动展开、已读和状态消失后本页面保留、新页面恢复默认筛选、无标记置顶聊天、十条普通聊天分页及保留聊天不占名额、跨全局页补查、按项目视图隔离，以及屏幕内已展开项目的隐藏状态发现、轮换批量、并发去重和折叠/屏外排除。真实页面验证为 `node scripts/test-project-status-browser.cjs`，在 390、820、1280 像素下阻塞首次状态读取并预置整页灰点缓存，检查读取前后不批量闪现；另验证已读只清除蓝点而保留聊天、刷新页面才移除保留、加载更多、折叠重开、隐藏聊天新标记发现、加载进度独立及不提交聊天写入。使用合成 API 和已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`。
 
 项目选择器的主题回归也由 `node scripts/test-new-chat-projects-browser.cjs` 执行，在手机窄屏、横屏、平板和电脑等五种尺寸下切换深色、浅色和跟随系统，核对按钮、列表和吸顶分区标题与原生输入框使用相同的主题表面色，检查普通/选中条目的名称、主机和目录文字对比度，以及真实悬停、键盘焦点和切换时的选择保留。`--screenshots` 同时生成带 `-dark` 后缀的深色测试截图。
 
