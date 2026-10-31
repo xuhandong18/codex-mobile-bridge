@@ -160,7 +160,8 @@ class DesktopSessions:
                             row.setdefault('waitingObservedAt', observed)
                 if action == 'detail' and isinstance(value, dict):
                     from bridge.features.workspace.files import workspace_references
-                    value['files'] = workspace_references(value.get('messages', []), value.get('session', {}).get('cwd'))
+                    value['files'] = workspace_references(value.get('messages', []), value.get('session', {}).get('cwd'),
+                                                          value.get('session', {}).get('requests', []))
                     if value.get('turns') and isinstance(value.get('session'), dict):
                         last = value['turns'][-1]
                         value['session'].update(turnId=last.get('turnId'), turnStatus=last.get('status'))

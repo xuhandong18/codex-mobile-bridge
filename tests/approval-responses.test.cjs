@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync('web/shell/app.js','utf8');
 const start=source.indexOf('function renderApprovals('),code=source.slice(start,source.indexOf('\nfunction ',start+1));
 
-function fixture(result){
+function fixture(result,question='继续吗？'){
   class Element{
     constructor(tag,cls='',text=''){this.tag=tag;this.className=cls;this.textContent=text;this.children=[];this.dataset={};this.value='';this.disabled=false;this.isConnected=true;}
     append(...items){this.children.push(...items);}
@@ -14,16 +14,27 @@ function fixture(result){
   const approvals=new Element('div'),notices=[],calls=[],timers=[];
   const ctx={$:()=>approvals,el:(...args)=>new Element(...args),t:x=>x,jsonPretty:JSON.stringify,
     currentId:'chat',currentHost:'local',approvalStamp:'',approvalBusy:0,submittedRequestIds:new Set(),
-    window:{},setLanguageBusy(){},bumpRecency(){},toast:text=>notices.push(text),
+    window:{},state:{files:[{id:'authorized',reference:'D:/Project/spec.md'}]},
+    renderMarkdown:(node,text,files,fileUrl)=>{if(text.includes('[设计评审稿](D:/Project/spec.md)')&&files?.[0]?.id==='authorized'){const link=new Element('a','','设计评审稿');link.href=fileUrl(files[0]);node.append(link);}else node.append(new Element('span','',text));},
+    setLanguageBusy(){},bumpRecency(){},toast:text=>notices.push(text),
     setTimeout:(fn,delay)=>timers.push({fn,delay}),
-    sessionUrl:()=>'/respond',api:async(url,body)=>{calls.push({url,body});return result;}};
+    sessionUrl:(id,action,host)=>'/api/sessions/'+id+'/'+action+'?host='+encodeURIComponent(host),api:async(url,body)=>{calls.push({url,body});return result;}};
   vm.createContext(ctx);vm.runInContext(code,ctx);
   const request={id:'async:turn:question',method:'bridge/requestUserInputAsync',supported:true,
-    params:{questions:[{id:'question',question:'继续吗？'}]}};
+    params:{questions:[{id:'question',question}]}};
   ctx.renderApprovals([request]);
   approvals.querySelectorAll('textarea')[0].value='保留我填写的答案';
   return {ctx,approvals,notices,calls,timers,submit:async()=>{approvals.querySelectorAll('form')[0].onsubmit({preventDefault(){}});await new Promise(setImmediate);}};
 }
+
+test('问题工具中的文件引用生成经过当前聊天鉴权的可点击链接',()=>{
+  const ui=fixture({},'是否认可？[设计评审稿](D:/Project/spec.md)');
+  const links=ui.approvals.querySelectorAll('a');
+  assert.equal(links.length,1,'问题卡片应将 Markdown 文件引用显示成可点击链接');
+  assert.equal(links[0].textContent,'设计评审稿');
+  assert.equal(links[0].href,'/api/sessions/chat/files/authorized?host=local');
+  assert.equal(ui.calls.length,0,'展示链接不能提交问题回答');
+});
 
 test('an ignored async answer does not claim success or wait forever for desktop confirmation',async()=>{
   const ui=fixture({status:'ignored',duplicate:true,id:'old-submission'});await ui.submit();

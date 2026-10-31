@@ -133,6 +133,17 @@ class SideChatTests(unittest.TestCase):
         self.chat.respond(73, {'decision': 'decline'})
         self.assertEqual(self.runtime.responses[-1]['result'], {'permissions': {}, 'scope': 'turn'})
 
+    def test_question_links_are_available_without_sending_or_answering(self):
+        with tempfile.TemporaryDirectory(dir=support.ROOT / '.tmp') as directory:
+            root = Path(directory); note = root / 'spec.md'; note.write_text('# Spec', encoding='utf-8')
+            self.chat.state['cwd'] = str(root)
+            self.chat._event({'id': 74, 'method': 'item/tool/requestUserInput', 'params': {
+                'threadId': self.chat.id, 'questions': [{'id': 'review', 'question': f'评审 [设计](<{note.as_posix()}>)'}]}})
+            calls = copy.deepcopy(self.runtime.calls)
+            self.assertEqual([file['path'] for file in self.chat.view()['files']], ['spec.md'])
+            self.assertEqual(self.runtime.calls, calls)
+            self.assertEqual(self.runtime.responses, [])
+
     def test_desktop_only_async_question_is_not_offered_as_rpc_approval(self):
         self.chat.state['turns'] = [{'turnId': 'one', 'status': 'completed', 'items': [
             {'id': 'q', 'type': 'agentMessage', 'text': 'Question', 'questions': [{'title': 'Continue?'}]}]}]

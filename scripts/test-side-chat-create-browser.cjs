@@ -6,9 +6,11 @@ const root=path.resolve(__dirname,'..'),web=path.join(root,'web'),assets=require
 const id='11111111-1111-4111-8111-111111111111';
 const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',projectKey:'local|/fixture',projectName:'Fixture',recency:1,status:'idle',access:{source:'cli',canSend:true,canApprove:true,canUseSideChat:true}};
 const historyOnly=process.argv.includes('--history-only'),archives=new Map();
+const questionsOnly=process.argv.includes('--questions-only');
 const states=new Map(),writes=[],errors=[];let mode='success',serial=0,createGate=null,questionFixture=false;
-const questions=[{id:'choice',question:'希望先解释哪个处理方案？',options:[{label:'先解释',description:'说明各个步骤'},{label:'直接处理',description:'执行已确认的方案'}]},{id:'free',question:'需要进一步说明的细节是什么？'}];
-const questionRequests=()=>questionFixture?[{id:'fixture-question',supported:true,method:'item/tool/requestUserInput',params:{questions},needsInput:true,tool:'AskUserQuestion',input:{questions}}]:[];
+const questions=[{id:'choice',question:'希望先解释哪个处理方案？[设计评审稿](D:/fixture/spec.md)',options:[{label:'先解释',description:'说明各个步骤'},{label:'直接处理',description:'执行已确认的方案'}]},{id:'free',question:'需要进一步说明的细节是什么？[交互原型](D:/fixture/prototype.html)'}];
+const questionFiles=['spec.md','prototype.html'].map((name,index)=>({id:String(index+1).repeat(64),name,path:name,reference:'D:/fixture/'+name,references:['D:/fixture/'+name],image:false}));
+const questionRequests=(async=false)=>questionFixture?[{id:'fixture-question',supported:true,method:async?'bridge/requestUserInputAsync':'item/tool/requestUserInput',params:{questions},needsInput:true,tool:'AskUserQuestion',input:{questions}}]:[];
 const server=http.createServer(async(req,res)=>{
   try{
     const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -52,22 +54,30 @@ const server=http.createServer(async(req,res)=>{
         }
         if(body?.action==='cancel-queued')state.submissions.find(row=>row.id===body.submissionId).status='cancelled';
         const slots=[...states].filter(([k])=>k.startsWith(provider+'|')).map(([k,v])=>({slot:k.slice(provider.length+1),id:v.id}));
-        return json({...state||{id:null,connected:false,turns:[]},requests:questionRequests(),slots});
+        return json({...state||{id:null,connected:false,turns:[]},requests:questionRequests(),files:questionFixture?questionFiles:[],slots});
       }
       if(p==='/api/auth')return json({authenticated:true,csrf:'fixture',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'}});
       if(p==='/api/clients')return json({clients:['codex','deepseek'].map(id=>({id,name:id,enabled:true,connected:true,configured:true,installed:true,running:true}))});
       if(p==='/api/accounts')return json({accounts:[],current:{kind:'api'}});
       if(p==='/api/sessions'||p==='/api/activity')return json({sessions:[row],complete:true});
       if(p.includes('/uploads/')&&p.endsWith('/preview')){res.writeHead(200,{'Content-Type':'image/png'});return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=','base64'));}
-      if(p.endsWith('/workspace/preview'))return json({name:'demo.js',kind:'text',size:24,text:'const selected = true;\n'});
+      if(questionFixture&&(url.searchParams.get('info')==='1')){
+        const file=questionFiles.find(file=>p.endsWith('/files/'+file.id)||url.searchParams.get('path')===file.path);
+        if(file)return json({name:file.name,path:file.path,kind:'file',size:32,locatable:true});
+      }
+      if(p.endsWith('/workspace/preview')){
+        const file=questionFixture&&questionFiles.find(file=>url.searchParams.get('path')===file.path);
+        return json(file?{name:file.name,kind:'text',size:32,text:file.name.endsWith('.md')?'# Question file preview':'<h1>Question file preview</h1>'}:{name:'demo.js',kind:'text',size:24,text:'const selected = true;\n'});
+      }
+      if(p.endsWith('/workspace/html-preview')){res.writeHead(200,{'Content-Type':'text/html'});return res.end('<h1>Question file preview</h1>');}
       if(p.endsWith('/workspace'))return json({root:'/fixture',entries:[]});
       if(p.endsWith('/timeline')||p.endsWith('/updates')){
         if(p.endsWith('/updates'))await new Promise(resolve=>setTimeout(resolve,100));
-        return json({epoch:'fixture',sequence:1,rows:[],files:[],hasMore:false,meta:{...row,connected:true,requests:questionRequests(),turns:[],queue:[]}});
+        return json({epoch:'fixture',sequence:1,rows:[],files:questionFixture?questionFiles:[],hasMore:false,meta:{...row,connected:true,requests:questionRequests(true),turns:[],queue:[]}});
       }
       if(p.startsWith('/api/desktop-sessions/')){
         if(p.endsWith('/list'))return json({connected:true,sessions:[row]});
-        if(p.endsWith('/detail'))return json({connected:true,session:{...row,requests:questionRequests()},capabilities:{send:true,sideChat:true},messages:[]});
+        if(p.endsWith('/detail'))return json({connected:true,session:{...row,requests:questionRequests()},files:questionFixture?questionFiles:[],capabilities:{send:true,sideChat:true},messages:[]});
       }
       return json({});
     }
@@ -83,6 +93,7 @@ const server=http.createServer(async(req,res)=>{
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     for(const [width,height] of [[390,844],[820,1180],[844,390],[1440,1000]])for(const provider of historyOnly?['codex']:['codex','deepseek']){
+      if(!questionsOnly){
       states.clear();archives.clear();writes.length=0;mode='success';
       const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage();page.setDefaultTimeout(10000);
       page.on('pageerror',error=>errors.push(error.message));
@@ -344,6 +355,7 @@ const server=http.createServer(async(req,res)=>{
       }
       assert.ok(popupChecks.length>0);assert.ok(!writes.some(write=>['send','respond'].includes(write.body.action)),'右键和选区入口不会发送消息或提交问题答案');
       results.push({width,height,provider,fixture:'selection-popup',passed:popupChecks.length+1});await popupContext.close();
+      }
       states.clear();writes.length=0;questionFixture=true;
       const questionContext=await browser.newContext({viewport:{width,height},hasTouch:width!==1440}),questionPage=await questionContext.newPage();
       questionPage.on('pageerror',error=>errors.push(error.message));
@@ -353,7 +365,11 @@ const server=http.createServer(async(req,res)=>{
         await questionPage.waitForFunction(()=>desktopSessions.provider==='deepseek'&&desktopSessions.freshDetail);
       }
       await questionPage.addScriptTag({path:path.join(root,'tests/browser/question-selection.browser.js')});
+      await questionPage.addScriptTag({path:path.join(root,'tests/browser/question-links.browser.js')});
       const questionChecks=await questionPage.evaluate(provider=>runQuestionSelectionBrowserTests(provider),provider);
+      const linkChecks=await questionPage.evaluate(provider=>runQuestionFileLinkBrowserTests(provider),provider);
+      assert.ok(linkChecks.length>0);
+      results.push({width,height,provider,fixture:'question-links',passed:linkChecks.length});
       assert.ok(questionChecks.length>0);assert.ok(!writes.some(write=>['send','respond'].includes(write.body.action)||/\/(send|respond)$/.test(write.p)),'选区引用不发送消息或提交问题答案');
       results.push({width,height,provider,fixture:'question-selection',passed:questionChecks.length+1});await questionContext.close();questionFixture=false;
     }

@@ -7,7 +7,7 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 
-from bridge.features.sessions.model import ordered_turns, items_array
+from bridge.features.sessions.model import ordered_turns, items_array, pending_requests
 
 MARKDOWN_PATH = re.compile(r'!?\[[^\]\n]*\]\((?:<([^>]+)>|([^\n)]+))\)')
 IMAGE_MARKDOWN_PATH = re.compile(r'!\[[^\]\n]*\]\((?:<([^>]+)>|([^\n)]+))\)')
@@ -125,6 +125,25 @@ def referenced_model_images(state, image_views_only=False):
     return trusted_views if image_views_only else result
 
 
+def question_texts(requests):
+    """Read displayed prompts from supported questions, without executing them."""
+    for request in requests:
+        if request.get('supported') is False:
+            continue
+        if 'requestUserInput' in str(request.get('method', '')):
+            questions = (request.get('params') or {}).get('questions') or []
+        elif request.get('needsInput'):
+            questions = (request.get('input') or {}).get('questions') or []
+        else:
+            continue
+        for question in questions:
+            if not isinstance(question, dict):
+                continue
+            text = question.get('question') or question.get('header')
+            if isinstance(text, str):
+                yield text
+
+
 def artifact_paths(state, codex_home):
     roots = [Path(codex_home) / 'visualizations'] if codex_home else []
     if state.get('cwd'):
@@ -143,6 +162,9 @@ def artifact_paths(state, codex_home):
                     value = attachment.get('path', attachment.get('url'))
                     if isinstance(value, str):
                         candidates.add(value)
+    for text in question_texts(pending_requests(state)):
+        for match in MARKDOWN_PATH.finditer(text):
+            candidates.add(match[1] or match[2])
     result = {}
     model_images, trusted_views = _model_image_references(state)
     for raw in sorted(candidates):
@@ -189,11 +211,12 @@ def artifact_paths(state, codex_home):
     return result
 
 
-def workspace_references(messages, cwd):
+def workspace_references(messages, cwd, requests=()):
     """Expose only file links inside this client's own workspace."""
     if not cwd or not Path(cwd).is_absolute(): return []
     state = {'cwd': cwd, 'turns': [{'items': [{'type': 'agentMessage', 'text': row.get('text', '')}
-             for row in messages if row.get('role') == 'assistant']} ]}
+             for row in messages if row.get('role') == 'assistant'] +
+             [{'type': 'agentMessage', 'text': text} for text in question_texts(requests)]} ]}
     root = Path(cwd).resolve()
     return [{'id': key, 'name': value['name'], 'reference': value['reference'],
              'references': value['references'], 'path': workspace_relative_path(value['path'], root),

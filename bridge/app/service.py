@@ -33,7 +33,7 @@ from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
 from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, normalize_item, ordered_turns, pending_requests, async_requests, waiting_for_user, request_id, user_display_text, session_title, session_title_source, embedded_image_id
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
-from bridge.features.workspace.files import artifact_paths, referenced_model_images
+from bridge.features.workspace.files import artifact_paths, referenced_model_images, question_texts
 from bridge.features.workspace.workspace import operate as workspace_operation
 from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
@@ -2501,6 +2501,7 @@ class Bridge:
                     result['meta']['linuxPermissionChecks'] = True
                     result['meta']['permissionMode'] = linux_permissions.current_mode(session.state)
                 texts = [row['text'] for row in result['rows'] if row['role'] == 'assistant']
+                texts.extend(question_texts(authoritative_view.get('requests', [])))
             cwd = (session.state or {}).get('cwd')
             media_items = [item for turn in ordered_turns(session.state or {})
                            for item in items_array(turn.get('items')) if item.get('type') in ('ImageView', 'imageView')]

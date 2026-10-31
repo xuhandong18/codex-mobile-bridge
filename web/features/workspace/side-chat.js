@@ -341,7 +341,7 @@ class SideChatPanel {
       if(p.permissions)card.append(n('pre','',JSON.stringify(p.permissions,null,2)));
       const isInput=method.includes('requestUserInput'),isMcp=method==='mcpServer/elicitation/request';
       if(isInput)for(const q of p.questions||[]){
-        const label=n('label','',q.question||q.header||q.id),input=n('textarea');label.dataset.answerKey=JSON.stringify([q.id,q]);input.rows=2;input.required=true;
+        const label=n('label'),input=n('textarea');renderMarkdown(label,q.question||q.header||q.id,this.state?.files||[],file=>this.workbench.url(this.session,'download',file.path));label.dataset.answerKey=JSON.stringify([q.id,q]);input.rows=2;input.required=true;
         if(q.options?.length){const select=n('select');select.append(new Option(BridgeI18n.t('选择答案或自行填写'),''));for(const option of q.options)select.append(new Option(option.label,option.label));select.onchange=()=>{input.value=select.value;};label.append(select);}
         label.append(input);card.append(label);controls[q.id]=()=>input.value;
       }

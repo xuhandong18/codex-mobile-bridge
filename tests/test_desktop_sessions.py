@@ -61,6 +61,32 @@ class Adapters(unittest.TestCase):
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'eval', 'session-one')
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'send', 'session-one', {'id':str(uuid.uuid4()),'text':''})
 
+    def test_detail_authorizes_question_links_without_assistant_messages(self):
+        note = self.root / 'spec.md'; note.write_text('# Spec', encoding='utf-8')
+        for provider in ('claude', 'deepseek'):
+            adapter = Mock(); self.manager.adapters[provider] = adapter
+            adapter.call.return_value = {'connected': True, 'session': {'cwd': str(self.root), 'requests': [
+                {'id': 'review', 'needsInput': True, 'input': {'questions': [{'question': f'评审 [设计](<{note.as_posix()}>)'}]}},
+            ]}, 'messages': []}
+            detail = self.manager.call(provider, 'detail', 'question-only')
+            self.assertEqual([file['path'] for file in detail['files']], ['spec.md'])
+            adapter.call.assert_called_once_with('detail', 'question-only', {})
+
+    def test_native_side_question_links_are_authorized_on_reads_and_write_receipts(self):
+        note = self.root / 'spec.md'; note.write_text('# Spec', encoding='utf-8')
+        directory = self.root / 'side-adapter'; directory.mkdir()
+        (directory / 'connection.json').write_text(json.dumps({'token': 'fixture'}), encoding='utf-8')
+        (directory / 'endpoint.json').write_text(json.dumps({'port': 12345}), encoding='utf-8')
+        adapter = DeepSeek(directory, self.root)
+        value = {'id': 'native-side', 'cwd': str(self.root), 'records': [], 'requests': [
+            {'id': 'review', 'needsInput': True, 'input': {'questions': [{'question': f'评审 [设计](<{note.as_posix()}>)'}]}},
+        ]}
+        with patch('bridge.clients.deepseek.adapter.urllib.request.build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(value).encode()
+            for action in ('side-read', 'side-write'):
+                view = adapter.call(action, 'parent', {'operation': 'read'})
+                self.assertEqual([file['path'] for file in view['files']], ['spec.md'])
+
     def test_client_switch_requires_configuration_and_persists(self):
         self.manager.adapters['claude'].cli.status = Mock(return_value={
             'cliAvailable': False, 'cliAuthReady': False})

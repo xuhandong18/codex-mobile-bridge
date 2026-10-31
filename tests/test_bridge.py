@@ -277,6 +277,28 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(session.owner, 'owner')
         self.assertFalse(any(call['method'] == 'thread-follower-start-turn' for call in self.fixture.requests))
 
+    def test_question_file_links_are_authorized_even_without_assistant_body(self):
+        workspace = self.root / 'workspace'; workspace.mkdir()
+        spec = workspace / 'spec.md'; spec.write_text('# Spec', encoding='utf-8')
+        prototype = workspace / 'prototype.html'; prototype.write_text('<p>Preview</p>', encoding='utf-8')
+        outside = self.root / 'private.md'; outside.write_text('private', encoding='utf-8')
+        self.fixture.state['cwd'] = str(workspace)
+        self.fixture.state['turns'] = [{'turnId': 'questions', 'status': 'completed', 'items': [
+            {'id': 'async-question', 'type': 'agentMessage', 'text': '', 'questions': [
+                {'title': f'认可原型？[止损与恢复原型](<{prototype.as_posix()}>)', 'options': ['认可', '修改']},
+            ]},
+        ]}]
+        self.fixture.state['requests'] = [{'id': 'sync-question', 'method': 'item/tool/requestUserInput', 'params': {
+            'questions': [{'id': 'review', 'question': f'认可设计？[设计评审稿](<{spec.as_posix()}>) [私有文件](<{outside.as_posix()}>)'}],
+        }}]
+        session = self.bridge.session(THREAD)
+        for view in (self.bridge.view(THREAD), self.bridge.timeline_read(THREAD)):
+            self.assertEqual({file['name'] for file in view['files']}, {'spec.md', 'prototype.html'})
+            for file in view['files']:
+                self.assertIn(self.bridge.artifact(THREAD, file['id'])['path'], (spec.resolve(), prototype.resolve()))
+        self.assertEqual(session.owner, 'owner')
+        self.assertFalse(any(call['method'] == 'thread-follower-start-turn' for call in self.fixture.requests))
+
     def test_legacy_desktop_threads_visible_but_subagents_excluded(self):
         from bridge.features.sessions.store import SessionStore
         legacy, untagged, child, cli, mobile = (str(uuid.uuid4()) for _ in range(5))

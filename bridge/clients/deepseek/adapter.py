@@ -10,6 +10,7 @@ from pathlib import Path
 from bridge.features.accounts.models import NoRedirect
 from bridge.app.lifecycle import private_json
 from bridge.clients.errors import BridgeUnavailable
+from bridge.features.workspace.files import workspace_references
 from bridge.clients.deepseek.setup import MARKER, insertion, verified_directory, legacy_account_configured, install_client_assets
 
 PLUGIN_ID = re.compile(r'''["']?id["']?\s*:\s*["']?codex-mobile-desktop(?:["'\s,}]|$)''')
@@ -212,6 +213,7 @@ class DeepSeek:
             value['turns'] = transcript_turns(records)
             if action.startswith('side-'):
                 value['requests'] = [side_request(request) for request in value.get('requests', [])]
+                value['files'] = workspace_references([], value.get('cwd'), value['requests'])
         if action == 'status' and self.legacy_protocol and value.get('connected') and 'configured' not in value:
             configured = False
             if legacy_account_configured(self.home):

@@ -46,6 +46,22 @@ class ContextUsageTests(unittest.TestCase):
 
 
 class DirectoryReferenceTests(unittest.TestCase):
+    def test_question_only_workspace_references_keep_client_and_file_boundaries(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as directory:
+            root = Path(directory); workspace = root / 'project'; workspace.mkdir()
+            target = workspace / 'spec.md'; target.write_text('# Spec', encoding='utf-8')
+            outside = root / 'private.md'; outside.write_text('private', encoding='utf-8')
+            prompt = f'请评审 [设计](<{target.as_posix()}>) [私有](<{outside.as_posix()}>)'
+            for request in (
+                {'needsInput': True, 'input': {'questions': [{'question': prompt}]}},
+                {'supported': True, 'method': 'tool/requestUserInput', 'params': {'questions': [{'question': prompt}]}},
+            ):
+                with self.subTest(request=request):
+                    files = workspace_references([], str(workspace), [request])
+                    self.assertEqual([file['path'] for file in files], ['spec.md'])
+                    self.assertEqual(files[0]['reference'], target.as_posix())
+                    self.assertEqual(workspace_references([], str(workspace), [{**request, 'supported': False}]), [])
+
     def test_app_directory_is_locatable_but_not_an_ordinary_download(self):
         require_symlink_support()
         with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as directory:

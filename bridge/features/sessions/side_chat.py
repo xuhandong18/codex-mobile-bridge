@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 
 from bridge.features.sessions.model import normalize_state, normalize_request, normalize_item, waiting_for_user
+from bridge.features.workspace.files import workspace_references
 from bridge.features.sessions.message_index import conversation_recency_key, conversation_recency_time
 from bridge.features.workspace.uploads import Uploads
 from bridge.features.sessions.side_chat_archive import SideChatArchive
@@ -398,6 +399,7 @@ class SideChat:
                 if not request['supported'] or request['method'] in ('item/plan/requestImplementation', 'bridge/requestUserInputAsync'):
                     request['supported'] = False
                     request['params'] = {'message': '此请求暂不支持在侧边聊天处理，请停止本次回复。'}
+            result['files'] = workspace_references([], result.get('cwd'), result['requests'])
             return {**result, 'parentId': self.parent, 'error': self.error, 'recency': self.recency,
                     'archiveId': self.id, 'source': 'gateway', 'savedAt': self.saved_at,
                     'readOnly': self.closed or bool(self.error), 'expired': self.closed or bool(self.error),
