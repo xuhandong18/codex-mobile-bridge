@@ -49,16 +49,21 @@ PREVIOUS_AI_RENAME_SOURCES = ('e33bf65c7f651b195f286a9d86a713157f097fc068927c4af
 # Revision 8 before waiting-state summaries, release LF and Windows CRLF.
 PREVIOUS_WAITING_SOURCES = ('e96301e720ab5022372c3b3938233d5023de7f219277c6c74ba098ad1879d4c3', '07db7379a1d103ebd0e2df422fbec666e6197d9fda3a01d77ece899331eda558')
 
+# Revision 9, before bounded native history and independent side-chat read state.
+PREVIOUS_HISTORY_SOURCES = ('1b006bc65e0ff45c13c5eaccdf0eb08c384c1c03f8fefffc0af4c6079e92df48',
+                            '29b359c39255cbf92ff4105457e6e4eeb17e426924e945a86b2e5721de4933c2')
+
 def client_assets():
     base = Path(__file__).parent
-    return {'package.json': (base/'client-package.json').read_bytes(), 'client.js': (base/'client.js').read_bytes()}
+    return {'package.json': (base/'client-package.json').read_bytes(), 'client.js': (base/'client.js').read_bytes(),
+            **{name: (base/name).read_bytes() for name in ('history.mjs','inline-current.mjs','inline-history.mjs','recovery.mjs','LICENSE.dsh-inline-edit')}}
 
 
 def install_client_assets(directory):
     assets = client_assets()
     for name, content in assets.items():
         target = directory/name
-        if target.exists() and (target.is_symlink() or target.read_bytes().replace(b'\r\n', b'\n') != content.replace(b'\r\n', b'\n')):
+        if target.is_symlink() or target.exists() and target.read_bytes().replace(b'\r\n', b'\n') != content.replace(b'\r\n', b'\n'):
             raise ValueError('Harness 接入的桌面已读组件无法验证，尚未覆盖文件')
     for name, content in assets.items():
         target = directory/name
@@ -173,7 +178,7 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES, *PREVIOUS_WAITING_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES, *PREVIOUS_WAITING_SOURCES, *PREVIOUS_HISTORY_SOURCES):
             return None
         if digest in current_sources:
             for name, content in client_assets().items():

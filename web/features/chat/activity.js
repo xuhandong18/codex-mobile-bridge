@@ -61,7 +61,7 @@ class SessionActivity {
   }
   updateSideChat(parent,row,visible=false,{save=true}={}){
     const turn=row.turns?.at(-1);
-    const key=this.id(parent),child={...row,turnId:row.turnId??turn?.id,turnStatus:row.turnStatus??turn?.status,host:parent.host,id:parent.id+'/side/'+row.id},childKey=this.id(child);
+    const key=this.id(parent),child={...row,turnId:row.turnId??turn?.turnId??turn?.id,turnStatus:row.turnStatus??turn?.status,host:parent.host,id:parent.id+'/side/'+row.id},childKey=this.id(child);
     this.rows[key]??={};
     if(Number.isFinite(row.waitingObservedAt))this.rows[key].sideChatsObservedAt=Math.max(row.waitingObservedAt,this.rows[key].sideChatsObservedAt||0);
     this.rows[key].sideKeys=[...new Set([...(this.rows[key].sideKeys||[]),childKey])];

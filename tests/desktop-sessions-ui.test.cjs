@@ -297,12 +297,11 @@ test('closing a split tool while narrow preserves the adjacent tool when widened
  await wb.close('file:preview');assert.equal(s.splitTab,'files');assert.equal(wb.splitMode,false);ui.view.conversation.clientWidth=1000;wb.paint();assert.equal(wb.splitMode,true);assert.equal(wb.panel.firstElementChild,s.files[0].body);
  wb.unsplit();await wb.close('files');assert.equal(s.active,'chat');assert.equal(s.splitTab,null);
 });
-test('a pending Harness side-chat close updates only its original session and respects cancellation',async()=>{
- const ui=await opened(),wb=ui.view.workbench,s=wb.current;let finish;
+test('closing a Harness side tab only releases the local view and does not end the native task',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,s=wb.current;let ended=0;
  s.provider='deepseek';
- s.files=['files','sidechat'].map(id=>({id,name:id,body:wb.node('div')}));s.files[1].sideChat={end:()=>new Promise(resolve=>finish=resolve),references:{close(){}},dispose(){}};wb.split('sidechat');
- const cancelled=wb.close('sidechat');finish(false);await cancelled;assert.equal(s.splitTab,'sidechat');assert.equal(s.files.length,2);
- const closing=wb.close('sidechat');wb.open('other','local');const other=wb.current;finish(true);await closing;assert.equal(wb.current,other);assert.equal(s.splitTab,'files');assert.equal(s.active,'files');assert.equal(other.active,'chat');
+ s.files=['files','sidechat'].map(id=>({id,name:id,body:wb.node('div')}));s.files[1].sideChat={end:()=>{ended++;},references:{close(){}},dispose(){}};wb.split('sidechat');
+ await wb.close('sidechat');assert.equal(ended,0);assert.equal(s.files.length,1);assert.equal(s.splitTab,'files');
 });
 
 test('model picker preserves current effort only for compatible models',async()=>{

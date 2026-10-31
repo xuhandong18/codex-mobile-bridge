@@ -142,6 +142,8 @@ def question_texts(requests):
             text = question.get('question') or question.get('header')
             if isinstance(text, str):
                 yield text
+            if isinstance(question.get('detail'), str):
+                yield question['detail']
 
 
 def artifact_paths(state, codex_home):

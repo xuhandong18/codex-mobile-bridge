@@ -1,0 +1,44 @@
+// Real DOM against the production native-history converter, isolated from user data.
+async function runDeepSeekHistoryBrowserTests(){
+  const checks=[],check=(ok,label)=>{if(!ok)throw Error(label);checks.push(label);},wait=async fn=>{for(let n=0;n<150;n++){if(fn())return;await new Promise(r=>setTimeout(r,20));}throw Error('等待新增功能界面超时');};
+  globalThis.uuid=()=>crypto.randomUUID();const calls=[];
+  const request=async(url,body)=>{calls.push({url,body});const res=await fetch(url,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const value=await res.json();if(!res.ok)throw Error(value.error||'fixture error');return value;};
+  const root=document.getElementById('app');root.hidden=false;document.getElementById('login').hidden=true;document.getElementById('bootstrap-status').hidden=true;
+  const view=new DesktopSessionsView({root,select:document.getElementById('desktop-backend'),request,notify:text=>{globalThis.__lastNotice=text;},onSelect(){},csrf:()=>'',onUnauthorized(){throw Error('unexpected auth');}});
+  await view.choose('deepseek');await view.open('main');await wait(()=>view.timeline?.indexReady&&!view.timeline.indexBusy);
+  check(view.timeline.messageIndex.size===260,'主聊天完整目录包含最近窗口以外的260条用户消息');
+  const first=[...view.timeline.messageIndex.values()][0];await view.timeline.navigateMessage(first);await wait(()=>view.messages.textContent.includes('main prompt 0'));
+  check(view.timeline.navigationMode&&view.timeline.rows.size<=200,'主聊天历史定位保持有界窗口');
+  await view.timeline.loadLatest();await view.timeline.older.onclick();await view.timeline.older.onclick();await view.timeline.older.onclick();check(view.timeline.navigationMode&&view.timeline.navigationPages.length<=2&&view.timeline.rows.size<=200,'连续向前分页只保留两个相邻主聊天窗口');
+  const anchor=view.timeline.capture();await request('/fixture-append?sessionId=main',{});await wait(()=>view.timeline.hasLiveChanges);check(view.timeline.capture()?.key===anchor?.key,'新回复到达时保留主聊天历史阅读位置');
+  check(!view.messages.textContent.includes('CODEX'),'Harness 消息使用自己的标题');
+  const plan=view.requests.querySelector('.plan-review');check(plan?.textContent.includes('完整计划最后一步'),'主聊天显示完整原生计划');
+  check(view.attachmentInput.accept==='','主聊天普通文件选择入口可用');
+  check(view.queueRoot?.textContent.includes('排队消息'),'主聊天显示原生待发送消息');const withdraw=view.queueRoot.querySelector('button');await withdraw.onclick();await wait(()=>!view.busy);check(calls.some(c=>c.body?.operation==='remove'&&c.body.itemId==='native-queue'&&c.body.id),'主聊天撤回保留原生队列身份和操作ID');
+  await wait(()=>view.freshDetail&&!view.attachments.locked);view.attachments.add([new File(['main document'],'main.txt',{type:'text/plain'})]);await wait(()=>view.attachments.rows.length&&view.attachments.ready());check(view.attachments.rows[0].scope==='main','主聊天普通文件上传绑定主会话');
+  await view.workbench.refreshSideChats();const tabs=view.workbench.current.files.filter(t=>t.sideChat);check(tabs.length===2,'同一父聊天发现两个独立侧边槽位');
+  const tab=tabs[0];view.workbench.select(tab.id);const panel=tab.sideChat;await panel.load();await panel.loadMessageIndex();await wait(()=>panel.nativeDirectory?.length===260);
+  check(panel.nativeDirectory.length===260,'侧边聊天独立拥有完整原生目录');
+  await panel.navigateMessage(panel.nativeDirectory[2]);check(panel.messages.textContent.includes('side-a prompt 2'),'侧边目录可以定位旧消息');
+  const sideAnchor=panel.readingAnchor();await request('/fixture-append?sessionId=side-a',{});await panel.load();check(panel.readingAnchor()?.key===sideAnchor?.key&&panel.messages.textContent.includes('side-a prompt 2'),'新回复到达时保留侧边历史阅读位置');
+  check(panel.messages.querySelectorAll('article.user').length<=100,'侧边历史正文保持有界');
+  const images=panel.messages.querySelectorAll('img.attachment-thumb');check(images.length===1&&images[0].src.includes('/attachment?sessionId=side-a'),'历史图片使用实际子会话的鉴权入口');await wait(()=>images[0].complete);check(images[0].naturalWidth>0,'原生图片可以实际解码显示');
+  check(panel.approvals.querySelector('.plan-review')?.textContent.includes('完整计划最后一步'),'侧边聊天也显示完整计划');
+  check(panel.fileInput.accept==='','侧边普通文件选择入口可用');
+  panel.attachments.add([new File(['side document'],'side.txt',{type:'text/plain'})]);await wait(()=>panel.attachments.ready());check(panel.attachments.rows[0].scope===panel.state.id,'侧边普通文件上传绑定实际子会话');panel.input.value='文件排队';panel.sendMode.value='queue';panel.controls();await panel.send();check(calls.some(c=>c.body?.action==='send'&&c.body.id===panel.state.id&&c.body.attachments?.length&&c.body.mode==='queue'),'侧边普通文件随排队消息发送');
+  panel.input.value='保留的侧边草稿';panel.input.oninput();panel.following=false;const child=panel.state.id,closedBefore=calls.filter(c=>c.body?.action==='close').length;
+  await view.workbench.close(tab.id);check(calls.filter(c=>c.body?.action==='close').length===closedBefore,'关闭标签不发送停止或归档');
+  const reopened=view.workbench.createSideChat(view.workbench.current,tab.slot);view.workbench.select(reopened.id);await reopened.sideChat.load();
+  check(reopened.sideChat.state.id===child&&reopened.sideChat.input.value==='保留的侧边草稿','重新打开存活槽位恢复同一子会话和草稿');
+  check(reopened.sideChat.messages.textContent.includes('side-a prompt 2'),'重新打开保留历史阅读窗口');
+  let current=reopened.sideChat;await request('/fixture-unknown',{});current.input.value='未确认消息';current.sendMode.value='queue';current.controls();await current.send();const pendingId=current.pending?.submissionId;check(!!pendingId,'未知发送保留原提交身份');
+  await view.workbench.close(reopened.id);const uncertain=view.workbench.createSideChat(view.workbench.current,tab.slot);view.workbench.select(uncertain.id);current=uncertain.sideChat;await current.load();check(current.pending?.submissionId===pendingId&&current.sendButton.disabled,'关闭重开保留未知发送身份并禁止再次发送');
+  await request('/fixture-ack',{});await current.load();check(!current.pending&&calls.filter(c=>c.body?.action==='send'&&c.body.text==='未确认消息').length===1,'只读核对已接收结果，不重发未知消息');
+  current.jumpBottom();await current.load();const saved={...current.state};current.apply({...saved,connected:false});check(current.input.readOnly&&current.sendButton.disabled,'断线后保留记录并禁用输入');
+  current.apply({...saved,id:'another-child'});check(current.state.id===child&&current.sendButton.disabled,'另一子会话回包不能切换或启用当前输入');
+  await current.load();check(current.state.id===child&&!current.input.readOnly,'核验同一原生子会话后恢复可写');
+  window.confirm=()=>true;await current.end();await current.load();check(current.state.readOnly&&current.state.id===child,'明确结束后仍能只读查看原生历史');
+  await view.workbench.sideChatHistory();const dialog=document.querySelector('.wb-side-history');check(dialog?.textContent.includes('已保存，仅供查看')&&dialog.textContent.includes('可继续'),'历史列表区分结束记录和存活聊天');dialog.close();
+  check(document.documentElement.scrollWidth<=innerWidth+1,'当前屏幕尺寸没有页面横向溢出');
+  view.clear();return {passed:checks.length,checks};
+}

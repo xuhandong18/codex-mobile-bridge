@@ -4,14 +4,18 @@ import {createServer} from 'node:http';
 import {readFile,writeFile,rename,unlink,mkdir,realpath,stat} from 'node:fs/promises';
 import {dirname,join,isAbsolute} from 'node:path';
 import {timingSafeEqual,randomUUID} from 'node:crypto';
+import {createHistory,lastTurn,eventOf,textOf} from './history.mjs';
+import {planCurrent,editCurrent} from './inline-current.mjs';
+import {messageEligibility} from './inline-history.mjs';
+import {createRecovery} from './recovery.mjs';
 export const inject=['sessionController','sessionSkillCatalog','permissionPresets','agents','workspaceRegistry'];
 export async function apply(ctx,config){
   const {token,endpoint}=JSON.parse(await readFile(config.configPath,'utf8'));
   // The gateway accepts at most 100 MiB of decoded images plus small JSON fields.
   const maxRequestBytes=Math.ceil(100*1024*1024*4/3)+1024*1024;
-  const questions=new Map(),history=new Map();
+  const questions=new Map(),history=new Map(),liveStarted=new Map(),completionHints=new Map();
   const statePath=join(dirname(config.configPath),'personal-state.json');
-  let personal={sections:[],placements:{},sides:{},projectless:[],titles:{},renames:{}};
+  let personal={sections:[],placements:{},sides:{},mainForks:[],projectless:[],titles:{},renames:{},interactions:{}};
   try{personal={...personal,...JSON.parse(await readFile(statePath,'utf8'))};}catch(error){if(error.code!=='ENOENT')throw error;}
   for(const job of Object.values(personal.renames))if(['queued','running'].includes(job.status))job.status='unknown';
   // Serialize metadata and native mutations together. A read never creates an agent.
@@ -70,6 +74,27 @@ export async function apply(ctx,config){
   const list=async()=> (await ctx.sessionController.list({},signal())).items;
   const find=async id=>{const row=(await list()).find(r=>r.sessionId===id);if(!row)throw Error('DeepSeek 会话不存在');return row;};
   const values=row=>row.projections?.values||{};
+  const sideEnded=entry=>!!entry.closed||(ctx.workspaceRegistry.archivedSessionIds||[]).includes(entry.id);
+  const nativeHistory=createHistory({ctx,token,find});
+  const editOperation=async task=>{try{return await task();}catch(error){
+    const messages={running:'原聊天还有运行或排队消息，请稍后再修改',stale:'历史已变化，请刷新后重新打开编辑',supplemental:'当前发言是运行中的补充消息，暂不支持历史修改',compacted:'这段上下文已经压缩，暂不支持原会话修改',notReady:'原会话尚未就绪，请重新核验连接',unsupported:'当前历史位置包含无法安全保留的上下文，暂不支持修改',steeringCurrent:'当前历史轮次包含补充发言，暂不支持修改',currentUncertain:'修改结果待核对，请查看原聊天；不会自动补发',currentFailed:'历史修改未确认，请核对原聊天'};
+    throw Error(messages[error.editCode]||error.message||'历史修改未确认，请核对原聊天');
+  }};
+  const recovery=createRecovery({personal,save,serialize:task=>{const next=mutation.then(task);mutation=next.catch(()=>{});return next;},
+    inspect:async sid=>{
+      const row=await find(sid),agent=ctx.agents.get(sid),goal=service(agent,'goals')?.get?.(agent),inventory=ctx.get?.('pluginInventory');
+      // Unknown inventories cannot prove exclusive ownership of recovery.
+      let external=true;if(inventory?.list){const info=await inventory.list();external=[...(info.entries||[]),...(info.agentPresets||[]).flatMap(p=>p.rows||[])].some(p=>/dsh-(?:client-)?auto-continue/.test(p.moduleName||'')&&p.enabled!==false);}
+      const recent=await nativeHistory.page(sid,await nativeHistory.cut(row),undefined,30),turn=lastTurn(recent.records);
+      return {running:row.running!==false,waiting:[...questions.values()].some(q=>q.sid===sid),queued:!!(values(row).inbox?.['next-turn']?.length||values(row).inbox?.['next-step']?.length),side:!!row.parentSessionId&&!personal.mainForks.includes(sid)||Object.values(personal.sides).some(e=>e.id===sid),goalDriving:!!goal&&goal.phase!=='complete'&&goal.phase!=='paused'&&goal.activation!=='disarmed',external,turn:Number(turn.turnId)};
+    },send:(sid,id)=>ctx.sessionController.prompt({sessionId:sid,requestId:id,mode:'queue',content:[{type:'text',text:'请继续刚才因模型容量不足中断的任务。先核对已有执行结果，不要重复执行结果未确认的操作。'}]},signal())});
+  const noteInteraction=async(sid,at=Date.now())=>{
+    if(typeof at==='string')at=Date.parse(at);if(!Number.isFinite(at)||at<=0)return;
+    personal.interactions[sid]={...personal.interactions[sid],at:Math.max(personal.interactions[sid]?.at||0,at)};
+    const pair=Object.entries(personal.sides).find(([,e])=>e.id===sid);
+    if(pair){const parent=JSON.parse(pair[0])[0];personal.interactions[parent]={...personal.interactions[parent],at:Math.max(personal.interactions[parent]?.at||0,at)};}
+    await save();
+  };
   const titleStatus=async(sid,requestId)=>{
     const row=await find(sid),jobs=Object.entries(personal.renames).filter(([id,job])=>job.sid===sid&&(!requestId||id===requestId)),last=jobs.at(-1);
     const job=last?.[1].status==='linked'?personal.renames[last[1].target]:last?.[1];
@@ -96,13 +121,13 @@ export async function apply(ctx,config){
   const service=(agent,name)=>agent?.ctx?.get?.(name)||ctx.get?.(name);
   const modeCapabilities=row=>{
     const v=values(row),agent=row&&ctx.agents.get(row.sessionId),plan=service(agent,'planMode'),goals=service(agent,'goals');
-    return {workModes:!!(typeof plan?.set==='function'||Object.hasOwn(v,'plan')),goal:!!(typeof goals?.create==='function'&&Object.hasOwn(v,'goal'))};
+    return {workModes:!!(typeof plan?.set==='function'||Object.hasOwn(v,'plan')),goal:!!(typeof goals?.create==='function'&&Object.hasOwn(v,'goal')),goalEditActive:typeof goals?.edit==='function',goalEditComplete:typeof goals?.edit==='function',goalContinueComplete:typeof goals?.create==='function'};
   };
   const modeState=row=>{
     const v=values(row),agent=ctx.agents.get(row.sessionId),plan=service(agent,'planMode'),goals=service(agent,'goals');
     const livePlan=agent&&typeof plan?.get==='function'?plan.get(agent):null;
     const active=livePlan?(livePlan.pending??livePlan.active):(v.plan?.pending?!v.plan.active:v.plan?.active);
-    const goal=agent&&typeof goals?.get==='function'?goals.get(agent):v.goal;
+    const persisted=v.goal,goal=agent&&typeof goals?.get==='function'?goals.get(agent):persisted?.goal?{...persisted.goal,roundsStarted:persisted.roundsStarted,createdAt:persisted.createdAt}:persisted;
     return {collaborationMode:active?'plan':'default',goal:goal?{goalId:goal.id,revision:goal.revision,objective:goal.objective,status:goal.phase,createdAt:goal.createdAt,roundsStarted:goal.roundsStarted,maxGoalRounds:goal.maxGoalRounds,activation:goal.activation||'disarmed'}:null};
   };
   const modeAgent=async row=>{
@@ -120,7 +145,7 @@ export async function apply(ctx,config){
     if(row.running!==false&&(mode==='goal'||mode!==current.collaborationMode))throw Error('请等待当前任务结束后再切换工作模式');
     if(mode==='goal'){
       if(!body.text?.trim()||body.text.trim().length>4000)throw Error('目标内容需为 1–4000 字');
-      if(body.resolvedImages?.length)throw Error('目标模式暂不接受附件');
+      if(body.resolvedImages?.length||body.resolvedFiles?.length)throw Error('目标模式暂不接受附件');
       if(current.goal&&current.goal.status!=='complete')throw Error('已有未完成目标，请先处理当前目标');
     }
     if(mode!=='goal'&&mode===current.collaborationMode)return null;
@@ -142,7 +167,8 @@ export async function apply(ctx,config){
     const agent=await modeAgent(row),goals=service(agent,'goals'),goal=goals?.get(agent);
     if(!goal||goal.id!==expected.goalId||goal.revision!==expected.revision)throw Error('目标已变化，请刷新后重试');
     const ref={id:goal.id,revision:goal.revision};
-    if(body.goalAction==='edit'){if(goal.phase!=='paused'||typeof body.objective!=='string'||!body.objective.trim()||body.objective.trim().length>4000)throw Error('请先暂停目标，并输入 1–4000 字的目标内容');goals.edit(agent,ref,{objective:body.objective.trim()});}
+    if(body.goalAction==='edit'){if(typeof body.objective!=='string'||!body.objective.trim()||body.objective.trim().length>4000)throw Error('请输入 1–4000 字的目标内容');goals.edit(agent,ref,{objective:body.objective.trim()});}
+    else if(body.goalAction==='active'&&goal.phase==='complete')goals.create(agent,{objective:goal.objective,maxGoalRounds:goal.maxGoalRounds});
     else goals[{paused:'pause',active:'resume',clear:'clear'}[body.goalAction]](agent,ref);
     return {status:'accepted',...modeState(await find(row.sessionId))};
   };
@@ -154,7 +180,7 @@ export async function apply(ctx,config){
   };
   const permissionState=row=>{const catalog=ctx.permissionPresets.catalog(),mode=values(row).permissions?.currentValue||catalog.defaultPreset,option=catalog.options.find(o=>o.value===mode);return {permissionMode:mode,permissionLabel:localized(option?.label||option?.name)||mode};};
   const permissionOptions=()=>ctx.permissionPresets.catalog().options.map(o=>({...o,label:localized(o.label||o.name)||o.value,description:localized(o.description)}));
-  const normalize=row=>{const v=values(row),m=v.modelSelection?.next||v.modelSelection?.lastUsed||ctx.get?.('agentDefaultModel')?.currentSelection()||{};return {id:row.sessionId,title:v.title||'新会话',cwd:row.cwd||'',backend:'deepseek',mode:'desktop',status:typeof row.running==='boolean'?(row.running?'active':'idle'):'unknown',runtimeKnown:typeof row.running==='boolean',updatedAt:row.updatedAt,model:m.provider&&m.model?m.provider+'/'+m.model:'',effort:m.reasoningEffort||'',...permissionState(row),contextUsage:contextUsage(row),requests:[...questions.values()].filter(q=>q.sid===row.sessionId).map(q=>q.public),waitingForUser:[...questions.values()].some(q=>q.sid===row.sessionId),waitingObservedAt:Date.now()*1000};};
+  const normalize=row=>{const v=values(row),m=v.modelSelection?.next||v.modelSelection?.lastUsed||ctx.get?.('agentDefaultModel')?.currentSelection()||{};return {id:row.sessionId,title:v.title||'新会话',cwd:row.cwd||'',backend:'deepseek',mode:'desktop',status:typeof row.running==='boolean'?(row.running?'active':'idle'):'unknown',runtimeKnown:typeof row.running==='boolean',updatedAt:Math.max(personal.interactions[row.sessionId]?.at||0,v.sessionListMetadata?.lastPromptAt||0)||row.createdAt||0,nativeUpdatedAt:row.updatedAt,...personal.interactions[row.sessionId]?.turn,completionHint:completionHints.get(row.sessionId),model:m.provider&&m.model?m.provider+'/'+m.model:'',effort:m.reasoningEffort||'',...permissionState(row),contextUsage:contextUsage(row),requests:[...questions.values()].filter(q=>q.sid===row.sessionId).map(q=>q.public),waitingForUser:[...questions.values()].some(q=>q.sid===row.sessionId),waitingObservedAt:Date.now()*1000};};
   const records=async row=>{
     const projection=await ctx.sessionController.projections({sessionId:row.sessionId},signal());
     const seq=projection.asOfSeq??row.projections?.asOfSeq??0;
@@ -177,15 +203,16 @@ export async function apply(ctx,config){
     return [...seen.values()];
   };
   const descendants=(sid,rows)=>{
-    const found=new Set([sid]),sides=new Set(Object.values(personal.sides).map(e=>e.id));let added=true;
+    const found=new Set([sid]),sides=new Set([...Object.values(personal.sides).map(e=>e.id),...personal.mainForks]);let added=true;
     while(added){added=false;for(const r of rows)if(found.has(r.parentSessionId)&&!found.has(r.sessionId)&&!sides.has(r.sessionId)){found.add(r.sessionId);added=true;}}
     return rows.filter(r=>r.sessionId!==sid&&found.has(r.sessionId));
   };
   const activity=(row,rows)=>{
     const children=descendants(row.sessionId,rows),v=normalize(row),active=children.filter(c=>c.running===true).length,unknown=children.filter(c=>typeof c.running!=='boolean').length;
-    const sideChats=Object.entries(personal.sides).filter(([key,entry])=>JSON.parse(key)[0]===row.sessionId&&!entry.closed).map(([,entry])=>{
+    const sideChats=Object.entries(personal.sides).filter(([key,entry])=>JSON.parse(key)[0]===row.sessionId&&!sideEnded(entry)).map(([key,entry])=>{
       const child=rows.find(item=>item.sessionId===entry.id),value=child?normalize(child):null;
-      return {id:entry.id,connected:!!value,status:value?.status||'unknown',waitingForUser:value?.waitingForUser??null,waitingObservedAt:value?.waitingObservedAt};
+      const subtree=child?descendants(child.sessionId,rows):[],childActive=subtree.filter(c=>c.running===true).length,unknown=subtree.some(c=>typeof c.running!=='boolean'),waiting=subtree.filter(c=>[...questions.values()].some(q=>q.sid===c.sessionId)).length;
+      return {id:entry.id,slot:JSON.parse(key)[1],connected:!!value,status:childActive?'active':unknown?'unknown':value?.status||'unknown',parentStatus:value?.status,runningSubagents:childActive,subagentsKnown:!!value&&!unknown,...(personal.interactions[entry.id]?.turn||{}),completionHint:completionHints.get(entry.id),waitingForUser:value?.waitingForUser??null,waitingObservedAt:value?.waitingObservedAt,waitingSubagents:waiting||(!unknown?0:null),waitingSubagentsObservedAt:value?.waitingObservedAt};
     });
     const waiting=children.filter(child=>[...questions.values()].some(q=>q.sid===child.sessionId)).length;
     return {...v,sideChats,sideChatsObservedAt:Date.now()*1000,waitingSubagents:waiting||(!unknown?0:null),waitingSubagentsObservedAt:Date.now()*1000,ownStatus:v.status,childActive:active,childUnknown:unknown,status:v.status==='active'||active?'active':unknown?'unknown':v.status};
@@ -198,31 +225,53 @@ export async function apply(ctx,config){
       if(['user/message','assistant/message','tool/call','tool/result','todo/write','turn/start','turn/end'].includes(type))result.push({...item,presentation:metadata});
     }return result;
   };
-  const nativeDetail=async row=>({session:{...activity(row,await list()),...modeState(row)},capabilities:{...capabilities(),...modeCapabilities(row)},records:publicRecords(await records(row)),historyComplete:history.get(row.sessionId)?.complete===true,steps:values(row).todos||[],connected:true});
-  const sideView=async entry=>{
-    const row=await find(entry.id),detail=await nativeDetail(row),nativeTitle=detail.session.title;
+  const nativeMeta=async row=>{
+    const recent=await nativeHistory.page(row.sessionId,await nativeHistory.cut(row),undefined,100);
+    const ending=lastTurn(recent.records),old=personal.interactions[row.sessionId]||{};
+    let at=old.at||0;for(const record of recent.records){const e=eventOf(record),msg=e.data?.message||e.data;if(['user/message','assistant/message'].includes(e.type)&&textOf(msg).trim()&&(!msg.source?.kind||msg.source.kind==='user'||e.type==='assistant/message')){const time=typeof e.time==='string'?Date.parse(e.time):e.time;if(Number.isFinite(time))at=Math.max(at,time);}}
+    if(at!==old.at||JSON.stringify(old.turn)!==JSON.stringify(ending)){personal.interactions[row.sessionId]={...old,at,turn:ending};await save();if(at)await noteInteraction(row.sessionId,at);}
+    const projected=nativeHistory.project(row.sessionId,recent.records),latestUser=projected.messages.findLast(m=>m.role==='user'&&!m.isUserContext),session={...activity(row,await list()),...ending,...modeState(row),recovery:recovery.settings()};
+    return {...session,session,latestUserTurnId:latestUser?.turnId,capabilities:{...capabilities(),...modeCapabilities(row),historyNavigation:true,messageActions:typeof ctx.sessionController.resolveAgent==='function',inlineEdit:typeof (ctx.get?.('llm')||ctx.llm)?.resolveModelInfo==='function'&&!!(ctx.get?.('attachments')||ctx.attachments)&&!!(ctx.get?.('fileUploads')||ctx.fileUploads),fileAttachments:typeof (ctx.get?.('fileUploads')||ctx.fileUploads)?.uploadStream==='function'},steps:values(row).todos||[],connected:true};
+  };
+  const nativeDetail=async(row,body={})=>{
+    const meta=await nativeMeta(row),value=await nativeHistory.window(row.sessionId,body,meta);for(const message of value.rows)if(!meta.capabilities.inlineEdit)message.editable=false;
+    // Keep legacy consumers readable, but all displayed content comes from one projection.
+    return {...meta,...value,records:[],queue:queueItems(row)};
+  };
+  const queueItems=row=>(values(row).inbox?.['next-turn']||[]).map(m=>({id:m.id,submissionId:m.source?.rpcId,text:textOf(m),attachments:(m.content||[]).filter(p=>['file','image'].includes(p.type)).map(p=>({name:p.name||p.attachment?.name||'附件'}))}));
+  const sideView=async(entry,body={})=>{
+    const row=await find(entry.id),detail=await nativeDetail(row,body),nativeTitle=detail.session.title;
     const current=entry.manual?nativeTitle:nativeTitle!==entry.inheritedTitle&&nativeTitle!=='新会话'?nativeTitle:entry.title||'';
     const inbox=values(row).inbox?.['next-turn'],submissions=(entry.submissions||[]).map(s=>({...s,...Array.isArray(inbox)&&s.status==='queued'?{status:inbox.some(m=>m.source?.rpcId===s.id)?'queued':'accepted'}:{}}));
-    return {...detail,id:entry.id,title:current,titleRevision:(entry.revision||0)+(entry.nativeRevision||0),titleSource:entry.manual?'manual':'native',cwd:row.cwd,status:detail.session.status,model:detail.session.model,effort:detail.session.effort,permissionMode:detail.session.permissionMode,contextUsage:detail.session.contextUsage,...modeState(row),requests:detail.session.requests,waitingForUser:detail.session.waitingForUser,waitingObservedAt:detail.session.waitingObservedAt,waitingSubagents:detail.session.waitingSubagents,waitingSubagentsObservedAt:detail.session.waitingSubagentsObservedAt,submissions};
+    return {...detail,slot:Object.entries(personal.sides).find(([,e])=>e===entry)?JSON.parse(Object.entries(personal.sides).find(([,e])=>e===entry)[0])[1]:'',id:entry.id,archiveId:sideEnded(entry)?entry.id:undefined,readOnly:sideEnded(entry),closed:sideEnded(entry),title:current,titleRevision:(entry.revision||0)+(entry.nativeRevision||0),titleSource:entry.manual?'manual':'native',cwd:row.cwd,status:detail.session.status,model:detail.session.model,effort:detail.session.effort,permissionMode:detail.session.permissionMode,contextUsage:detail.session.contextUsage,...modeState(row),requests:sideEnded(entry)?[]:detail.session.requests,waitingForUser:detail.session.waitingForUser,waitingObservedAt:detail.session.waitingObservedAt,waitingSubagents:detail.session.waitingSubagents,waitingSubagentsObservedAt:detail.session.waitingSubagentsObservedAt,submissions};
   };
   const side=async(sid,body,write=false)=>{
     await find(sid);
     const slot=body.slot||'';if(slot&&!/^[0-9a-f-]{36}$/.test(slot))throw Error('侧边聊天标识无效');
     const key=JSON.stringify([sid,slot]),entry=personal.sides[key],op=body.operation||'read';
     if(!write){
+      const entries=Object.entries(personal.sides).filter(([k])=>JSON.parse(k)[0]===sid);
+      if(body.history==='1'){
+        const offset=Math.max(0,Number(body.offset)||0),items=entries.slice(offset,offset+50).map(([k,e])=>({archiveId:e.id,id:e.id,slot:JSON.parse(k)[1],title:e.title||'侧边聊天',ended:sideEnded(e),live:!sideEnded(e)}));
+        return {items,records:items,nextOffset:offset+50<entries.length?offset+50:null};
+      }
+      const selected=body.archiveId?entries.find(([,e])=>e.id===body.archiveId)?.[1]:entry;
+      if(body.archiveId&&!selected)throw Error('历史聊天不属于当前父聊天');
+      if(selected&&op==='message-index')return nativeHistory.directory(selected.id,body);
+      if(selected&&op==='message-detail')return nativeHistory.detail(selected.id,body);
       if(op!=='read'){
         if(!entry||entry.closed||entry.id!==body.childId)throw Error('侧边聊天已失效');
         if(op==='catalog')return catalog(entry.id,'models');
         if(op==='skills'){const result=await catalog(entry.id,'plugins'),query=String(body.query||'').toLowerCase(),offset=Number(body.offset)||0;const skills=result.skills.filter(s=>s.selectable!==false&&(s.name+' '+s.description).toLowerCase().includes(query));return {skills:skills.slice(offset,offset+200),nextOffset:skills.length>offset+200?offset+200:null};}
         throw Error('无效侧边聊天读取');
       }
-      const slots=await Promise.all(Object.entries(personal.sides).filter(([k,e])=>JSON.parse(k)[0]===sid&&!e.closed).map(async([k,e])=>{const v=await sideView(e);return {slot:JSON.parse(k)[1],id:e.id,title:v.title,titleRevision:v.titleRevision};}));
-      return {...(entry&&!entry.closed?await sideView(entry):{id:null,connected:false,turns:[],requests:[]}),slots};
+      const rows=await list(),slots=entries.filter(([,e])=>!sideEnded(e)).map(([k,e])=>({slot:JSON.parse(k)[1],id:e.id,title:normalize(rows.find(r=>r.sessionId===e.id)||{projections:{values:{title:e.title}}}).title,titleRevision:e.revision||0}));
+      return {...(selected?await sideView(selected,body):{id:null,connected:false,turns:[],requests:[]}),slots};
     }
     if(op==='create'){
       if(entry)throw Error('此侧边聊天槽位已使用，请新建标签');
       if(typeof ctx.sessionController.fork!=='function')throw Error('当前 Harness 未提供会话分叉接口');
-      if(Object.values(personal.sides).filter(e=>!e.closed).length>=8)throw Error('侧边聊天数量已达上限，请结束不用的聊天');
+      if(Object.values(personal.sides).filter(e=>!sideEnded(e)).length>=8)throw Error('侧边聊天数量已达上限，请结束不用的聊天');
       const name=body.title===undefined?'':title(body.title),parent=normalize(await find(sid));
       // The gateway persists an unknown receipt before this non-replayable fork.
       const child=await ctx.sessionController.fork({sessionId:sid,allowMigration:false});
@@ -230,7 +279,8 @@ export async function apply(ctx,config){
       if(name)await ctx.sessionController.rename({sessionId:child.sessionId,title:name});
       return {status:'ready',...await sideView(personal.sides[key])};
     }
-    if(!entry||entry.closed||entry.id!==body.childId)throw Error('此侧边聊天已关闭或已失效，请刷新标签');
+    if(op==='read-state'&&entry&&entry.id===body.childId)return dispatch('read-state',entry.id,{id:body.id,turnId:body.turnId,turnStatus:body.turnStatus});
+    if(!entry||sideEnded(entry)||entry.id!==body.childId)throw Error('此侧边聊天已关闭或已失效，请刷新标签');
     const child=entry.id;
     if(op==='close'){titleControllers.get(child)?.abort();await dispatch('stop',child,{});await ctx.workspaceRegistry.archiveSession(child,{stopActivity:true});entry.closed=true;await save();return {status:'accepted',closed:true};}
     if(op==='rename'){const name=title(body.title);await dispatch('rename',child,{title:name});entry.title=name;entry.manual=true;entry.revision++;await save();}
@@ -336,6 +386,14 @@ export async function apply(ctx,config){
   };
   // Desktop and mobile share one pending request. First explicit answer wins.
   ctx.on('session/event',(session,event)=>{
+    recovery.observe(session.id,event);
+    if(event.type==='turn/start')liveStarted.set(session.id,event.data.turn);
+    if(['turn/start','turn/end'].includes(event.type)){
+      const turn=lastTurn([{event}]),complete=event.type==='turn/end'&&liveStarted.get(session.id)===event.data.turn;
+      personal.interactions[session.id]={...personal.interactions[session.id],turn};if(complete)completionHints.set(session.id,turn.turnId+':'+turn.turnStatus);if(event.type==='turn/end')liveStarted.delete(session.id);save().catch(()=>{});
+    }
+    const message=event.data?.message||event.data;
+    if(['user/message','assistant/message'].includes(event.type)&&textOf(message).trim()&&(!message.source?.kind||message.source.kind==='user'||event.type==='assistant/message'))noteInteraction(session.id,event.time??Date.now()).catch(()=>{});
     if(event.type!=='session/title')return;
     const entry=Object.values(personal.sides).find(e=>e.id===session.id&&!e.closed);
     if(event.data?.source?.kind==='user'&&!titleWrites.has(session.id)&&(entry||titleControllers.has(session.id)||personal.titles[session.id])){
@@ -355,7 +413,7 @@ export async function apply(ctx,config){
       let resolveMobile,rejectMobile;
       const mobile=new Promise((resolve,reject)=>{resolveMobile=resolve;rejectMobile=reject;});
       const approval=event==='approval/request';
-      questions.set(id,{sid:req.agent.id,approval,public:{id,tool:approval?req.toolName:'提问',needsInput:!approval,input:approval?{reason:req.reason||''}:{questions:req.questions}},resolve:resolveMobile});
+      questions.set(id,{sid:req.agent.id,approval,public:{id,tool:approval?req.toolName:'提问',needsInput:!approval,input:approval?{reason:req.reason||''}:{questions:req.questions,detail:req.detail,intent:req.intent}},resolve:resolveMobile});
       const abort=()=>rejectMobile(Error('请求已取消'));original?.addEventListener('abort',abort,{once:true});
       // A missing desktop answerer is not a user's denial.
       const desktop=Promise.resolve().then(next).then(value=>value==='unavailable'?mobile:value);
@@ -394,12 +452,12 @@ export async function apply(ctx,config){
       quitting=true;
       return {status:'accepted',pid:process.pid,generation};
     }
-    if(action==='status')return {connected:true,bridgeRevision:9,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
+    if(action==='status')return {connected:true,bridgeRevision:10,nativeQuit:typeof ctx.get?.('appExit')==='function',configured:(await account()).status==='configured'};
     if(action==='account')return account(sid);
     if(action==='title-status')return titleStatus(sid,body.requestId);
     if(action==='list'){
       const rows=await list(),sides=new Set(Object.values(personal.sides).map(e=>e.id));
-      const sessions=rows.filter(r=>!r.parentSessionId&&!sides.has(r.sessionId)).map(r=>{
+      const sessions=rows.filter(r=>(!r.parentSessionId||personal.mainForks.includes(r.sessionId))&&!sides.has(r.sessionId)).map(r=>{
         return {...activity(r,rows),projectless:personal.projectless.includes(r.sessionId),archived:(ctx.workspaceRegistry.archivedSessionIds||[]).includes(r.sessionId),pinned:(ctx.workspaceRegistry.pinnedSessionIds||[]).includes(r.sessionId)};
       });
       return {connected:true,sessions,projects:await projectRows(),sidebar:sidebar(),capabilities:capabilities()};
@@ -424,23 +482,65 @@ export async function apply(ctx,config){
       return {status:'ready',result:{id:result.sessionId,title:name||'新会话'}};
     }
     const row=await find(sid);
+    if(['send','stop','respond','message-action'].includes(action))await recovery.intervene(sid);
     if(action==='rename'){const name=title(body.title);titleControllers.get(sid)?.abort();await ctx.sessionController.rename({sessionId:sid,title:name});personal.titles[sid]={status:'manual'};await save();return {status:'accepted'};}
     if(action==='archive'){if(body.confirmed!==true)throw Error('请确认归档');await ctx.workspaceRegistry.archiveSession(sid,{stopActivity:true});return {status:'accepted'};}
     if(action==='open')return {ok:true};
-    if(action==='detail')return nativeDetail(row);
+    if(action==='detail')return body.key?nativeHistory.detail(sid,body):nativeDetail(row,body);
+    if(action==='activity')return nativeMeta(row);
+    if(action==='timeline')return nativeDetail(row,body);
+    if(action==='message-index')return nativeHistory.directory(sid,body);
+    if(action==='attachment')return nativeHistory.attachment(sid,body);
+    if(action==='changes'){await new Promise(resolve=>setTimeout(resolve,1000));const value=await nativeDetail(await find(sid));return Number(body.after)===value.sequence&&body.epoch===value.epoch?{...value,rows:[],messages:[],turns:[],reset:false}:{...value,reset:value.epoch!==body.epoch};}
+    if(action==='queue'){
+      if(body.operation==='remove'){
+        const pending=(values(row).inbox?.['next-turn']||[]).find(m=>m.id===body.itemId&&m.source?.rpcId===body.submissionId);
+        if(!pending||typeof ctx.sessionController.updateQueue!=='function')throw Error('消息已经开始处理，请刷新队列');
+        await ctx.sessionController.updateQueue({sessionId:sid,itemId:pending.id,action:{kind:'remove'}});return {status:'accepted'};
+      }return {items:queueItems(row)};
+    }
+    if(action==='message-action'){
+      if(row.parentSessionId&&!personal.mainForks.includes(sid)||Object.values(personal.sides).some(e=>e.id===sid))throw Error('侧边聊天暂不提供历史编辑');
+      if(!['edit','fork','edit-fork'].includes(body.action))throw Error('历史操作无效');
+      const target=await nativeHistory.message(sid,body),seq=target.event.seq;
+      const deps={sessionController:ctx.sessionController,agents:ctx.agents,llm:ctx.get?.('llm')||ctx.llm,attachments:ctx.get?.('attachments')||ctx.attachments,fileUploads:ctx.get?.('fileUploads')||ctx.fileUploads};
+      if(body.action==='edit'){
+        if(typeof body.text!=='string'||!body.text.trim()||body.text.length>100000)throw Error('请输入修改后的消息');
+        const plan=await editOperation(()=>planCurrent(deps,{sourceId:sid,seq})),parts=(target.event.data.message||target.event.data).content||[];
+        const content=[{type:'text',text:body.text},...parts.flatMap((p,index)=>['image','file'].includes(p.type)?[{type:'original',index}]:[])];
+        await editOperation(()=>editCurrent(deps,{sourceId:sid,seq,tail:plan.tail,requestId:body.id,content},signal()));await noteInteraction(sid);nativeHistory.clear();return {status:'accepted',id:sid};
+      }
+      const resolved=await ctx.sessionController.resolveAgent(sid),agent=resolved.agent;if(!agent)throw Error('原会话无法核验');
+      const log=agent.session.snapshotEvents(),native=log.find(e=>e.seq===seq),eligibility=messageEligibility(log);
+      if(!native||!agent.session.surface.nodes.includes(seq)||eligibility.excluded.includes(seq))throw Error('此历史位置不能分支');
+      let start=seq;while(start>0&&log[start]?.type!=='turn/start')start--;if(start<1)throw Error('历史边界无效');
+      if(body.action==='edit-fork'&&(typeof body.text!=='string'||!body.text.trim()||body.text.length>100000))throw Error('请输入修改后的消息');
+      const fork=await ctx.sessionController.fork({sessionId:sid,atSeq:body.action==='fork'?seq:start-1,allowMigration:false});
+      personal.mainForks.push(fork.sessionId);await save();
+      if(body.action==='edit-fork'){
+        const parts=(native.data.message||native.data).content||[],content=[{type:'text',text:body.text}],uploads=deps.fileUploads;
+        for(const p of parts){
+          if(!['image','file'].includes(p.type))continue;
+          if(p.type==='image'){const image=p.attachment?await ctx.sessionController.attachment({sessionId:sid,attachmentId:p.attachment.id}):p;content.push({type:'image',data:image.data,mediaType:image.attachment?.mediaType||p.mediaType,name:p.name});}
+          else {if(!uploads||!p.attachment)throw Error('历史文件已不可用');const receipt=await uploads.uploadStream({sessionId:fork.sessionId,name:p.name||p.attachment.name,data:deps.attachments.readFileStream(p.attachment,signal()),signal:signal()});content.push({type:'file',receiptId:receipt.receiptId});}
+        }
+        const receipt=await ctx.sessionController.prompt({sessionId:fork.sessionId,requestId:body.id,mode:'queue',content},signal());if(!receipt?.accepted)throw Error('分支消息结果待核对');await noteInteraction(fork.sessionId);
+      }return {status:'accepted',id:fork.sessionId,source:{id:sid}};
+    }
     if(action==='read-state'){
       if(Object.keys(body).some(key=>!['id','turnId','turnStatus'].includes(key))||typeof body.turnId!=='string'||!['completed','failed','interrupted'].includes(body.turnStatus))throw Error('聊天已读参数无效');
       const native=ctx.get?.('typertGateway'),modules=ctx.get?.('clientModules');
-      if(typeof native?.broadcastRemoteEvent!=='function'||!modules?.clientPath?.('codex-mobile-desktop'))return {status:'unsupported',message:'Harness 已读同步需要更新接入并重新打开桌面页面'};
-      const boundaries=(await records(row)).filter(r=>['turn/start','turn/end'].includes(r.event.type)),last=boundaries.at(-1)?.event;
+      const boundaries=(await nativeHistory.page(sid,await nativeHistory.cut(row),undefined,200)).records.filter(r=>['turn/start','turn/end'].includes(r.event.type)),last=boundaries.at(-1)?.event;
       const ending=last?.data?.reason?.kind,result=ending==='completed'?'completed':['aborted','interrupted'].includes(ending)?'interrupted':['blocked','error','max-tokens','forked'].includes(ending)?'failed':null;
       const latest=await find(sid);
       if(activity(latest,await list()).status!=='idle'||last?.type!=='turn/end'||String(last.data.turn)!==body.turnId||result!==body.turnStatus||latest.updatedAt!==row.updatedAt)return {status:'stale'};
-      native.broadcastRemoteEvent({event:'codex-mobile/read-state',args:[{sessionId:sid,updatedAt:latest.updatedAt,turnId:body.turnId,turnStatus:body.turnStatus}],resources:{session:value=>value.sessionId}});
+      if(typeof native?.broadcastRemoteEvent!=='function'||!modules?.clientPath?.('codex-mobile-desktop'))return {status:'accepted',nativeRead:'unsupported'};
+      try{native.broadcastRemoteEvent({event:'codex-mobile/read-state',args:[{sessionId:sid,updatedAt:latest.updatedAt,turnId:body.turnId,turnStatus:body.turnStatus}],resources:{session:value=>value.sessionId}});}catch{return {status:'accepted',nativeRead:'failed'};}
       return {status:'accepted'};
     }
     if(action==='catalog')return catalog(sid,body.section||'all');
-    if(action==='settings'&&body.goalAction)return changeGoal(row,body);
+    if(action==='settings'&&Object.hasOwn(body,'recoveryEnabled')){await recovery.set(body.recoveryEnabled);return {status:'accepted',recovery:recovery.settings()};}
+    if(action==='settings'&&body.goalAction){await recovery.intervene(sid);return changeGoal(row,body);}
     if(action==='access'){const presets=ctx.permissionPresets.catalog(),options=presets.options;if(body.mode){if(!options.some(o=>o.value===body.mode))throw Error('权限选项无效');await ctx.sessionController.create({sessionId:sid,cwd:row.cwd});const agent=ctx.agents.get(sid);if(!agent)throw Error('当前会话没有活动智能体');ctx.permissionPresets.set(agent.session,body.mode);}return {status:'accepted',mode:body.mode||values(row).permissions?.currentValue||presets.defaultPreset,modes:options.map(o=>o.value),options:permissionOptions()};}
     if(action==='settings'){const c=await catalog(sid,'models'),selected=body.model||c.currentModel,m=c.models.find(m=>m.id===selected);if(!m)throw Error('请选择可用模型');const effort=body.effort??(selected===c.currentModel?c.currentEffort:m.defaultEffort);if(effort&&!m.efforts.includes(effort))throw Error('该模型不支持所选思考强度');const slash=selected.indexOf('/'),result=await ctx.sessionController.selectModel({sessionId:sid,provider:selected.slice(0,slash),model:selected.slice(slash+1),reasoningEffort:effort||undefined}),actual=result.selected;return {status:'accepted',model:actual.provider+'/'+actual.model,effort:actual.reasoningEffort||''};}
     if(action==='stop'){await ctx.sessionController.cancel({sessionId:sid});return {status:'accepted'};}
@@ -448,25 +548,34 @@ export async function apply(ctx,config){
       const sideEntry=Object.values(personal.sides).find(e=>e.id===sid&&!e.closed);
       let first=sideEntry?!sideEntry.submissions?.length:false;
       if(!sideEntry&&!ctx.get?.('sessionTitle')&&typeof (ctx.get?.('llm')||ctx.llm)?.prepareCall==='function')try{first=!(await records(row)).some(r=>r.event.type==='user/message');}catch{};
-      if(body.attachments?.length||body.resolvedFiles?.length)throw Error('此应用的消息附件仅支持图片；其他文件请使用文件传输。');
+      if(body.attachments?.length)throw Error('附件尚未解析');
+      if(body.workMode==='goal'&&(body.resolvedImages?.length||body.resolvedFiles?.length))throw Error('目标模式暂不接受附件');
       let text=body.text||'';if(body.plugins?.length){const c=await catalog(sid,'plugins');if(body.plugins.some(id=>!c.skills.some(s=>s.id===id&&s.selectable!==false)))throw Error('插件已不可用');text='请使用以下已安装技能：'+body.plugins.join(', ')+'\n\n'+text;}
       const content=text?[{type:'text',text}]:[];
       for(const image of body.resolvedImages||[]){const match=/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(image.url);if(!match)throw Error('图片格式无效');content.push({type:'image',mediaType:match[1],data:match[2],...(image.name?{name:image.name}:{})});}
+      const uploads=ctx.get?.('fileUploads')||ctx.fileUploads;
+      for(const file of body.resolvedFiles||[]){
+        if(typeof uploads?.uploadStream!=='function'||typeof file.data!=='string'||!/^[A-Za-z0-9+/]*={0,2}$/.test(file.data))throw Error('文件上传服务不可用或格式无效');
+        const data=Buffer.from(file.data,'base64');
+        const receipt=await uploads.uploadStream({sessionId:sid,name:file.name,data:(async function*(){yield data;})(),signal:signal()});
+        if(!receipt?.receiptId)throw Error('Harness 未返回文件收据');content.push({type:'file',receiptId:receipt.receiptId});
+      }
       if(!content.length)throw Error('请输入内容');
       const workResult=await setWorkMode(row,body);if(workResult)return workResult;
       const mode=body.mode==='steer'&&row.running?'steer':'queue',result=await ctx.sessionController.prompt({sessionId:sid,requestId:body.id,mode,content},signal());
       if(result?.accepted!==true)throw Error('Harness 未确认接收消息，请在桌面核对');
+      await noteInteraction(sid);
       if(first)try{await scheduleTitle(sid,body.text,row,sideEntry);}catch{} // Optional naming cannot invalidate an accepted prompt.
       return {status:row.running&&mode==='queue'?'queued':'accepted'};
     }
-    if(action==='respond'){const pending=questions.get(body.requestId);if(!pending||pending.sid!==sid)throw Error('提问已过期');if(pending.approval){const outcome={accept:'allowed-once',decline:'rejected'}[body.decision];if(!outcome)throw Error('请选择本次允许或拒绝');questions.delete(body.requestId);pending.resolve(outcome);return {status:'accepted'};}const answers=pending.public.input.questions.map(q=>{const selected=body.answers?.[q.id]?.answers;if(!Array.isArray(selected)||!selected.length||selected.some(s=>typeof s!=='string'||s.length>20000))throw Error('请回答每一项问题');const labels=(q.options||[]).map(o=>o.label);return {id:q.id,selected:selected.filter(s=>labels.includes(s)),custom:selected.filter(s=>!labels.includes(s)).join('\n')};});questions.delete(body.requestId);pending.resolve({answers});return {status:'accepted'};}
+    if(action==='respond'){const pending=questions.get(body.requestId);if(!pending||pending.sid!==sid)throw Error('提问已过期');if(pending.approval){const outcome={accept:'allowed-once',decline:'rejected'}[body.decision];if(!outcome)throw Error('请选择本次允许或拒绝');questions.delete(body.requestId);pending.resolve(outcome);await noteInteraction(sid);return {status:'accepted'};}const answers=pending.public.input.questions.map(q=>{const selected=body.answers?.[q.id]?.answers;if(!Array.isArray(selected)||!selected.length||selected.some(s=>typeof s!=='string'||s.length>20000))throw Error('请回答每一项问题');const labels=(q.options||[]).map(o=>o.label),custom=selected.filter(s=>!labels.includes(s)).join('\n');let choices=selected.filter(s=>labels.includes(s));if(q.intent?.kind==='plan-review'&&custom)choices=choices.filter(s=>s!==q.intent.approve);return {id:q.id,selected:choices,custom};});questions.delete(body.requestId);pending.resolve({answers});await noteInteraction(sid);return {status:'accepted'};}
     throw Error('不支持的 DeepSeek 操作');
   }
   const server=createServer(async(req,res)=>{try{
     const credential=String(req.headers.authorization||'').replace(/^Bearer /,'');const a=Buffer.from(credential),b=Buffer.from(token);
     if(req.method!=='POST'||req.url!=='/mobile'||req.headers.origin||a.length!==b.length||!timingSafeEqual(a,b)){res.writeHead(403);res.end();return;}
     let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxRequestBytes)throw Error('请求过大');chunks.push(chunk);}const {action,sid,body={}}=JSON.parse(Buffer.concat(chunks));
-    const mutating=['create','rename','archive','stop','send','respond','settings','manage','side-write','read-state'].includes(action)||(action==='access'&&Boolean(body?.mode));
+    const mutating=['create','rename','archive','stop','send','respond','settings','manage','side-write','read-state','message-action','queue'].includes(action)||(action==='access'&&Boolean(body?.mode));
     if(mutating&&quitting)throw Error('Harness 正在退出，请稍后重试');
     let result;
     if(mutating)activeMutations++;
@@ -478,6 +587,7 @@ export async function apply(ctx,config){
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const port=server.address().port,generation=randomUUID();await writeFile(endpoint+'.tmp',JSON.stringify({port,pid:process.pid,generation}),{mode:0o600});await rename(endpoint+'.tmp',endpoint);
   ctx.effect(()=>async()=>{
+    recovery.dispose();nativeHistory.clear();
     for(const controller of titleControllers.values())controller.abort();
     server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
     // Another host may already have published its endpoint in this shared file.

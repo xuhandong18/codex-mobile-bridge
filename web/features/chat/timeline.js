@@ -81,8 +81,8 @@ class ChatMessageMap {
 
 // History and live changes share stable keys, but never share a request queue.
 class ChatTimeline {
-  constructor({url, request, renderMeta, renderText, status, onAction, canEdit = () => true, elements = {}, active = () => true}) {
-    Object.assign(this,{url,request,renderMeta,renderText,status,onAction,canEdit,active});
+  constructor({url, request, renderMeta, renderText, status, onAction, canEdit = () => true, elements = {}, active = () => true, providerLabel='CODEX', boundedHistory=false}) {
+    Object.assign(this,{url,request,renderMeta,renderText,status,onAction,canEdit,active,providerLabel,boundedHistory});
     this.viewport=elements.viewport||document.getElementById('timeline');
     this.container=elements.container||document.getElementById('messages');
     this.older=elements.older||document.getElementById('older');
@@ -101,6 +101,7 @@ class ChatTimeline {
       // A later upward movement is the reader's choice, even within that frame.
       if(this.suppress&&!upward)return;
       this.lastTop=this.viewport.scrollTop;this.following=!this.navigationMode&&!upward&&this.atBottom();this.anchor=this.capture();
+      if(upward&&this.boundedHistory)this.beginHistory();
       if(this.following)this.newer.hidden=true;
       if(this.navigationMode){
         if(this.navigationBusy)return;
@@ -112,7 +113,7 @@ class ChatTimeline {
       }else if(upward&&this.nearTop()&&!this.retryCount)this.loadOlder(100);
     };
     this.viewport.addEventListener('scroll',this.onScroll,{passive:true});
-    this.older.onclick=()=>this.sequence<0?this.start():this.loadOlder(this.retryCount||100);
+    this.older.onclick=()=>{if(this.boundedHistory)this.beginHistory();return this.sequence<0?this.start():this.loadOlder(this.retryCount||100);};
     this.newer.onclick=()=>{if(this.navigationMode){this.loadLatest();return;}this.jumpBottom();this.anchor=this.capture();};
     this.later=document.createElement('button');this.later.type='button';this.later.className='plain timeline-later';this.later.hidden=true;
     this.later.textContent=timelineText('查看后续内容');this.later.onclick=()=>this.pageNavigation('after');this.viewport.append(this.later);
@@ -121,6 +122,14 @@ class ChatTimeline {
     this.messageMap=new ChatMessageMap(this);
   }
   dispose(){this.navigationRequest++;this.messageMap.dispose();this.abort.abort();clearTimeout(this.startRetry);this.resize.disconnect();this.viewport.removeEventListener('scroll',this.onScroll);this.newer.hidden=true;this.later.remove();}
+  beginHistory(){
+    if(this.navigationMode||this.sequence<0||!this.rows.size)return;
+    this.navigationMode=true;this.following=false;this.liveCursor={epoch:this.epoch,sequence:this.sequence,start:this.before||''};
+    const ordered=[...this.rows.values()].map(value=>value.row).sort((a,b)=>a.order-b.order),pages=[];
+    for(let i=0;i<ordered.length;i+=100){const rows=ordered.slice(i,i+100);pages.push({before:i===0?this.before:rows[0].historyBefore,after:i+100<ordered.length?rows.at(-1).historyAfter:null,keys:rows.map(r=>r.key),files:[...this.files.values()]});}
+    this.navigationPages=pages.slice(-2);
+    this.newer.textContent=timelineText('返回最新内容 ↓');this.newer.hidden=false;
+  }
   directoryRows(){
     const entries=[...this.messageIndex.values()].filter(entry=>!entry.isUserContext).sort((a,b)=>a.order-b.order).map((entry,order)=>({...entry,order})),matched=new Set();
     const byId=new Map(entries.map(entry=>[entry.id,entry])),byKey=new Map(entries.map(entry=>[entry.rowKey,entry])),byText=new Map(),byImageText=new Map();
@@ -170,7 +179,7 @@ class ChatTimeline {
     const ticket=++this.navigationRequest;this.generation++;
     const candidate=this.rows.get(entry.loadedKey||entry.rowKey)?.row;
     const loaded=candidate&&messageSummary(candidate)===entry.summary?candidate.key:[...this.rows.values()].find(value=>value.row.navigationId===entry.id)?.row.key;
-    if(loaded&&this.focusMessage(loaded)){this.navigationBusy=false;this.historyStatus();return;}
+    if(loaded){if(this.boundedHistory)this.beginHistory();if(this.focusMessage(loaded)){this.navigationBusy=false;this.historyStatus();return;}}
     if(!entry.id||entry.id.startsWith('loaded:'))return;
     this.navigationBusy=true;this.historyStatus();
     const live=this.liveCursor||{epoch:this.epoch,sequence:this.sequence,start:this.before||''};
@@ -300,7 +309,11 @@ class ChatTimeline {
       if(old)old.node.replaceWith(node);
       this.nodes.set(row.key,{node,stamp});
     }
-    const ordered=[...this.rows.values()].map(x=>x.row).sort((a,b)=>a.order-b.order);
+    let ordered=[...this.rows.values()].map(x=>x.row).sort((a,b)=>a.order-b.order);
+    if(this.boundedHistory&&!this.navigationMode&&ordered.length>200){
+      for(const row of ordered.slice(0,-200)){this.nodes.get(row.key)?.node.remove();this.nodes.delete(row.key);this.rows.delete(row.key);this.details.delete(row.key);}
+      ordered=ordered.slice(-200);this.before=ordered[0].historyBefore||this.before;this.hasMore=true;
+    }
     this.groupRows(ordered);
     if(reset||history){this.before=page.before;this.hasMore=page.hasMore;this.after=page.after||null;this.windowRevision++;}
     this.refreshActions();this.historyStatus();this.restore(anchor,bottom);
@@ -311,7 +324,7 @@ class ChatTimeline {
   rowHeading(row){
     if(row.role==='activity')return (row.title||row.kind)+(row.status==='inProgress'?timelineText(' · 进行中'):'');
     if(row.kind==='threadMessage')return timelineText('其他主聊天');
-    return row.role==='user'?timelineText('你'):row.role==='error'?timelineText('执行错误'):['CODEX',row.model&&[row.model,row.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+    return row.role==='user'?timelineText('你'):row.role==='error'?timelineText('执行错误'):[this.providerLabel,row.model&&[row.model,row.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
   }
   groupRows(ordered=[...this.rows.values()].map(value=>value.row).sort((a,b)=>a.order-b.order)){
     this.messageGroups??=new ChatMessageGroups(this.container);
@@ -356,8 +369,8 @@ class ChatTimeline {
     if(row.attachments?.length){
       const attachments=document.createElement('div');attachments.className='timeline-attachments';
       for(const item of row.attachments){
-        if((item.type==='localImage'||item.type==='image')&&(item.uploadId||item.desktopId)){
-          const source=item.uploadId
+        if((item.type==='localImage'||item.type==='image')&&(item.uploadId||item.desktopId||item.nativeId)){
+          const source=item.nativeId?this.url('attachment')+'&reference='+encodeURIComponent(item.nativeId):item.uploadId
             ?this.url('uploads/'+encodeURIComponent(item.uploadId)+'/preview')
             :this.url('desktop-images/'+encodeURIComponent(item.desktopId));
           const original=item.uploadId

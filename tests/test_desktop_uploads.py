@@ -69,8 +69,22 @@ class DesktopUploadHTTP(unittest.TestCase):
         path = '/api/desktop-sessions/deepseek/uploads?sessionId=native&id='+identifier+'&name=note.txt'
         self.assertEqual(self.binary('POST', path, b'example', headers)[0], 200)
         result = self.request('POST', '/api/desktop-sessions/deepseek/send', {'sessionId': 'native', 'id': str(uuid.uuid4()), 'text': 'Inspect', 'attachments': [identifier]}, headers)
-        self.assertEqual(result[0], 400)
-        self.assertIn('文件传输', result[2]['error'])
+        self.assertEqual(result[0], 200)
+        payload = self.manager.call.call_args.args[3]
+        self.assertEqual(payload['resolvedFiles'], [{'id': identifier, 'name': 'note.txt', 'data': base64.b64encode(b'example').decode()}])
+        self.assertNotIn('attachments', payload)
+        self.assertNotIn('path', payload['resolvedFiles'][0])
+
+    def test_native_harness_image_preview_preserves_auth_session_and_safe_mime(self):
+        path='/api/desktop-sessions/deepseek/attachment?sessionId=actual-child&reference=signed-native-reference'
+        self.assertEqual(self.binary('GET',path)[0],401)
+        headers=self.login();self.manager.call.return_value={'data':base64.b64encode(PNG).decode(),'mime':'image/png'}
+        result=self.binary('GET',path,headers=headers)
+        self.assertEqual(result[0],200);self.assertEqual(result[2],PNG)
+        self.assertEqual(result[1]['Cache-Control'],'private, no-store');self.assertEqual(result[1]['X-Content-Type-Options'],'nosniff')
+        self.manager.call.assert_called_with('deepseek','attachment','actual-child',{'reference':'signed-native-reference'})
+        self.manager.call.return_value={'data':base64.b64encode(b'<script>bad</script>').decode(),'mime':'text/html'}
+        self.assertEqual(self.binary('GET',path,headers=headers)[0],400)
 
     def test_local_claude_cli_resolves_private_file_and_image_only_from_ledger(self):
         self.manager.call.return_value = {'session': {'id': 'native', 'backend': 'cli', 'host': 'local'}}

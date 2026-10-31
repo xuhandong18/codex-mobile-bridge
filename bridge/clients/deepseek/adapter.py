@@ -14,10 +14,10 @@ from bridge.features.workspace.files import workspace_references
 from bridge.clients.deepseek.setup import MARKER, insertion, verified_directory, legacy_account_configured, install_client_assets
 
 PLUGIN_ID = re.compile(r'''["']?id["']?\s*:\s*["']?codex-mobile-desktop(?:["'\s,}]|$)''')
-BRIDGE_REVISION = 9
+BRIDGE_REVISION = 10
 # Revisions 3–8 share the complete native-agent lifecycle schema. Older verified
 # hosts can prove a safe restart before the feature protocol is upgraded.
-LIFECYCLE_REVISIONS = (3, 4, 5, 6, 7, 8, BRIDGE_REVISION)
+LIFECYCLE_REVISIONS = (3, 4, 5, 6, 7, 8, 9, BRIDGE_REVISION)
 UPDATE_REASON = 'Harness 接入需要更新，请结束任务后点击“重启并接入”'
 
 
@@ -200,8 +200,8 @@ class DeepSeek:
             raise BridgeUnavailable('DeepSeek 桌面未连接，请安装接入插件并重新打开 Harness') from exc
         if action == 'detail':
             records = value.pop('records', [])
-            value['messages'] = messages(records)
-            value['turns'] = turns(records)
+            value.setdefault('messages', messages(records))
+            value.setdefault('turns', turns(records))
             if not isinstance(value.get('capabilities'), dict):
                 # Older connectors still provide readable history. Do not imply
                 # their old message protocol supports the new composer controls.
@@ -210,10 +210,10 @@ class DeepSeek:
                 value['notice'] = UPDATE_REASON
         if action in ('side-read', 'side-write', 'subagents') and 'records' in value:
             records = value.pop('records')
-            value['turns'] = transcript_turns(records)
+            value.setdefault('turns', transcript_turns(records))
             if action.startswith('side-'):
                 value['requests'] = [side_request(request) for request in value.get('requests', [])]
-                value['files'] = workspace_references([], value.get('cwd'), value['requests'])
+                value['files'] = workspace_references(value.get('messages', []), value.get('cwd'), value['requests'])
         if action == 'status' and self.legacy_protocol and value.get('connected') and 'configured' not in value:
             configured = False
             if legacy_account_configured(self.home):

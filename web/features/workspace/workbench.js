@@ -311,7 +311,6 @@ class Workbench {
     const fullscreenTab=this.previewFullscreen?.documentMode&&this.previewFullscreen.tab===session.files[index]
       ?session.files.find(tab=>tab.id!==id&&tab.id.startsWith('file:')):null;
     if (this.previewFullscreen?.tab === session.files[index]&&!fullscreenTab) this.closePreviewFullscreen();
-    if (session.files[index].sideChat && session.provider==='deepseek' && !await session.files[index].sideChat.end()) return;
     if(session.files[index].sideChat)(session.closedSideChats??=new Set()).add(id);
     if (!session.files[index] || session.files[index].id !== id) return;
     session.files[index].controller?.abort(); session.files[index].editor?.dispose(); session.files[index].pdf?.dispose(); session.files[index].html?.dispose(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
@@ -391,7 +390,7 @@ class Workbench {
         if(Array.isArray(state.slots))for(const {tab,panel,id,revision} of observed){
           if(!session.files.includes(tab)||panel.disposed||panel.busy||panel.state?.id!==id||panel.readRevision!==revision)continue;
           const row=state.slots.find(row=>row.slot===(tab.slot||''));
-          if(!row||row.id!==id)panel.apply({id:null,connected:false,turns:[],requests:[]});
+          if(!row||row.id!==id){panel.readRevision=(panel.readRevision||0)+1;panel.apply({id:null,connected:false,turns:[],requests:[]});}
         }
       }
     }catch(error){
@@ -436,7 +435,7 @@ class Workbench {
     if(changed&&this.current===session)this.paint();
   }
   async sideChatHistory(){
-    const session=this.current;if(!session||session.host!=='local'||session.provider&&session.provider!=='codex')return;
+    const session=this.current;if(!session||session.host!=='local'||session.provider&&!['codex','deepseek'].includes(session.provider))return;
     const n=(...args)=>this.node(...args),dialog=n('dialog','picker wb-side-history'),head=n('div','picker-head'),list=n('div','wb-tab-choices picker-choices'),status=n('p','muted');
     head.append(n('h2','','侧边聊天历史'),this.button('×',()=>dialog.close(),'关闭'));
     const more=this.button('加载更多',()=>load(offset));let offset=0;more.hidden=true;
@@ -444,18 +443,18 @@ class Workbench {
     const load=async start=>{
       more.disabled=true;
       try{
-        const value=await this.request('/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host)+'&history=1&offset='+start);
+        const value=await this.request((session.provider==='deepseek'?'/api/desktop-sessions/deepseek/side-chat?sessionId='+encodeURIComponent(session.id):'/api/sessions/'+session.id+'/side-chat?host='+encodeURIComponent(session.host))+'&history=1&offset='+start);
         if(!dialog.open||this.current!==session)return;
-        if(start===0)status.textContent=BridgeI18n.t(value.nativeSync?.message||'桌面原生侧边聊天未接入');
+        if(start===0)status.textContent=BridgeI18n.t(session.provider==='deepseek'?'存活聊天可以继续，已结束聊天仅供查看。':value.nativeSync?.message||'桌面原生侧边聊天未接入');
         for(const row of value.items||[]){
           const button=this.button('',()=>{
             if(this.current!==session)return;dialog.close();
             let tab=session.files.find(tab=>tab.sideChat?.state?.id===row.id);
-            if(!tab)tab=this.createSideChat(session,row.slot||'',row.archiveId);
+            if(!tab)tab=this.createSideChat(session,row.slot||'',row.live?null:row.archiveId);
             if(tab){this.setSideChatTitle(session,tab,row);this.select(tab.id);}
           },row.title||'侧边聊天');
           button.append(this.raw(n('strong','',row.title||'侧边聊天')),n('span','muted',[
-            BridgeI18n.t(row.source==='desktop'?'桌面原生':'网关侧边聊天'),BridgeI18n.t(row.hasBody===false?'无正文备份':row.syncState==='live'?'同步中':'已保存，仅供查看'),
+            BridgeI18n.t(row.source==='desktop'?'桌面原生':'网关侧边聊天'),BridgeI18n.t(row.live?'可继续':row.hasBody===false?'无正文备份':row.syncState==='live'?'同步中':'已保存，仅供查看'),
             row.savedAt?new Date(row.savedAt).toLocaleString():''
           ].filter(Boolean).join(' · ')));list.append(button);
         }

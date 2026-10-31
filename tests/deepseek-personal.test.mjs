@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,writeFile,readFile,rm,stat} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {request as nativeRequest} from 'node:http';
 import {apply} from '../bridge/clients/deepseek/host.mjs';
 
 async function fixture(t){
@@ -32,10 +33,72 @@ async function fixture(t){
     agents:{list:()=>[],get:id=>({session:{id}})},on:(name,fn)=>handlers.set(name,fn),effect:setup=>disposers.push(setup()),get:()=>undefined};
   let port;
   const start=async()=>{await apply(ctx,{configPath});port=JSON.parse(await readFile(endpoint,'utf8')).port;};await start();
-  const request=async(action,sid,body={})=>{const res=await fetch(`http://127.0.0.1:${port}/mobile`,{method:'POST',headers:{Authorization:'Bearer isolated-fixture-token'},body:JSON.stringify({action,sid,body})});const value=await res.json();return {code:res.status,...value};};
+  const request=(action,sid,body={})=>new Promise((resolve,reject)=>{const req=nativeRequest({hostname:'127.0.0.1',port,path:'/mobile',method:'POST',headers:{Authorization:'Bearer isolated-fixture-token'}},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>{try{resolve({code:res.statusCode,...JSON.parse(Buffer.concat(chunks))});}catch(error){reject(error);}});});req.on('error',reject);req.end(JSON.stringify({action,sid,body}));});
   t.after(async()=>{for(const dispose of disposers.reverse())await dispose();await rm(folder,{recursive:true,force:true});});
   return {ctx,folder,add,append,rows,events,calls,handlers,workspace,request,restart:async()=>{await disposers.pop()();await start();}};
 }
+
+test('side history is native, closed slots remain readable and discovery never fetches every transcript',async t=>{
+  const f=await fixture(t);f.add('parent');f.add('foreign');const slots=[randomUUID(),randomUUID()],children=[];
+  for(const slot of slots)children.push(await f.request('side-write','parent',{operation:'create',slot,id:randomUUID()}));
+  const page=f.ctx.sessionController.page;let reads=0;f.ctx.sessionController.page=async value=>{reads++;return page(value);};
+  const discovered=await f.request('side-read','parent');assert.equal(discovered.slots.length,2);assert.equal(reads,0);
+  await f.request('side-write','parent',{operation:'close',slot:slots[0],childId:children[0].id});
+  const history=await f.request('side-read','parent',{history:'1'});assert.equal(history.items.length,2);assert.equal(history.items[0].ended,true);assert.equal(history.items[1].live,true);
+  const ended=await f.request('side-read','parent',{archiveId:children[0].id});assert.equal(ended.id,children[0].id);assert.equal(ended.readOnly,true);
+  assert.equal((await f.request('side-write','parent',{operation:'send',slot:slots[0],childId:children[0].id,text:'forbidden',submissionId:randomUUID()})).code,400);
+  assert.equal((await f.request('side-read','foreign',{archiveId:children[0].id})).code,400);
+  await f.restart();assert.equal((await f.request('side-read','parent',{archiveId:children[1].id})).readOnly,false);
+  f.ctx.workspaceRegistry.archivedSessionIds.push(children[1].id);
+  assert.equal((await f.request('side-read','parent',{archiveId:children[1].id})).readOnly,true,'native desktop archive also makes the original side slot read-only');
+  assert.equal((await f.request('side-read','parent')).slots.length,0);
+  assert.equal((await f.request('side-write','parent',{operation:'send',slot:slots[1],childId:children[1].id,text:'forbidden',submissionId:randomUUID()})).code,400);
+});
+
+test('side native turn identifiers and actual prose advance parent recency while tools and reasoning do not',async t=>{
+  const f=await fixture(t);f.add('parent');const child=await f.request('side-write','parent',{operation:'create',id:randomUUID()}),row=f.rows.find(r=>r.sessionId===child.id),stamp=2100000000000;
+  const emit=(type,data,time)=>{f.append(child.id,type,data);const event=f.events.get(child.id).at(-1).event;event.time=time;f.handlers.get('session/event')({id:child.id},event);};
+  emit('turn/start',{turn:3},stamp);row.running=true;
+  emit('user/message',{id:'user',source:{kind:'user'},content:[{type:'text',text:'独立侧边发言'}]},stamp+1);
+  let parent=(await f.request('list')).sessions[0];assert.equal(parent.updatedAt,stamp+1);assert.equal(parent.sideChats[0].turnId,'3');assert.equal(parent.sideChats[0].turnStatus,'inProgress');
+  emit('tool/result',{content:'tool output'},stamp+100);emit('assistant/message',{message:{content:[{type:'reasoning',text:'thinking'}]}},stamp+200);
+  assert.equal((await f.request('list')).sessions[0].updatedAt,stamp+1);
+  emit('assistant/message',{message:{content:[{type:'text',text:'独立助手正文'}]}},stamp+20);emit('turn/end',{turn:3,reason:{kind:'completed'}},stamp+300);row.running=false;
+  parent=(await f.request('list')).sessions[0];assert.equal(parent.updatedAt,stamp+20);assert.equal(parent.sideChats[0].turnId,'3');assert.equal(parent.sideChats[0].turnStatus,'completed');assert.equal(parent.sideChats[0].completionHint,'3:completed');
+  await f.request('detail',child.id);assert.equal((await f.request('list')).sessions[0].updatedAt,stamp+20);
+  await f.restart();assert.equal((await f.request('list')).sessions[0].sideChats[0].completionHint,undefined,'a restart must not manufacture a fresh completion from old history');
+});
+
+test('ordinary files bind native receipts to the actual main or side session for queue and steer',async t=>{
+  const f=await fixture(t);f.add('parent');const child=await f.request('side-write','parent',{operation:'create',id:randomUUID()});let receipt=0;
+  f.ctx.fileUploads={uploadStream:async value=>{let body='';for await(const chunk of value.data)body+=Buffer.from(chunk).toString();assert.equal(body,'document');f.calls.push(['file-upload',value.sessionId]);return {receiptId:value.sessionId+':receipt-'+receipt++};}};
+  const files=[{id:randomUUID(),name:'report.pdf',data:Buffer.from('document').toString('base64')}];
+  await f.request('send','parent',{id:randomUUID(),text:'',resolvedFiles:files});assert.deepEqual(f.calls.at(-1)[1].content,[{type:'file',receiptId:'parent:receipt-0'}]);
+  f.rows.find(r=>r.sessionId===child.id).running=true;
+  for(const mode of ['queue','steer']){const result=await f.request('side-write','parent',{operation:'send',childId:child.id,submissionId:randomUUID(),text:'',resolvedFiles:files,mode});assert.ok(['accepted','queued'].includes(result.status));assert.equal(f.calls.at(-1)[1].sessionId,child.id);assert.equal(f.calls.at(-1)[1].mode,mode);assert.match(f.calls.at(-1)[1].content[0].receiptId,new RegExp('^'+child.id));}
+  assert.equal((await f.request('detail',child.id)).capabilities.fileAttachments,true);
+});
+
+test('plan review preserves complete detail and custom feedback cannot approve the plan',async t=>{
+  const f=await fixture(t);f.add('main');f.add('foreign');const detail='# 完整计划\n\n'+('步骤和文件说明。\n'.repeat(1200)),questions=[{id:'review',question:'执行计划？',detail,intent:{kind:'plan-review',approve:'Approve',callId:'native-call'},options:[{label:'Approve'},{label:'Keep planning'}]}];
+  const pending=f.handlers.get('user-questions/request')({agent:{id:'main'},questions,signal:new AbortController().signal},()=>new Promise(()=>{}));await new Promise(resolve=>setTimeout(resolve,0));
+  const request=(await f.request('detail','main')).session.requests[0];assert.equal(request.input.questions[0].detail,detail);
+  assert.equal((await f.request('respond','foreign',{requestId:request.id,answers:{review:{answers:['Approve']}}})).code,400);
+  await f.request('respond','main',{requestId:request.id,answers:{review:{answers:['Approve','先补充验证方案']}}});const answer=await pending;assert.deepEqual(answer.answers,[{id:'review',selected:[],custom:'先补充验证方案'}]);
+  assert.equal((await f.request('respond','main',{requestId:request.id,answers:{review:{answers:['Approve']}}})).code,400);
+});
+
+test('cold persisted goal and live edits preserve native phase, round cap and parent identity',async t=>{
+  const f=await fixture(t),parent=f.add('parent');parent.projections.values.goal={goal:{id:'cold',revision:3,objective:'冷目标',phase:'paused',maxGoalRounds:9},roundsStarted:5,createdAt:123};f.ctx.agents.get=()=>undefined;
+  const cold=await f.request('detail','parent');assert.equal(cold.session.goal.goalId,'cold');assert.equal(cold.session.goal.roundsStarted,5);assert.equal(cold.session.goal.maxGoalRounds,9);assert.equal(f.calls.length,0);
+  const child=await f.request('side-write','parent',{operation:'create',id:randomUUID()}),row=f.rows.find(r=>r.sessionId===child.id);row.projections.values.goal=null;
+  let goal={id:'side-goal',revision:1,objective:'侧边目标',phase:'active',maxGoalRounds:7,roundsStarted:4,activation:'armed'};const agent={session:{id:child.id},ctx:{get:name=>name==='goals'?goals:undefined}},goals={get:()=>goal,edit:(a,ref,fields)=>{assert.equal(a,agent);assert.equal(ref.id,goal.id);goal={...goal,...fields,revision:goal.revision+1};},create:(a,fields)=>{assert.equal(a,agent);goal={id:'continuation',revision:1,phase:'active',roundsStarted:0,...fields};}};
+  f.ctx.agents.get=id=>id===child.id?agent:undefined;row.running=true;
+  const edit=objective=>f.request('side-write','parent',{operation:'settings',childId:child.id,goalAction:'edit',objective,expected:{goalId:goal.id,revision:goal.revision}});
+  assert.equal((await edit('运行中修改')).code,200);assert.equal(goal.phase,'active');assert.equal(goal.maxGoalRounds,7);assert.equal(goal.roundsStarted,4);
+  goal.phase='complete';row.running=false;await edit('完成后修改');assert.equal(goal.id,'side-goal');assert.equal(goal.phase,'complete');
+  await f.request('side-write','parent',{operation:'settings',childId:child.id,goalAction:'active',expected:{goalId:goal.id,revision:goal.revision}});assert.equal(goal.id,'continuation');assert.equal(goal.roundsStarted,0);assert.equal(goal.maxGoalRounds,7);assert.equal(parent.projections.values.goal.goal.id,'cold');
+});
 
 test('unopened parent lists summarize waiting native agents and side forks without transcripts',async t=>{
   const f=await fixture(t),r=f.request;f.add('parent');f.add('agent',f.folder,'parent');
@@ -123,7 +186,7 @@ test('reading completion clears only that native desktop dot and cannot consume 
   assert.equal((await f.request('read-state','read-me',request)).status,'stale');listener(delayed);ui.publishStatus();assert.equal(ui.completionUnread.has('read-me'),true);
   row.running=true;assert.equal((await f.request('read-state','read-me',{...request,turnId:'2'})).status,'stale');
   row.running=false;assert.equal((await f.request('read-state','read-me',{...request,turnId:'2'})).status,'accepted');assert.equal(ui.completionUnread.has('read-me'),false);
-  delete services.clientModules;assert.equal((await f.request('read-state','read-me',{...request,turnId:'2'})).status,'unsupported');
+  delete services.clientModules;const unsupported=await f.request('read-state','read-me',{...request,turnId:'2'});assert.equal(unsupported.status,'accepted');assert.equal(unsupported.nativeRead,'unsupported');
 });
 
 test('work modes use native plan and goal services without changing the original session or passive reads',async t=>{
@@ -200,7 +263,7 @@ test('multiple native side forks retain context, isolate sends, sync names, reso
   assert.equal(one.cwd,parent.cwd);assert.notEqual(one.id,two.id);assert.equal(f.calls.filter(c=>c[0]==='prompt').length,0);assert.deepEqual(f.calls.find(c=>c[0]==='fork')[1],{sessionId:'parent',allowMigration:false});
   assert.equal((await r('side-read','parent')).slots.length,2);assert.equal((await r('list')).sessions.length,2,'side forks stay out of the main chat list');
   await r('side-write','parent',{operation:'send',slot:slot1,childId:one.id,submissionId:randomUUID(),text:'仅发给甲',mode:'send'});assert.equal(f.calls.at(-1)[1].sessionId,one.id);
-  const view=await r('side-read','parent',{slot:slot1});assert.equal(view.title,'方案甲');assert.equal(view.submissions.length,1);assert.equal(view.records.at(-1).event.data.content[0].text,'仅发给甲');
+  const view=await r('side-read','parent',{slot:slot1});assert.equal(view.title,'方案甲');assert.equal(view.submissions.length,1);assert.equal(view.messages.at(-1).text,'仅发给甲');
   assert.equal((await r('side-read','parent',{slot:slot1,operation:'skills',childId:one.id,offset:200})).skills.length,21);
   await r('side-write','parent',{operation:'rename',slot:slot1,childId:one.id,title:'已更名'});await f.restart();assert.equal((await r('side-read','parent',{slot:slot1})).title,'已更名');
   assert.equal((await r('side-write','unrelated',{operation:'stop',slot:slot1,childId:one.id})).code,400);
@@ -213,7 +276,7 @@ test('nested child activity and read-only subagent history never activate anothe
   const f=await fixture(t),{request:r}=f;f.add('parent');f.add('child',f.folder,'parent');f.add('grandchild',f.folder,'child').running=true;f.add('foreign');
   let row=(await r('list')).sessions.find(s=>s.id==='parent');assert.equal(row.status,'active');assert.equal(row.childActive,1);assert.equal((await r('detail','parent')).session.status,'active');
   const agents=await r('subagents','parent');assert.deepEqual(agents.agents.map(a=>a.id),['child','grandchild']);
-  f.append('grandchild','assistant/message',{content:[{type:'text',text:'child result'}]});assert.equal((await r('subagents','parent',{childId:'grandchild'})).records[0].event.data.content[0].text,'child result');
+  f.append('grandchild','assistant/message',{content:[{type:'text',text:'child result'}]});assert.equal((await r('subagents','parent',{childId:'grandchild'})).messages[0].text,'child result');
   assert.equal((await r('subagents','parent',{childId:'foreign'})).code,400);delete f.rows.find(s=>s.sessionId==='grandchild').running;row=(await r('list')).sessions[0];assert.equal(row.status,'unknown');assert.equal(f.calls.length,0);
 });
 
@@ -230,7 +293,7 @@ test('side controls use native child models, permissions, pending queue identiti
   assert.equal((await r('side-read','parent')).submissions[0].status,'cancelled');
   assert.equal((await r('side-write','parent',{...body,operation:'cancel-queued',submissionId:submission})).code,400);
   f.append(child.id,'request/header',{header:{config:{provider:'fixture',model:'old-model',reasoningEffort:'high',apiKey:'must-stay-native'}}});f.append(child.id,'assistant/message',{content:[{type:'text',text:'historical answer'}]});
-  const detail=await r('detail',child.id);assert.equal(detail.records.at(-1).presentation.model,'old-model');assert.equal(detail.records.at(-1).presentation.effort,'high');assert.ok(!JSON.stringify(detail).includes('must-stay-native'));assert.equal(detail.session.model,'fixture/chat');
+  const detail=await r('detail',child.id);assert.equal(detail.messages.at(-1).model,'old-model');assert.equal(detail.messages.at(-1).effort,'high');assert.ok(!JSON.stringify(detail).includes('must-stay-native'));assert.equal(detail.session.model,'fixture/chat');
 });
 
 test('background summaries use the same Harness model without tools or parent messages; manual names win',async t=>{

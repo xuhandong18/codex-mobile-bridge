@@ -69,8 +69,8 @@ def validate(method, path, size=0):
     desktop = DESKTOP.fullmatch(p.path)
     if desktop:
         if p.path.startswith('/api/desktop-sessions/deepseek/') and desktop[1] in (
-                {'side-chat', 'subagents', 'project-directories', 'project-directory-operations', 'title-status'} if method == 'GET'
-                else {'side-chat', 'manage', 'project-directories', 'read-state'}):
+                {'side-chat', 'subagents', 'project-directories', 'project-directory-operations', 'title-status', 'message-index', 'timeline', 'activity', 'changes', 'attachment', 'queue'} if method == 'GET'
+                else {'side-chat', 'manage', 'project-directories', 'read-state', 'message-action', 'queue'}):
             return
         if desktop[1] in (DESKTOP_READ if method == 'GET' else DESKTOP_WRITE):
             return

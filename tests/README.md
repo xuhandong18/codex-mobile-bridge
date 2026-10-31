@@ -2,6 +2,8 @@
 
 测试应匹配改动的功能和平台。源码测试不等于已经编译、安装或在三个系统上完成真实客户端联调。
 
+DeepSeek 第 10 版主聊天和侧边聊天分别验收：运行 `node --test tests/deepseek-personal.test.mjs tests/deepseek-history.test.mjs tests/deepseek-inline-edit.test.mjs tests/deepseek-capacity.test.mjs`，后端运行 `python -B scripts/test-backend.py --source-only -p 'test_deepseek*.py'` 和 `-p test_desktop_uploads.py`。新增真实浏览器入口 `node scripts/test-deepseek-history-browser.cjs` 使用正式原生历史转换，在手机竖横屏、平板和电脑执行 132 项断言，包括主侧完整目录、两个相邻窗口、新回复保留阅读位置、普通文件实际上传与子会话归属、计划正文、关闭重开和失效恢复。已有能力另跑 `node scripts/test-deepseek-browser.cjs`。边界及交付说明见 [DeepSeek 本轮补齐](../docs/deepseek-feature-parity.md)。
+
 ## Python 后端
 
 等待用户处理的红色提示运行 `python -B scripts/test-backend.py --source-only -p '*activity*.py'`、`node --test tests/waiting-activity.test.cjs` 和 `npm run test:desktop`。覆盖正式请求与异步问题、原生等待输入/批准标记、未打开的聊天、主侧及派生任务独立汇总、红蓝绿优先级、阅读不解除、未知状态和旧回包不清除等待，以及请求到达不推动排序。DeepSeek 第 9 版接入的只读摘要和第 8 版兼容由 `test_deepseek_migration.py`、`deepseek-personal.test.mjs` 验证。真实 DOM 回归运行 `node scripts/test-side-chat-activity-browser.cjs` 与 `node scripts/test-deepseek-browser.cjs`，检查手机、平板、电脑尺寸下各列表的红色、无障碍说明和恢复绿点；均使用隔离合成运行时，不执行真实审批或发送模型任务。

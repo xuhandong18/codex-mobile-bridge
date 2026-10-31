@@ -107,7 +107,9 @@ class PersonalStateTests(unittest.TestCase):
     def test_relay_exposes_only_explicit_harness_feature_routes(self):
         for method, action in [('GET', 'side-chat'), ('POST', 'side-chat'), ('GET', 'subagents'),
                                ('POST', 'manage'), ('GET', 'project-directories'), ('POST', 'project-directories'),
-                               ('GET', 'project-directory-operations'), ('GET', 'title-status')]:
+                               ('GET', 'project-directory-operations'), ('GET', 'title-status'), ('GET','message-index'),
+                               ('GET','timeline'), ('GET','changes'), ('GET','activity'), ('GET','attachment'), ('GET','queue'),
+                               ('POST','queue'), ('POST','message-action')]:
             validate(method, '/api/desktop-sessions/deepseek/'+action)
         for method, action in [('GET', 'manage'), ('POST', 'subagents'), ('POST', 'project-directory-operations'),
                                ('GET', 'side-read'), ('POST', 'side-write'), ('POST', 'title-status'), ('POST', 'eval')]:

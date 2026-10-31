@@ -1,5 +1,6 @@
 """Allowlisted desktop integrations with durable at-most-once mutation receipts."""
 import hashlib
+import os
 import json
 import sqlite3
 import threading
@@ -22,8 +23,8 @@ from bridge.clients.errors import BridgeUnavailable
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
-READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access', 'side-read', 'subagents', 'title-status'}
-WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume', 'manage', 'side-write', 'read-state'}
+READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access', 'side-read', 'subagents', 'title-status', 'timeline', 'message-index', 'activity', 'changes', 'attachment', 'queue'}
+WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume', 'manage', 'side-write', 'read-state', 'message-action', 'queue'}
 
 
 class TaskStateUnavailable(ValueError):
@@ -40,8 +41,9 @@ def _copy_read(value):
 
 
 class DesktopSessions:
-    def __init__(self, directory, bridge=None, *, gateway_running=False):
+    def __init__(self, directory, bridge=None, *, gateway_running=False, read_state=None):
         self.bridge = bridge
+        self.shared_read_state = read_state
         self.gateway_running = gateway_running
         self.closed = threading.Event()
         self.startup_thread = None
@@ -158,11 +160,12 @@ class DesktopSessions:
                         if isinstance(row, dict) and isinstance(row.get('requests'), list):
                             row.setdefault('waitingForUser', bool(row['requests']) if row.get('runtimeKnown') is not False and row.get('connectionState') not in ('closed','connecting','unavailable') else None)
                             row.setdefault('waitingObservedAt', observed)
-                if action == 'detail' and isinstance(value, dict):
+                if action in ('detail','timeline','changes','activity') and isinstance(value, dict):
                     from bridge.features.workspace.files import workspace_references
                     value['files'] = workspace_references(value.get('messages', []), value.get('session', {}).get('cwd'),
                                                           value.get('session', {}).get('requests', []))
-                    if value.get('turns') and isinstance(value.get('session'), dict):
+                    if (value.get('turns') and isinstance(value.get('session'), dict)
+                            and not (provider == 'deepseek' and value.get('capabilities', {}).get('historyNavigation'))):
                         last = value['turns'][-1]
                         value['session'].update(turnId=last.get('turnId'), turnStatus=last.get('status'))
                 future.set_result(value)
@@ -184,7 +187,32 @@ class DesktopSessions:
                     if isinstance(row, dict):
                         row.update(waitingForUser=None, waitingSubagents=None)
                         row.pop('sideChats', None)
-        # Consumers may annotate rows. Sharing a result object crosses requests.
+            # Decorate while the verified binding is still held; a new home must
+            # never receive completion evidence from the previous connection.
+            return self._shared_activity(provider, action, sid, body, result)
+
+    def _read_scope(self, provider):
+        home = os.path.normcase(str(self.adapters[provider].home.resolve()))
+        return 'deepseek:' + hashlib.sha256(home.encode()).hexdigest()
+
+    def _shared_activity(self, provider, action, sid, body, result):
+        if provider != 'deepseek' or not self.shared_read_state or not isinstance(result, dict):
+            return result
+        store, scope = self.shared_read_state, self._read_scope(provider)
+        def decorate(source, chat, connected):
+            observed = store.activity([{**source, 'host': scope, 'id': chat, 'connected': connected}])[0]
+            return {**source, **{key: observed[key] for key in ('readCompletions', 'completionToken', 'sideChats') if key in observed}}
+        if action == 'list':
+            result['sessions'] = [decorate(row, row['id'], result.get('connected') is not False) for row in result.get('sessions', [])]
+        if isinstance(result.get('session'), dict):
+            chat = sid + '/side/' + result['id'] if action.startswith('side-') and result.get('id') else sid
+            row = decorate(result['session'], chat, result.get('connected') is True)
+            result['session'] = row
+            if isinstance(result.get('meta'), dict):
+                result['meta'].update(row)
+                result['meta']['session'] = row
+            if action.startswith('side-'):
+                result.update({key: row[key] for key in ('readCompletions', 'completionToken', 'turnId', 'turnStatus') if key in row})
         return result
 
     def list_with_activity(self, provider):
@@ -248,7 +276,7 @@ class DesktopSessions:
         codex_read = provider == 'codex' and action == 'read-state'
         if (provider not in self.adapters and not codex_read) or action not in READS | WRITES:
             raise ValueError('不支持的桌面操作')
-        if (action in ('manage', 'side-read', 'side-write', 'subagents', 'title-status') and provider != 'deepseek'
+        if (action in ('manage', 'side-read', 'side-write', 'subagents', 'title-status', 'timeline', 'message-index', 'activity', 'changes', 'attachment', 'message-action', 'queue') and provider != 'deepseek'
                 or action == 'read-state' and provider not in ('codex', 'deepseek')):
             raise ValueError('当前客户端尚未提供此能力')
         if provider == 'deepseek' and self.deepseek_restore_error:
@@ -259,15 +287,15 @@ class DesktopSessions:
         adapter = NativeReadState(self.bridge) if codex_read else self.adapters[provider]
         if action == 'read-state':
             validate_read_state(body, codex=codex_read)
-        if action in READS and not (action == 'access' and 'mode' in body):
+        if action in READS and not (action == 'access' and 'mode' in body or action == 'queue' and body.get('operation') == 'remove'):
             return self._read(provider, action, sid, body)
         rid = str(uuid.UUID(body.get('id', '')))
         if action == 'side-write':
             operation = body.get('operation')
-            if operation not in ('create', 'rename', 'send', 'settings', 'permissions', 'stop', 'respond', 'close', 'cancel-queued'):
+            if operation not in ('create', 'rename', 'send', 'settings', 'permissions', 'stop', 'respond', 'close', 'cancel-queued', 'read-state'):
                 raise ValueError('无效侧边聊天操作')
             if operation == 'send' and (not isinstance(body.get('text'), str) or len(body['text']) > 20000
-                    or not body['text'].strip() and not body.get('resolvedImages')
+                    or not body['text'].strip() and not (body.get('resolvedImages') or body.get('resolvedFiles'))
                     or body.get('mode', 'send') not in ('send', 'queue', 'steer')):
                 raise ValueError('请输入 1–20000 字的消息，或添加图片，并选择有效发送方式')
         if action == 'send' and (not isinstance(body.get('text'), str) or
@@ -301,6 +329,12 @@ class DesktopSessions:
                     raise
             try:
                 result = adapter.call(action, sid, body)
+                if provider == 'deepseek' and self.shared_read_state and result.get('status') == 'accepted':
+                    if action == 'read-state':
+                        result['readCompletions'] = self.shared_read_state.remember(self._read_scope(provider), sid, body)
+                    elif action == 'side-write' and body.get('operation') == 'read-state':
+                        result['readCompletions'] = self.shared_read_state.remember(self._read_scope(provider), sid + '/side/' + body['childId'],
+                            {key: body[key] for key in ('id', 'turnId', 'turnStatus')})
             except ResumePreflightBlocked as exc:
                 result = {'status': 'blocked', 'id': rid, 'message': str(exc)}
             except Exception as exc:

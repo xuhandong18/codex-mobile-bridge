@@ -85,7 +85,7 @@ class WorkModes {
       if(['active','blocked','usageLimited','budgetLimited'].includes(goal.status)&&goal.activation!=='disarmed'){
         actions.append(button(this.statusBusy==='paused'?t('正在暂停目标…'):t('暂停目标'),'goal-status secondary',()=>this.setStatus('paused'),this.busy()));
       }
-      if(goal.status==='paused'||['active','blocked'].includes(goal.status)&&goal.activation==='disarmed'){
+      if(goal.status==='paused'||goal.status==='complete'&&view.canResumeCompletedGoal===true||['active','blocked'].includes(goal.status)&&goal.activation==='disarmed'){
         actions.append(button(this.statusBusy==='active'?t('正在恢复目标…'):t('恢复目标'),'goal-status primary',()=>this.setStatus('active'),this.busy()));
       }
       if(canEdit)actions.append(button(t('修改目标'),'goal-edit secondary',()=>{this.editing=true;this.editText=goal.objective;this.editExpected=this.expectedGoal(goal);this.render();this.goalRoot.querySelector('.goal-editor')?.focus();},this.busy()));
@@ -94,7 +94,7 @@ class WorkModes {
       if(goal.status==='active'&&!canEdit)this.goalRoot.append(node('p',t('修改目标前请先暂停。'),'muted'));
       if(this.editing&&canEdit){
         const input=node('textarea','', 'goal-editor');input.value=this.editText;input.maxLength=4000;input.rows=3;input.disabled=this.busy();input.setAttribute('aria-label',t('目标内容'));input.oninput=()=>{this.editText=input.value;};
-        this.goalRoot.append(input,node('p',t(goal.status==='active'?'修改目标内容会重置用量统计，保存后继续执行。':'修改目标内容会重置用量统计，保存后保持暂停。'),'muted'));
+        this.goalRoot.append(input,node('p',t(view.goalEditKeepsStatistics?(goal.status==='complete'?'保存后等待你明确继续；继续时创建新目标并重新统计轮次。':'保存后保留当前状态和轮次上限。'):goal.status==='active'?'修改目标内容会重置用量统计，保存后继续执行。':'修改目标内容会重置用量统计，保存后保持暂停。'),'muted'));
         this.goalRoot.append(button(t('保存目标'),'goal-save primary',()=>this.saveEdit(),this.busy()),button(t('放弃修改'),'secondary',()=>{this.editing=false;this.render();},this.busy()));
         if(editSelection&&!this.busy()){input.focus({preventScroll:true});input.setSelectionRange(...editSelection);}
       }

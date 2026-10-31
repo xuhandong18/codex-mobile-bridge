@@ -12,6 +12,20 @@ from bridge.clients.deepseek.setup import insertion, legacy_account_configured
 
 
 class DeepSeekMigrationTests(unittest.TestCase):
+    def test_revision_nine_upgrade_installs_verified_modules_without_rotating_identity(self):
+        from bridge.clients.deepseek import setup
+        source=self.old.directory/'mobile-host.mjs';content=b'// verified revision 9 fixture\n';source.write_bytes(content)
+        credentials=(self.old.directory/'connection.json').read_bytes()
+        for name in ('history.mjs','inline-current.mjs','inline-history.mjs','recovery.mjs','LICENSE.dsh-inline-edit'):
+            (self.old.directory/name).unlink()
+        with patch.object(setup,'PREVIOUS_HISTORY_SOURCES',(hashlib.sha256(content).hexdigest(),)):
+            self.assertTrue(self.new.discover_existing()['updateRequired'])
+            self.new.update_existing()
+        self.assertEqual((self.old.directory/'connection.json').read_bytes(),credentials)
+        for name,expected in setup.client_assets().items():self.assertEqual((self.old.directory/name).read_bytes(),expected)
+        (self.old.directory/'history.mjs').write_text('// foreign module')
+        with self.assertRaises(ValueError):self.new.discover_existing()
+
     def setUp(self):
         root = Path(__file__).resolve().parents[1]/'.tmp'
         root.mkdir(exist_ok=True)
@@ -191,7 +205,7 @@ class DeepSeekMigrationTests(unittest.TestCase):
     def test_revision_seven_ai_rename_upgrade_retains_verified_sources_and_credentials(self):
         from bridge.clients.deepseek import setup
         from bridge.clients.deepseek.adapter import LIFECYCLE_REVISIONS
-        self.assertEqual(BRIDGE_REVISION, 9)
+        self.assertEqual(BRIDGE_REVISION, 10)
         self.assertIn(7, LIFECYCLE_REVISIONS)
         source = self.old.directory/'mobile-host.mjs'
         content = b'// known revision 7 before AI rename\n'

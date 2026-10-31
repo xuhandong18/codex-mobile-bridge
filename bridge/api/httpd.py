@@ -75,7 +75,7 @@ class GatewayServer(ThreadingHTTPServer):
             self.sidebar_preferences = SidebarPreferences(data_dir)
             self.notifications = None
             self.harness = Harness(data_dir) if data_dir else None
-            self.desktop_sessions = DesktopSessions(data_dir, bridge, gateway_running=True) if data_dir else None
+            self.desktop_sessions = DesktopSessions(data_dir, bridge, gateway_running=True, read_state=self.chat_read_state) if data_dir else None
             self.desktop_uploads = DesktopUploads(data_dir) if data_dir else None
             self.instance_id = secrets.token_hex(16)
             self.auth = Auth(config["auth"], data_dir)
@@ -521,13 +521,13 @@ class Handler(BaseHTTPRequestHandler):
                 manager.require_enabled('deepseek')
                 if self.server.auth.config.get('mode') == 'none':
                     raise PermissionError('侧边聊天需要启用网关密码保护')
-                value = self.read_json() if write else {}
+                value = self.read_json() if write else {key: query[key][0] for key in ('action','history','offset','archiveId','before','after','around','limit','cursor','since','key','version') if key in query}
                 action = value.pop('action', 'read')
                 child = value.pop('id', None)
                 sid = query.get('sessionId', [None])[0]
                 body = {**value, 'operation': action, 'childId': child, 'slot': query.get('slot', [''])[0]}
-                read = action in ('read', 'catalog', 'skills')
-                if not write and action != 'read' or write and action == 'read':
+                read = action in ('read', 'catalog', 'skills', 'message-index', 'message-detail')
+                if not write and not read or write and action == 'read':
                     raise ValueError('无效侧边聊天操作')
                 if any(key in value for key in ('resolvedImages', 'resolvedFiles')):
                     raise ValueError('附件格式无效')
@@ -539,9 +539,8 @@ class Handler(BaseHTTPRequestHandler):
                     if current.get('id') != child:
                         raise ValueError('侧边聊天已失效')
                     images, files = self.server.desktop_uploads.resolve('deepseek', child, body.pop('attachments', []))
-                    if files:
-                        raise ValueError('此应用的消息附件仅支持图片；其他文件请使用文件传输。')
                     body['resolvedImages'] = images
+                    body['resolvedFiles'] = files
                 return self.output(200, manager.call('deepseek', 'side-read' if read else 'side-write', sid, body))
             desktop_workspace = re.fullmatch(r'/api/desktop-sessions/(deepseek|claude)/(workspace(?:/[a-z-]+)?|terminal)', path)
             if path.startswith('/api/desktop-sessions/') and not desktop_workspace:
@@ -552,7 +551,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) != 4 or parts[2] not in ('deepseek', 'claude') or parts[3] in ('side-read', 'side-write') or parts[3] not in (WRITES if write else READS):
                     return self.output(404, {'error': '接口不存在'})
                 manager.require_enabled(parts[2])
-                read_fields = ('requestId',) if parts[3] == 'title-status' else ('childId',)
+                read_fields = ('requestId',) if parts[3] == 'title-status' else ('childId','limit','cursor','since','before','after','around','epoch','sequence','key','offset','version','reference')
                 body = self.read_json() if write else {key: query[key][0] for key in read_fields if key in query}
                 sid = body.pop('sessionId', None) if write else query.get('sessionId', [None])[0]
                 if write and any(key in body for key in ('resolvedImages', 'resolvedFiles')):
@@ -570,6 +569,23 @@ class Handler(BaseHTTPRequestHandler):
                         body['resolvedFiles'] = files
                 feed = self.server.notifications.mobile.checkpoint() if parts[3] == 'list' and self.server.notifications else None
                 result = manager.list_with_activity(parts[2]) if parts[3] == 'list' else manager.call(parts[2], parts[3], sid, body)
+                if parts[3] == 'attachment':
+                    if write:
+                        raise ValueError('无效附件请求')
+                    mime = result.get('mime')
+                    if mime not in ('image/png','image/jpeg','image/gif','image/webp'):
+                        raise ValueError('不支持的图片格式')
+                    data = base64.b64decode(result['data'], validate=True)
+                    if len(data) > MAX_FILE:
+                        raise ValueError('图片过大')
+                    self.send_response(200)
+                    self.send_header('Content-Type', mime)
+                    self.send_header('Content-Length', str(len(data)))
+                    self.send_header('Cache-Control', 'private, no-store')
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if feed is not None:
                     result['notificationRead'] = {key: feed[key] for key in ('streamId', 'cursor')}
                 return self.output(200, result)

@@ -73,7 +73,7 @@ class SharedReadState:
         if observed is not None and previous.get('observedAt') is not None and observed < previous['observedAt']:
             return completion
         last = (row.get('turns') or [{}])[-1]
-        turn_id, turn_status = row.get('turnId') or last.get('id'), row.get('turnStatus') or last.get('status')
+        turn_id, turn_status = row.get('turnId') or last.get('turnId') or last.get('id'), row.get('turnStatus') or last.get('status')
         parent_status = row.get('parentStatus', row['status'])
         terminal = parent_status != 'active' and turn_status in ('completed', 'failed', 'interrupted')
         token = turn_id + ':' + turn_status if terminal and turn_id else previous.get('token')
@@ -81,6 +81,8 @@ class SharedReadState:
         subtree_finished = previous.get('runningSubagents', 0) > 0 and not descendants
         was_active = previous.get('parentStatus') == 'active' or subtree_finished
         if terminal and turn_id and previous and (was_active or previous.get('turnKnown') and token != previous.get('token')):
+            completion = token
+        if terminal and previous and row.get('completionHint') == token:
             completion = token
         current = {'parentStatus': parent_status, 'runningSubagents': descendants, 'token': token,
                    'turnKnown': bool(turn_status) or previous.get('turnKnown', False), 'completion': completion,
