@@ -340,6 +340,31 @@ class SessionStore:
             result['origin'] = origin
             return result
 
+    def management_records(self, identifiers):
+        """Fresh readback for a subtree already authorized by the caller."""
+        if (not isinstance(identifiers, list) or not 1 <= len(identifiers) <= 129
+                or any(not isinstance(sid, str) or not re.fullmatch(r'[0-9a-f-]{36}', sid) for sid in identifiers)):
+            raise ValueError('聊天管理核验标识无效')
+        with self._connect() as conn:
+            rows = conn.execute('SELECT id, archived, rollout_path FROM threads WHERE id IN (' +
+                                ','.join('?' for _ in identifiers) + ')', identifiers)
+            return [dict(row) for row in rows]
+
+    def management_verified(self, identifiers, action, record_paths):
+        rows = self.management_records(identifiers)
+        if action == 'delete':
+            if rows:
+                return False
+            for value in record_paths:
+                path = Path(value).resolve()
+                if not self._rollout_in_home(path) or path.exists():
+                    return False
+            return True
+        if action not in ('archive', 'unarchive'):
+            raise ValueError('无效聊天操作')
+        root = next((row for row in rows if row['id'] == identifiers[0]), None)
+        return root is not None and bool(root['archived']) == (action == 'archive')
+
     def _rollout_in_home(self, resolved):
         for base in (self.home / 'sessions', self.home / 'archived_sessions'):
             root = base.resolve()

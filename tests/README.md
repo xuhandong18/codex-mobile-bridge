@@ -43,6 +43,8 @@ HTTP、中继、IPC、mailbox 等测试使用本机隔离监听和合成数据�
 
 Codex 聊天删除、归档和取消归档运行 `python -B scripts/test-backend.py --source-only -p test_desktop_idle.py`、`-p test_create.py` 和 `-p test_accounts.py`，并联动 `test_client_lifecycle.py`。覆盖已完成但有未回答问题卡片的聊天、原生审批与同步问题、运行轮次与子任务、未知或排队发送、过期展示缓存、主机隔离及删除确认。测试使用隔离 owner 与模拟原生写入，不删除真实聊天；问题卡片的红色等待展示继续由 `test_waiting_activity.py` 验证。
 
+完整删除另运行 `-p test_thread_management.py`，覆盖明确的目标 writer 拒绝后由原桌面归档释放、原生身份与工作树附件核验、未知结果不重放、主子索引与文件消失后才确认成功，以及旧会话展示清理。`test_resource_layout.py` 继续检查 SSH 使用的只读索引模块可独立执行；远端记录路径只在远端核验。
+
 目标编辑运行 `python -B scripts/test-backend.py --source-only -p 'test_goal_*.py'`，并联动 `test_modes.py`、`test_cli_bridge_integration.py` 与 `test_codex_cli_session.py`。覆盖运行中直接修改、暂停状态保留、预算保留、排队启动同步、重复保存、过期目标拒绝和未知结果不重放。`node scripts/test-goal-edit-browser.cjs` 使用生产页面、隔离合成 API 与已有 Playwright/Chromium，在手机、平板和电脑宽度及中英文界面实际点击、输入和保存，验证实时刷新保留草稿、焦点与选区，失败重试保留操作 ID，且保存不发送暂停、停止或额外聊天请求。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定已有运行时；不操作真实 Codex 聊天。Harness 仍要求先暂停再修改，由 `tests/modes-ui.test.cjs` 覆盖。
 
 目标完成后的回归包含原生 complete 与 owner 完成快照两种来源，覆盖完成记录保留、修改后暂停、显式恢复、隐藏后重载再打开、旧快照不得覆盖新目标、关闭后不复活、写入回执丢失不重放，以及 owner 序号不变时目标状态仍刷新。浏览器驱动实际验证六种尺寸／语言组合中的完成目标编辑与恢复流程。

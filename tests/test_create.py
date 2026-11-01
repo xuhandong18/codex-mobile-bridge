@@ -82,6 +82,8 @@ class CreationTests(unittest.TestCase):
         child = str(uuid.uuid4())
         with patch.object(self.bridge.store, 'get', return_value={'origin': 'desktop'}), \
              patch.object(self.bridge.store, 'subagents', return_value={'agents': [{'id': child}]}), \
+             patch.object(self.bridge.store, 'management_records', return_value=[]), \
+             patch.object(self.bridge.store, 'management_verified', return_value=True), \
              patch.object(self.bridge, 'assert_desktop_idle') as idle, \
              patch('bridge.app.service.manage_thread') as manage:
             with self.assertRaisesRegex(ValueError, '确认永久删除'):

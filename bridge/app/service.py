@@ -38,6 +38,7 @@ from bridge.features.workspace.workspace import operate as workspace_operation
 from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, manage_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
+from bridge.clients.codex.thread_management import archive_owned_thread
 from bridge.features.sessions.timeline import Timeline
 from bridge.features.sessions.message_index import MessageNavigation, conversation_recency_key, conversation_recency_time
 from bridge.features.accounts.account import Account
@@ -2807,6 +2808,9 @@ class Bridge:
             raise ValueError('子智能体记录过多，无法确认任务状态，请在桌面操作')
         identifiers = {thread_id, *(row['id'] for row in agents.get('agents', []))}
         self.assert_desktop_idle(thread_ids=identifiers, allow_completed_questions=True)
+        ordered_ids = [thread_id, *sorted(identifiers - {thread_id})]
+        records = self.store.management_records(ordered_ids)
+        record_paths = {row['rollout_path'] for row in records if row.get('rollout_path')}
         if isinstance(self.store, RemoteStore):
             source = source_text('features/sessions/create.py')
             source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
@@ -2816,7 +2820,29 @@ class Bridge:
             with self.store.lock:
                 self.store.cache.clear()
         else:
-            manage_thread(self.catalog_reader.executable, self.codex_home, thread_id, action)
+            try:
+                manage_thread(self.catalog_reader.executable, self.codex_home, thread_id, action)
+            except CreationError as exc:
+                # This exact native rejection proves deletion did not happen.
+                # Unknown/timeout failures never enter this recovery or replay.
+                if action != 'delete' or str(exc) != f'thread {thread_id} already has an active writer':
+                    raise
+                archive_owned_thread(self, thread_id)
+                self.assert_desktop_idle(thread_ids=identifiers, allow_completed_questions=True)
+                records = self.store.management_records(ordered_ids)
+                record_paths.update(row['rollout_path'] for row in records if row.get('rollout_path'))
+                manage_thread(self.catalog_reader.executable, self.codex_home, thread_id, action)
+        if not self.store.management_verified(ordered_ids, action, sorted(record_paths)):
+            raise CreationError('聊天操作返回后，原生记录尚未确认变更；请刷新列表核对，不要重复操作')
+        with self.lock:
+            for identifier in identifiers:
+                session = self.live.pop(identifier, None)
+                if session:
+                    with session.condition:
+                        session.connected = False
+                        session.state = None
+                        session.saved_view = None
+                        session.changed()
         return {'id': thread_id, 'host': self.host, 'action': action, 'confirmed': True}
 
     def _linux_permission_options(self, session):

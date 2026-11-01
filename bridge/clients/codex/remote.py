@@ -134,6 +134,12 @@ class RemoteStore:
     def record_path(self, thread_id):
         return self.call('record_path', {'thread_id': thread_id})
 
+    def management_records(self, identifiers):
+        return self.call('management_records', {'identifiers': identifiers})
+
+    def management_verified(self, identifiers, action, record_paths):
+        return self.call('management_verified', {'identifiers': identifiers, 'action': action, 'record_paths': record_paths})
+
     def history(self, thread_id, turn_limit=None):
         return self.call('history', {'thread_id': thread_id, 'turn_limit': turn_limit})
 

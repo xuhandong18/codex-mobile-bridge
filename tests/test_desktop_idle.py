@@ -93,6 +93,8 @@ class DesktopIdle(unittest.TestCase):
         self.bridge.accounts = accounts
         self.bridge.store.get = Mock(return_value={'origin': 'desktop'})
         self.bridge.store.subagents = Mock(return_value={'agents': [{'id': child}]})
+        self.bridge.store.management_records = Mock(return_value=[])
+        self.bridge.store.management_verified = Mock(return_value=True)
         self.bridge.catalog_reader = SimpleNamespace(executable='fixture-runtime')
         return sid, child, state, session
 
@@ -107,8 +109,7 @@ class DesktopIdle(unittest.TestCase):
         self.assertIn(('follow', 'local', sid, 'owner'), self.calls)
         self.assertIn(('thread-owner-discovery', 'local', child), self.calls)
         self.bridge.activate.assert_not_called()
-        self.assertTrue(session.view()['requests'])
-        self.assertTrue(session.view()['waitingForUser'])
+        self.assertNotIn(sid, self.bridge.live)
 
     def test_management_questions_do_not_bypass_live_work_or_uncertain_submissions(self):
         sid, child, state, session = self._completed_question_chat()
