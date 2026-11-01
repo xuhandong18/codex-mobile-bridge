@@ -837,11 +837,13 @@ class Bridge:
                 self.remote_bridges[host].recovery = self.recovery
             return self.remote_bridges[host]
 
-    def assert_desktop_idle(self, timeout=20, *, thread_ids=None):
+    def assert_desktop_idle(self, timeout=20, *, thread_ids=None, allow_completed_questions=False):
         """Passively check desktop owners before shutdown or thread management.
 
         The caller holds the account operation gate until the mutation completes.
         thread_ids limits checks to the selected host's parent/descendant threads.
+        Thread management may discard unanswered cards from completed turns;
+        synchronous requests and running turns always block the operation.
         Saved rollouts and the gateway's existing follow cache are not evidence
         that a desktop-only or remote task is idle.
         """
@@ -856,7 +858,9 @@ class Bridge:
             return value
 
         def check_submissions():
-            blockers = self.accounts.blockers()
+            # Cached live views are presentation data. The fresh owner snapshots
+            # below decide whether tasks/approvals still exist.
+            blockers = self.accounts.blockers(include_live=False)
             if thread_ids is not None:
                 blockers = [row for row in blockers if row.get('host') == self.host and row.get('id') in thread_ids]
             if blockers:
@@ -957,7 +961,13 @@ class Bridge:
             state = record['state']
             try:
                 runtime = state.get('threadRuntimeStatus', {}).get('type')
-                if (runtime in ('active', 'running', 'waiting', 'busy') or pending_requests(state)
+                requests = pending_requests(state)
+                if allow_completed_questions:
+                    # Async cards survive completion and need not be answered
+                    # before deleting/archiving a chat. Native requests remain
+                    # authoritative, including unsupported request methods.
+                    requests = state.get('requests', [])
+                if (runtime in ('active', 'running', 'waiting', 'busy') or requests
                         or any(turn.get('status') == 'inProgress' for turn in ordered_turns(state))):
                     raise ValueError(busy)
                 if runtime != 'idle':
@@ -2796,7 +2806,7 @@ class Bridge:
         if agents.get('limited'):
             raise ValueError('子智能体记录过多，无法确认任务状态，请在桌面操作')
         identifiers = {thread_id, *(row['id'] for row in agents.get('agents', []))}
-        self.assert_desktop_idle(thread_ids=identifiers)
+        self.assert_desktop_idle(thread_ids=identifiers, allow_completed_questions=True)
         if isinstance(self.store, RemoteStore):
             source = source_text('features/sessions/create.py')
             source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'

@@ -280,6 +280,19 @@ class AccountsTests(unittest.TestCase):
                                           'title':'Approval fixture','requests':[{'id':'approval'}]})}
         with self.assertRaisesRegex(ValueError,'Approval fixture'):self.manager.idle()
 
+    def test_submission_audit_excludes_live_views_but_retains_host_and_unknown_writes(self):
+        view = Mock(side_effect=AssertionError('fresh audit must not read cached views'))
+        self.bridge.live = {'cached': SimpleNamespace(view=view)}
+        self.bridge.submissions = {'local-task:one': {'status': 'queued'},
+                                   'accepted:two': {'status': 'accepted'}}
+        self.bridge.remote_bridges = {'remote:test': SimpleNamespace(
+            host='remote:test', lock=threading.RLock(), live={'cached': SimpleNamespace(view=view)},
+            submissions={'remote-task:three': {'status': 'unknown'}})}
+        rows = self.manager.blockers(include_live=False)
+        self.assertEqual([(row['host'], row['id'], row['reason']) for row in rows],
+                         [('local', 'local-task', 'queued'), ('remote:test', 'remote-task', 'unknown')])
+        view.assert_not_called()
+
     def test_mutations_and_second_switch_are_blocked_during_switch(self):
         row=self.api();self.manager.state={'phase':'verifying'}
         class Target:

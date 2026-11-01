@@ -596,11 +596,11 @@ class Accounts:
             self.save()
             return self.desktop_status()
 
-    def blockers(self):
+    def blockers(self, *, include_live=True):
         result = []
         for bridge in [self.bridge, *self.bridge.remote_bridges.values()]:
             with bridge.lock:
-                sessions = list(bridge.live.items())
+                sessions = list(bridge.live.items()) if include_live else []
             for identifier, session in sessions:
                 view = session.view()
                 # Saved/disconnected snapshots are history, not evidence of a live task.

@@ -88,7 +88,7 @@ class CreationTests(unittest.TestCase):
                 self.bridge.manage_session(self.tid, 'delete')
             manage.assert_not_called();idle.assert_not_called()
             self.assertTrue(self.bridge.manage_session(self.tid, 'archive')['confirmed'])
-            idle.assert_called_once_with(thread_ids={self.tid, child})
+            idle.assert_called_once_with(thread_ids={self.tid, child}, allow_completed_questions=True)
             self.assertEqual(manage.call_args.args[2:], (self.tid, 'archive'))
             idle.side_effect = ValueError('任务运行')
             with self.assertRaisesRegex(ValueError, '任务运行'):

@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.clients.codex.ipc import IPCError
-from bridge.app.service import Bridge
+from bridge.app.service import Bridge, LiveSession
+from bridge.features.accounts.accounts import Accounts
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +71,97 @@ class DesktopIdle(unittest.TestCase):
         self.assertNotIn(('follow', 'local', 'desktop-only', 'owner'), self.calls)
         self.bridge.store.lifecycle_threads.assert_not_called()
         self.bridge.activate.assert_not_called()
+
+    def _completed_question_chat(self):
+        sid = '00000000-0000-0000-0000-000000000001'
+        child = '00000000-0000-0000-0000-000000000002'
+        state = {'id': sid, 'threadRuntimeStatus': {'type': 'idle'}, 'requests': [],
+                 'turns': [{'turnId': 'done', 'status': 'completed', 'items': [
+                     {'id': 'question', 'type': 'agentMessage', 'text': 'Choose later',
+                      'questions': [{'title': 'Choose', 'options': ['yes', 'no']}]}]}]}
+        session = LiveSession(sid)
+        session.connected = True
+        session.state = copy.deepcopy(state)
+        self.bridge.live[sid] = session
+        self.states[('local', sid)] = state
+        self.owners[('local', child)] = IPCError('no-client-found')
+        self.bridge.submissions = {}
+        accounts = Accounts.__new__(Accounts)
+        accounts.bridge = self.bridge
+        accounts.gate = threading.RLock()
+        accounts.check_ready = Mock()
+        self.bridge.accounts = accounts
+        self.bridge.store.get = Mock(return_value={'origin': 'desktop'})
+        self.bridge.store.subagents = Mock(return_value={'agents': [{'id': child}]})
+        self.bridge.catalog_reader = SimpleNamespace(executable='fixture-runtime')
+        return sid, child, state, session
+
+    def test_completed_question_does_not_block_confirmed_thread_deletion(self):
+        sid, child, state, session = self._completed_question_chat()
+        self.assertTrue(session.view()['requests'])
+        for action in ('delete', 'archive', 'unarchive'):
+            with self.subTest(action=action), patch('bridge.app.service.manage_thread') as manage:
+                result = self.bridge.manage_session(sid, action, True)
+                self.assertTrue(result['confirmed'])
+                manage.assert_called_once_with('fixture-runtime', self.bridge.codex_home, sid, action)
+        self.assertIn(('follow', 'local', sid, 'owner'), self.calls)
+        self.assertIn(('thread-owner-discovery', 'local', child), self.calls)
+        self.bridge.activate.assert_not_called()
+        self.assertTrue(session.view()['requests'])
+        self.assertTrue(session.view()['waitingForUser'])
+
+    def test_management_questions_do_not_bypass_live_work_or_uncertain_submissions(self):
+        sid, child, state, session = self._completed_question_chat()
+        for case in ('approval', 'input', 'unsupported', 'active', 'turn', 'child', 'unknown', 'queued', 'disconnected'):
+            with self.subTest(case=case), patch('bridge.app.service.manage_thread') as manage:
+                fresh = copy.deepcopy(state)
+                self.states[('local', sid)] = fresh
+                self.states.pop(('local', child), None)
+                self.owners[('local', child)] = IPCError('no-client-found')
+                self.bridge.submissions = {}
+                methods = {'approval': 'item/commandExecution/requestApproval',
+                           'input': 'item/tool/requestUserInput', 'unsupported': 'future/request'}
+                if case in methods:
+                    fresh['requests'] = [{'id': 'request', 'method': methods[case], 'params': {}}]
+                elif case == 'active':
+                    fresh['threadRuntimeStatus']['type'] = 'active'
+                elif case == 'turn':
+                    fresh['turns'][0]['status'] = 'inProgress'
+                elif case == 'child':
+                    self.owners[('local', child)] = 'owner'
+                    self.states[('local', child)] = {'id': child, 'threadRuntimeStatus': {'type': 'active'}}
+                elif case in ('unknown', 'queued'):
+                    self.bridge.submissions[sid + ':submission'] = {'status': case}
+                else:
+                    self.states[('local', sid)] = None
+                # The management path keeps its normal timeout; only the missing
+                # snapshot case needs a short deterministic audit deadline.
+                if case == 'disconnected':
+                    original = self.bridge.assert_desktop_idle
+                    with patch.object(self.bridge, 'assert_desktop_idle',
+                                      side_effect=lambda **kwargs: original(timeout=.02, **kwargs)):
+                        with self.assertRaises(ValueError):
+                            self.bridge.manage_session(sid, 'delete', True)
+                else:
+                    with self.assertRaises(ValueError):
+                        self.bridge.manage_session(sid, 'delete', True)
+                manage.assert_not_called()
+
+    def test_completed_questions_still_block_desktop_shutdown(self):
+        sid, child, state, session = self._completed_question_chat()
+        with self.assertRaisesRegex(ValueError, '任务运行'):
+            self.bridge.assert_desktop_idle(thread_ids={sid})
+        self.assertIn(('follow', 'local', sid, 'owner'), self.calls)
+
+    def test_stale_live_view_does_not_override_fresh_idle_audit(self):
+        sid, child, state, session = self._completed_question_chat()
+        session.state['threadRuntimeStatus']['type'] = 'active'
+        fresh = copy.deepcopy(state)
+        fresh['turns'][0]['items'] = []
+        self.states[('local', sid)] = fresh
+        self.assertTrue(self.bridge.accounts.blockers())
+        self.bridge.assert_desktop_idle(thread_ids={sid})
+        self.assertIn(('follow', 'local', sid, 'owner'), self.calls)
 
     def test_exact_no_client_found_is_absence_not_stale_history_activity(self):
         self.owners[('local', 'desktop-only')] = IPCError('no-client-found')
