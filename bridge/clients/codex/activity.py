@@ -115,7 +115,10 @@ class DesktopActivity:
         last = turns[0] if turns else {}
         turn_status = last.get('status')
         flags = thread['status'].get('activeFlags')
-        waiting = any(flag in ('waitingOnApproval', 'waitingOnUserInput') for flag in flags) if isinstance(flags, list) else False if status == 'idle' else None
+        # Async questions can outlive a completed turn. Runtime flags only
+        # prove a wait exists; their absence cannot prove it was answered.
+        waiting = True if isinstance(flags, list) and any(
+            flag in ('waitingOnApproval', 'waitingOnUserInput') for flag in flags) else None
         return {'status': status, 'turnId': last.get('id'),
                 'waitingForUser': waiting, 'waitingObservedAt': time.time_ns()//1000,
                 'turnStatus': turn_status if turn_status in ('inProgress', 'completed', 'interrupted', 'failed') else None}

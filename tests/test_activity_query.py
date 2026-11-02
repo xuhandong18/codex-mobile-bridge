@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch
 
 from bridge.features.sessions.activity import ActivityQueries, query_activity
 from bridge.app.service import Bridge, LiveSession
-from bridge.features.sessions.side_chat import SideChats
 import test_bridge
 
 
@@ -155,7 +154,7 @@ class ActivityFallbackTests(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge.host = 'local'
         bridge.lock = threading.RLock()
-        bridge.side_chats = SideChats(None, None, None, 'local')
+        bridge.side_chats = SimpleNamespace(recencies=lambda: {}, activity=lambda sid: [])
         bridge.activity_recency_snapshot = {}
         bridge.recency_index = SimpleNamespace(snapshot=lambda:{})
         locked = LiveSession('locked')

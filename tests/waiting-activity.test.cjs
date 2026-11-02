@@ -110,3 +110,42 @@ test('派生任务的等待观察独立于主聊天连接和观察时间',()=>{
   activity.update([row({waitingSubagents:0,waitingSubagentsObservedAt:500})]);
   assert.equal(activity.indicator('local|main').kind,'running');
 });
+
+test('新电脑和手机共用已确认等待，断线或空闲不隐藏红色，回答后两端解除',()=>{
+  const phone=fixture(),pc=fixture(),key='local|main';
+  phone.update([row({status:'idle',turnStatus:'completed',waitingForUser:true,waitingObservedAt:100})]);
+  const cold=row({connected:false,status:'unknown',waitingForUser:null,waitingObservedAt:200,
+    sharedWaiting:{waitingForUser:true,waitingObservedAt:100}});
+  for(const device of [phone,pc]){
+    device.update([cold]);
+    assert.equal(device.indicator(key)?.kind,'awaiting');
+    assert.equal(device.rows[key].offline,true,'共享等待不能伪造实时连接');
+    device.read(key);
+    assert.equal(device.indicator(key)?.kind,'awaiting','阅读不能代替回答');
+  }
+  const answered={...cold,sharedWaiting:{waitingForUser:false,waitingObservedAt:300}};
+  for(const device of [phone,pc]){
+    device.update([answered]);
+    assert.notEqual(device.indicator(key)?.kind,'awaiting');
+    device.update([cold]);
+    assert.notEqual(device.indicator(key)?.kind,'awaiting','旧共享状态不能恢复红色');
+  }
+});
+
+test('共享等待不覆盖更新的本地请求，主侧与派生等待独立且蓝色优先',()=>{
+  const activity=fixture(),key='local|main';
+  activity.update([row({waitingForUser:true,waitingObservedAt:300})]);
+  activity.update([row({waitingForUser:null,sharedWaiting:{waitingForUser:false,waitingObservedAt:200}})]);
+  assert.equal(activity.indicator(key)?.kind,'awaiting');
+  activity.update([row({status:'idle',turnStatus:'completed',waitingForUser:false,waitingObservedAt:400,
+    sharedWaiting:{waitingSubagents:1,waitingSubagentsObservedAt:100},
+    sideChats:[{id:'side',connected:false,status:'unknown',sharedWaiting:{waitingForUser:true,waitingObservedAt:200}}]})]);
+  assert.equal(activity.indicator(key)?.kind,'completed');
+  activity.read(key);assert.equal(activity.indicator(key)?.kind,'awaiting');
+  activity.update([row({status:'idle',turnStatus:'completed',waitingForUser:false,waitingObservedAt:500,
+    sharedWaiting:{waitingSubagents:0,waitingSubagentsObservedAt:300}})]);
+  assert.equal(activity.indicator(key)?.kind,'awaiting','解除派生等待不能解除侧边请求');
+  activity.updateSideChat(row(),{id:'side',connected:false,status:'unknown',
+    sharedWaiting:{waitingForUser:false,waitingObservedAt:400}});
+  assert.notEqual(activity.indicator(key)?.kind,'awaiting');
+});

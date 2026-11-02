@@ -4,10 +4,10 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require('playwright'),web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
 const parent='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222',project='local|fixture',firstSlot='33333333-3333-4333-8333-333333333333';
 const access={source:'cli',canSend:true,canApprove:true,canUseSideChat:true};
-let sides,mainStatus,mainTurn,recency,sequence,mainWaiting,mainCompletion;const errors=[],writes=[],receipts=new Map();
+let sides,mainStatus,mainTurn,recency,sequence,mainWaiting,mainCompletion,mainAvailable=true,sharedWaiting=null;const errors=[],writes=[],receipts=new Map();
 const screenshots=process.argv.includes('--screenshots')?path.resolve(__dirname,'../.tmp/side-chat-activity'):null;
 const reset=()=>{receipts.clear();sides=['one','two'].map((id,index)=>({id:'side-'+id,slot:index?'44444444-4444-4444-8444-444444444444':firstSlot,connected:true,status:'active',turns:[{id,status:'inProgress',messages:[]}],requests:[],submissions:[]}));mainStatus='idle';mainTurn='main';recency=1;sequence=1;mainWaiting=false;mainCompletion=null;};
-const summary=()=>({id:parent,host:'local',connected:true,activityConnected:true,parentStatus:mainStatus,status:mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',completionToken:mainCompletion,readCompletions:receipts.get('main')||[],waitingForUser:mainWaiting,sideChats:sides.map(({id,connected,status,turns,requests})=>({id,connected,status,waitingForUser:!!requests?.length,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status,readCompletions:receipts.get(id)||[]})),recency});
+const summary=()=>({id:parent,host:'local',connected:mainAvailable,activityConnected:mainAvailable,parentStatus:mainStatus,status:!mainAvailable?'unknown':mainStatus==='active'||sides.some(s=>s.status==='active')?'active':'idle',turnId:mainTurn,turnStatus:mainStatus==='active'?'inProgress':'completed',completionToken:mainCompletion,readCompletions:receipts.get('main')||[],waitingForUser:mainAvailable?mainWaiting:null,sharedWaiting,sideChats:sides.map(({id,connected,status,turns,requests})=>({id,connected,status,waitingForUser:!!requests?.length,turnId:turns.at(-1)?.id,turnStatus:turns.at(-1)?.status,readCompletions:receipts.get(id)||[]})),recency});
 const rows=()=>[{id:other,host:'local',title:'较新的主聊天',recency:100},{id:parent,host:'local',title:'侧边状态测试',recency}].map(row=>({...row,cwd:'/fixture',projectKey:project,projectName:'测试项目',access}));
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
@@ -149,6 +149,26 @@ const server=http.createServer(async(req,res)=>{
     mainStatus='idle';mainCompletion=mainTurn+':completed';sequence++;await refresh(phone);await dot(phone,'completed').waitFor();
     checks.push('平板已读不会吞掉下一轮完成提醒');
     await phone.context().close();
+    reset();sides=[];mainAvailable=false;sharedWaiting={waitingForUser:true,waitingObservedAt:100};
+    const waitingDevices=[];
+    for(const width of [390,1280]){
+      const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();
+      await context.addInitScript(()=>{localStorage.setItem('list-mode','codex');localStorage.setItem('navigation:sidebar','open');});
+      await page.goto('http://127.0.0.1:'+server.address().port+'/');
+      await dot(page,'awaiting').waitFor();
+      assert.equal(await dot(page,'awaiting').evaluate(node=>getComputedStyle(node).backgroundColor),'rgb(239, 68, 68)');
+      assert.equal(await page.evaluate(parent=>sessionActivity.rows['local|'+parent].offline,parent),true);
+      waitingDevices.push({context,page});
+    }
+    checks.push('手机和全新电脑页面在聊天未加载时都显示共享红色，保持真实离线状态');
+    await waitingDevices[1].page.reload();await dot(waitingDevices[1].page,'awaiting').waitFor();
+    checks.push('电脑页面重载不丢失共享等待');
+    sharedWaiting={waitingForUser:false,waitingObservedAt:200};
+    for(const {context,page} of waitingDevices){
+      await refresh(page);await dot(page,'awaiting').waitFor({state:'detached'});
+      await context.close();
+    }
+    checks.push('新确认的回答状态让手机和电脑同时解除红色');
     assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:checks.length,checks},null,2));
   }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -4,7 +4,11 @@ class SessionActivity {
   id(row){return row.host+'|'+row.id;}
   save(){try{this.storage.setItem(this.key,JSON.stringify(this.rows));}catch{}}
   waitingSnapshot(row,previous){
-    const result={},fresh=!Number.isFinite(previous?.waitingObservedAt)||Number.isFinite(row.waitingObservedAt)&&row.waitingObservedAt>=previous.waitingObservedAt;
+    // The gateway's last confirmed wait is shared across devices, even when
+    // the current read is unavailable. It never establishes a live baseline.
+    const result=row.sharedWaiting?this.waitingSnapshot({...row.sharedWaiting,activityConnected:true},previous):{};
+    previous={...previous,...result};
+    const fresh=!Number.isFinite(previous?.waitingObservedAt)||Number.isFinite(row.waitingObservedAt)&&row.waitingObservedAt>=previous.waitingObservedAt;
     const own=typeof row.waitingForUser==='boolean'?row.waitingForUser:row.waitingForUser===undefined&&row.connected&&Array.isArray(row.requests)?row.requests.length>0:null;
     if(fresh&&own!==null&&(row.connected||row.activityConnected)){result.waitingForUser=own;if(Number.isFinite(row.waitingObservedAt))result.waitingObservedAt=row.waitingObservedAt;}
     const subtreeFresh=!Number.isFinite(previous?.waitingSubagentsObservedAt)||Number.isFinite(row.waitingSubagentsObservedAt)&&row.waitingSubagentsObservedAt>=previous.waitingSubagentsObservedAt;

@@ -201,7 +201,7 @@ class DesktopSessions:
         store, scope = self.shared_read_state, self._read_scope(provider)
         def decorate(source, chat, connected):
             observed = store.activity([{**source, 'host': scope, 'id': chat, 'connected': connected}])[0]
-            return {**source, **{key: observed[key] for key in ('readCompletions', 'completionToken', 'sideChats') if key in observed}}
+            return {**source, **{key: observed[key] for key in ('readCompletions', 'completionToken', 'sideChats', 'sharedWaiting') if key in observed}}
         if action == 'list':
             result['sessions'] = [decorate(row, row['id'], result.get('connected') is not False) for row in result.get('sessions', [])]
         if isinstance(result.get('session'), dict):

@@ -1,5 +1,6 @@
-"""A read acknowledgement identifies exactly the terminal turn the user saw."""
+"""Shared read receipts and confirmed completion/waiting observations."""
 import json
+import math
 import sqlite3
 import threading
 import uuid
@@ -18,6 +19,8 @@ class SharedReadState:
                         'sequence INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT NOT NULL, '
                         'chat TEXT NOT NULL, token TEXT NOT NULL, UNIQUE(host, chat, token))')
         self.db.execute('CREATE TABLE IF NOT EXISTS completion_activity ('
+                        'host TEXT NOT NULL, chat TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(host, chat))')
+        self.db.execute('CREATE TABLE IF NOT EXISTS waiting_activity ('
                         'host TEXT NOT NULL, chat TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(host, chat))')
         self.db.commit()
 
@@ -46,11 +49,10 @@ class SharedReadState:
         with self.lock, self.db:
             for row in rows:
                 host, chat = row['host'], row['id']
-                item = {**row, 'readCompletions': self.read(host, chat), 'completionToken': self._observe(host, chat, row)}
+                item = self._summary(host, chat, row)
                 if isinstance(row.get('sideChats'), list):
-                    item['sideChats'] = [{**child, 'readCompletions': self.read(host, chat + '/side/' + child['id']),
-                                         'completionToken': self._observe(host, chat + '/side/' + child['id'], child)}
-                                         for child in row['sideChats']]
+                    item['sideChats'] = [self._summary(host, chat + '/side/' + child['id'], child)
+                                        for child in row['sideChats']]
                 result.append(item)
         return result
 
@@ -61,7 +63,39 @@ class SharedReadState:
         never acknowledge reading, activate an owner, or load any chat history.
         """
         with self.lock, self.db:
+            self._observe_waiting(host, chat, row)
             return self._observe(host, chat, row)
+
+    def _summary(self, host, chat, row):
+        return {**row, 'readCompletions': self.read(host, chat),
+                'completionToken': self._observe(host, chat, row),
+                'sharedWaiting': self._observe_waiting(host, chat, row)}
+
+    def _observe_waiting(self, host, chat, row):
+        # Share only confirmed booleans/counts and their observation times.
+        # Unknown reads do not erase a wait or turn it into a live connection.
+        saved = self.db.execute('SELECT state FROM waiting_activity WHERE host=? AND chat=?', (host, chat)).fetchone()
+        previous = json.loads(saved[0]) if saved else {}
+        current = dict(previous)
+        for field, timestamp in (('waitingForUser', 'waitingObservedAt'),
+                                 ('waitingSubagents', 'waitingSubagentsObservedAt')):
+            value, observed = row.get(field), row.get(timestamp)
+            if not isinstance(observed, (int, float)) or isinstance(observed, bool) or not math.isfinite(observed):
+                continue
+            if observed < previous.get(timestamp, 0):
+                continue
+            if field == 'waitingForUser':
+                known = isinstance(value, bool) and (row.get('connected') or row.get('activityConnected'))
+            else:
+                known = (isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                         and (value > 0 or row.get('subagentsKnown') is not False))
+            if known:
+                current.update({field: value, timestamp: observed})
+        if current != previous:
+            self.db.execute('INSERT INTO waiting_activity(host, chat, state) VALUES (?, ?, ?) '
+                            'ON CONFLICT(host, chat) DO UPDATE SET state=excluded.state',
+                            (host, chat, json.dumps(current, separators=(',', ':'))))
+        return current
 
     def _observe(self, host, chat, row):
         saved = self.db.execute('SELECT state FROM completion_activity WHERE host=? AND chat=?', (host, chat)).fetchone()
