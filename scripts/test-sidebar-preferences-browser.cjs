@@ -21,7 +21,8 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
     else if(p==='/api/sessions')value={sessions:rows,remoteHosts:[],availableSources:['desktop'],complete:true,sidebar,sidebarPreferences:preferences};
     else if(p==='/api/projects')value=sidebar;
-    else if(p==='/api/activity')value={sessions:[]};
+    // Keep fixture chats visible under the production status filter.
+    else if(p==='/api/activity')value={sessions:rows.map(row=>({id:row.id,host:row.host,connected:true,status:'active'}))};
     else if(p==='/api/sidebar-preferences'){
       if(req.method==='POST'){
         let raw='';for await(const part of req)raw+=part;const body=JSON.parse(raw);writes.push({path:p,body});
@@ -82,6 +83,19 @@ async function ready(page){await page.waitForFunction(()=>listReadFinished&&list
       await phone.goto(base);await ready(phone);await computer.goto(base);await ready(computer);
       const pinned=page=>page.locator(group+' > .session[data-project-pinned="true"]').evaluateAll(nodes=>nodes.map(node=>node.dataset.id));
       check(await pinned(computer),[id(8)],'旧设备置顶迁移到全新设备 '+label);
+
+      await menu(phone,group+' > summary',width);
+      await phone.getByRole('button',{name:'置顶',exact:true}).click();
+      await phone.locator('#sessions [data-section="pinned"] > .project-group[data-project-key="'+project+'"]').waitFor();
+      await refresh(computer);
+      check(await computer.locator(group).evaluate(node=>node.parentElement.dataset.section),'pinned','项目右键置顶立即显示并跨设备同步 '+label);
+      await computer.reload();await ready(computer);
+      check(await computer.locator(group).evaluate(node=>node.parentElement.dataset.section),'pinned','重载保留整个项目的置顶状态 '+label);
+      await menu(computer,group+' > summary',otherWidth);
+      await computer.getByRole('button',{name:'取消置顶',exact:true}).click();
+      await computer.locator('#sessions [data-section="work"] > .project-group[data-project-key="'+project+'"]').waitFor();
+      await refresh(phone);
+      check(await phone.locator(group).evaluate(node=>node.parentElement.dataset.section),'work','取消项目置顶恢复原分区并同步另一设备 '+label);
 
       await menu(phone,group+' > .session[data-id="'+id(3)+'"]',width);
       await phone.getByRole('button',{name:'在项目内置顶',exact:true}).click();

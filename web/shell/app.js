@@ -856,7 +856,7 @@ new ChatContextMenu($('sessions'),target=>{
     const summary=target.closest('summary[data-project-key]');
     if(!nativeActions.length||!summary)return nativeActions;
     const project=sidebarEntry('project',{key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName});
-    return [...nativeActions,...sidebarProjectDisplayActions(project),...sidebarProjectOrderActions(project)];
+    return [sidebarPinAction(project),...nativeActions,...sidebarProjectDisplayActions(project),...sidebarProjectOrderActions(project)];
   }
   const button=target.closest('.session');
   if(!button){
@@ -880,9 +880,12 @@ new ChatContextMenu($('sessions'),target=>{
   }
   return items;
 },{label:'侧栏操作'});
-function sidebarPlacementActions(item){
+function sidebarPinAction(item){
   const pinTarget=sidebarPlacements.pinTarget(item,(sidebarData.sections||[]).map(section=>section.id),item.native);
-  const items=[{label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,pinTarget)},
+  return {label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,pinTarget)};
+}
+function sidebarPlacementActions(item){
+  const items=[sidebarPinAction(item),
     {label:'移动到分区…',run:()=>openSidebarPlacement(item)}];
   if(item.kind==='project')items.push(...sidebarProjectDisplayActions(item),...sidebarProjectOrderActions(item));
   return items;

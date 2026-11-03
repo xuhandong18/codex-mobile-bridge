@@ -67,7 +67,7 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 聊天末尾快捷按钮运行 `node --test tests/markdown-followups.test.cjs` 和 `node scripts/test-chat-followups-browser.cjs`。前者执行生产 Markdown 解析及输入填充逻辑，覆盖完整标记、转义、不完整输入、代码和引用排除、长度校验及草稿保留；后者使用生产页面和合成 API，在手机、平板和电脑尺寸实际点击主聊天与侧边聊天的按钮，检查展开、追加、焦点、草稿恢复、上下文隔离及零消息提交，并实际展开长消息的分段详情，核验截断末尾不误转、完整加载后恢复合法按钮，以及流式结束时正文未变也能正确重绘。需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`；不操作真实聊天，也不调用模型。
 
-项目菜单的“隐藏无状态聊天”由 `tests/sidebar-sync.test.cjs` 验证原生及回退菜单、项目隔离、已读保留聊天收回、重新加载和在途加载更多失效；`node scripts/test-project-status-browser.cjs` 在手机／平板长按及电脑右键中实际点击该入口，检查显示、后台刷新和再次加载，均不操作真实聊天。
+项目菜单的“置顶／取消置顶”由 `tests/sidebar-sync.test.cjs` 验证原生及回退菜单、分区及项目视图、本地及远程项目、空项目和取消后恢复原分区；`node scripts/test-sidebar-preferences-browser.cjs` 在手机／平板长按及电脑右键中实际操作，检查跨设备同步和重载保留。项目菜单的“隐藏无状态聊天”也由 `tests/sidebar-sync.test.cjs` 验证原生及回退菜单、项目隔离、已读保留聊天收回、重新加载和在途加载更多失效；`node scripts/test-project-status-browser.cjs` 在手机／平板长按及电脑右键中实际点击该入口，检查显示、后台刷新和再次加载。均使用合成数据，不操作真实聊天。
 
 新聊天页面保留另由 `tests/chat-creation-list.test.cjs`、`tests/sidebar-sync.test.cjs` 和 `tests/notifications-ui.test.cjs` 验证：确认创建后即使没有状态也立即显示，临时元数据被权威列表接管、项目分页重建和隐藏无状态聊天后继续保留，不占普通分页名额，并按主机隔离、在身份清理时丢弃。上述浏览器驱动在三种尺寸注入合成创建回执，检查未进入列表和进入权威列表后的显示、隐藏入口例外、十条分页及页面重载恢复默认筛选，不创建真实聊天。
 

@@ -266,6 +266,33 @@ function bindSidebarMenu({context}){
   vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nasync function changeSidebarPlacement(')),context);
 }
 
+for(const mode of ['codex','project'])for(const native of [true,false])test('项目右键菜单保留置顶和取消置顶，视图='+mode+'，原生菜单='+native,async()=>{
+  const f=fixture(mode),{context,nodes}=f;bindSidebarMenu(f);
+  if(!native)context.sidebarManagement=null;
+  vm.runInContext(source.slice(source.indexOf('async function changeSidebarPlacement('),source.indexOf('\nfunction openSidebarPlacement(')),context);
+  context.sidebarData.projects.push({key:'ssh|remote',host:'ssh',name:'Remote'});
+  context.renderList();
+  const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
+  const menu=key=>context.menuItems(group(key).children[0]);
+  for(const key of ['local|p','local|empty','ssh|remote']){
+    const original=JSON.stringify(context.sidebarData),before=menu(key);
+    const pin=before.find(row=>row.label==='置顶');
+    assert.ok(pin,'项目右键菜单应显示置顶：'+key);
+    assert.ok(!pin.disabled,'远程项目也能使用网关共享置顶');
+    assert.equal(before.filter(row=>row.label==='移动到分区…').length,1,'保留单一分区移动入口');
+    await pin.run();
+    assert.equal(group(key).parent.dataset.section,'pinned','点击后进入置顶分区');
+    context.listRenderStamp='';context.renderList();
+    const unpin=menu(key).find(row=>row.label==='取消置顶');
+    assert.ok(unpin,'刷新后菜单显示取消置顶');
+    assert.ok(!menu(key).some(row=>row.label==='置顶'));
+    await unpin.run();
+    assert.equal(group(key).parent.dataset.section,key==='local|p'?'custom':'projects','取消后回到原分区或普通项目');
+    assert.ok(menu(key).some(row=>row.label==='置顶'));
+    assert.equal(JSON.stringify(context.sidebarData),original,'置顶复用共享偏好，不改写原生项目');
+  }
+});
+
 for(const native of [true,false])test('项目菜单隐藏无状态聊天并保留其他项目和加载更多入口，原生菜单='+native,async()=>{
   const f=fixture(),{context,nodes}=f;
   context.listRows.push(...Array.from({length:12},(_,i)=>({...context.listRows[0],id:'idle-'+i})),{...context.listRows[0],id:'other',projectKey:'local|other'});
