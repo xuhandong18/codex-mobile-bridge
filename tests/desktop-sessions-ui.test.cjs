@@ -33,6 +33,27 @@ function fixture(){
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
 
+for(const provider of ['claude','deepseek'])test(provider+'仅最近交互把有状态聊天排在前面，状态清除后恢复时间顺序',async()=>{
+ const ui=fixture(),view=ui.view;await view.choose(provider);view.listMode.value='recent';
+ view.rows=[
+  {id:'idle',updatedAt:600,status:'idle'},
+  {id:'unknown',updatedAt:500,status:'unknown'},
+  {id:'unread',updatedAt:400,status:'idle'},
+  {id:'running',updatedAt:300,status:'active',turnId:'one',turnStatus:'inProgress'},
+  {id:'waiting',updatedAt:200,status:'idle',waitingForUser:true,waitingObservedAt:1},
+  {id:'side',updatedAt:100,status:'idle',sideChats:[{id:'child',connected:true,status:'active',turnId:'side-one',turnStatus:'inProgress'}]},
+ ].map(row=>({...row,title:row.id,cwd:'/project'}));
+ const times=view.rows.map(row=>row.updatedAt),ids=()=>Array.from(view.rowsRoot.querySelectorAll('.session'),node=>node.dataset.id);
+ view.updateActivity(view.rows);view.activity.update([{id:'unknown',host:provider,connected:false,status:'unknown'}],null,{sync:false});view.activity.markUnread(provider+'|unread');view.renderList();
+ assert.deepEqual(ids(),['unread','running','waiting','side','idle','unknown']);
+ const first=view.rowsRoot.querySelector('.session');view.renderIndicators();assert.equal(view.rowsRoot.querySelector('.session'),first,'相同状态保留已有节点');
+ view.listMode.value='project';view.renderList();assert.deepEqual(ids(),['idle','unknown','unread','running','waiting','side']);
+ view.listMode.value='recent';view.renderList();assert.deepEqual(ids(),['unread','running','waiting','side','idle','unknown']);
+ view.activity.read(provider+'|unread',{explicit:true,sync:false});view.renderIndicators();assert.deepEqual(ids(),['running','waiting','side','idle','unknown','unread'],'已读立即回到无状态聊天的时间顺序');
+ view.updateActivity([{id:'waiting',status:'idle',waitingForUser:false,waitingObservedAt:2}]);view.renderIndicators();assert.deepEqual(ids(),['running','side','idle','unknown','unread','waiting'],'等待解除也重新排序');
+ assert.deepEqual(view.rows.map(row=>row.updatedAt),times,'排序不能改动交互时间或原始列表');
+});
+
 test('DeepSeek only syncs fresh completed detail while the chat is visible, including completion during reading',async()=>{
  const ui=fixture(),view=ui.view;await view.choose('deepseek');view.prepareChat('a');
  const detail={connected:true,session:{id:'a',title:'Chat',status:'idle'},messages:[],turns:[{turnId:'1',status:'completed'}]};

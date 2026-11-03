@@ -2,6 +2,8 @@
 
 测试应匹配改动的功能和平台。源码测试不等于已经编译、安装或在三个系统上完成真实客户端联调。
 
+最近交互的状态优先排序运行 `node --test tests/desktop-sessions-ui.test.cjs tests/recency-policy.test.cjs` 和 `node scripts/test-side-chat-activity-browser.cjs`。覆盖有状态与无状态分别按时间排序、主侧状态汇总、已读和等待解除后的即时重排、未知状态不提前，以及项目排序和交互时间不变；浏览器在手机、平板和电脑尺寸使用正式页面与隔离接口验证。
+
 DeepSeek 第 10 版主聊天和侧边聊天分别验收：运行 `node --test tests/deepseek-personal.test.mjs tests/deepseek-history.test.mjs tests/deepseek-inline-edit.test.mjs tests/deepseek-capacity.test.mjs`，后端运行 `python -B scripts/test-backend.py --source-only -p 'test_deepseek*.py'` 和 `-p test_desktop_uploads.py`。新增真实浏览器入口 `node scripts/test-deepseek-history-browser.cjs` 使用正式原生历史转换，在手机竖横屏、平板和电脑执行 132 项断言，包括主侧完整目录、两个相邻窗口、新回复保留阅读位置、普通文件实际上传与子会话归属、计划正文、关闭重开和失效恢复。已有能力另跑 `node scripts/test-deepseek-browser.cjs`。边界及交付说明见 [DeepSeek 本轮补齐](../docs/deepseek-feature-parity.md)。
 
 ## Python 后端

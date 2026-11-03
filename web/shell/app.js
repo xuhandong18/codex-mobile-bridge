@@ -133,7 +133,7 @@ function readVisibleChat(view=state){
   sessionActivity.read(chatKey(),{sync:false});renderActivity();
 }
 function renderActivity(updateList=true){
-  if(updateList&&$('list-mode').value==='codex'){renderList();return;}
+  if(updateList&&['codex','recent'].includes($('list-mode').value)){renderList();return;}
   let unknownAppeared=false;for(const button of $('sessions').querySelectorAll('.session')){
   const key=chatKey(button.dataset.id,button.dataset.host),previous=button.querySelector('.session-indicator'),indicator=sessionActivity.indicator(key);
   if(indicator?.kind==='unknown'&&!previous?.classList.contains('unknown')&&!activityInFlight.has(key))unknownAppeared=true;
@@ -443,7 +443,8 @@ function collapseSidebarGroups(){
 function renderList(){
   if(typeof syncListModeTabs==='function')syncListModeTabs();
   const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.loading])]:null;
-  const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,$('list-mode').value==='codex'&&hasProjectStatus(row.id,row.host)])]);
+  const statusChats=new Set(['codex','recent'].includes($('list-mode').value)?listRows.filter(row=>hasProjectStatus(row.id,row.host)).map(row=>chatKey(row.id,row.host)):[]);
+  const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,statusChats.has(chatKey(row.id,row.host))])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){for(const button of $('sessions').querySelectorAll('.project-load-more')){const key=button.closest('.project-group')?.dataset.projectKey;if(key)button.disabled=!!listLoading||!!projectPage(key).loading;}renderActivity(false);return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
@@ -489,7 +490,9 @@ function renderList(){
     projects.sort((a,b)=>{const rank=p=>{const i=order.indexOf(p.key.slice(p.key.indexOf('|')+1));return i<0?order.length:i;};return rank(a)-rank(b);});
     for(const project of projects)addProject(project);
   }
-  for(const chat of listRows){
+  // Keep the authoritative recency order intact for project and native sections.
+  const rows=$('list-mode').value==='recent'?[...listRows].sort((a,b)=>Number(statusChats.has(chatKey(b.id,b.host)))-Number(statusChats.has(chatKey(a.id,a.host)))):listRows;
+  for(const chat of rows){
     let parent=$('sessions');
     const destination=native?sidebarTarget(sidebarEntry('thread',chat)):'home';
     if(native&&destination!=='home'){

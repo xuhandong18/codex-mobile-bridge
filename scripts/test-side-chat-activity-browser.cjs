@@ -61,6 +61,13 @@ const server=http.createServer(async(req,res)=>{
       const label=mode+' '+width,check=(ok,text)=>{assert.ok(ok,label+': '+text);checks.push(label+': '+text);};
       await indicator('running');
       check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator.running').count()===1,'主聊天已结束而侧边仍工作显示绿点');
+      if(mode==='recent'){
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'最近交互中较旧的有状态聊天优先于较新的空闲聊天');
+        await page.evaluate(()=>{$('list-mode').value='project';renderList();});
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===other,'按项目仍保持原交互时间顺序');
+        await page.evaluate(()=>{$('list-mode').value='recent';renderList();});
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'切回最近交互重新应用状态优先');
+      }
       if(screenshots&&mode==='codex'&&width===390)await page.screenshot({path:path.join(screenshots,'green-390.png')});
       sides[0].requests=[{id:'waiting',method:'item/tool/requestUserInput',params:{questions:[{id:'q',question:'Choose'}]}}];
       await refresh();await indicator('awaiting');
@@ -112,6 +119,22 @@ const server=http.createServer(async(req,res)=>{
       const before=recency;await page.reload();await page.waitForFunction(()=>listReadFinished&&state?.connected);
       check(recency===before,'阅读与刷新不更新交互时间');
       check(writes.filter(w=>w.body.action==='send').length===1,'仅用户的一次侧边发送产生写入');
+      if(mode==='recent'){
+        recency=1;mainStatus='idle';sequence++;
+        for(const side of sides){side.status='idle';side.turns.at(-1).status='completed';}
+        await refresh();
+        await page.waitForFunction(parent=>{
+          const key='local|'+parent,row=sessionActivity.rows[key];
+          return row?.status==='idle'&&row.sideKeys.every(id=>sessionActivity.rows[id]?.status==='idle');
+        },parent);
+        await page.evaluate(parent=>{
+          const key='local|'+parent;
+          for(const id of [key,...sessionActivity.rows[key].sideKeys])sessionActivity.read(id,{explicit:true,sync:false});
+          renderActivity();
+        },parent);
+        check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator').count()===0,'主侧状态全部解除并已读后不再有状态提示');
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===other,'状态全部清除后恢复原最近交互顺序');
+      }
       await context.close();
     }
     reset();mainStatus='active';sides=[];
