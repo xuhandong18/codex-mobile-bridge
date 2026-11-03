@@ -14,7 +14,7 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;res.setHeader('Cache-Control','no-store');
   if(p.startsWith('/api/')){
     let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):null;
-    if(req.method!=='GET'&&p!=='/api/activity')writes.push(p);
+    if(req.method!=='GET'&&!['/api/activity','/api/activity/changes'].includes(p))writes.push(p);
     let value={};
     if(p==='/api/auth')value={authenticated:true,csrf:'fixture',listCacheIdentity:'d'.repeat(64),computer:{name:'Fixture'},uiLanguage:'zh'};
     else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};

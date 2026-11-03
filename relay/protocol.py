@@ -53,7 +53,7 @@ def validate(method, path, size=0):
         return
     if p.path in ('/api/answer-drafts', '/api/sidebar-preferences', '/api/chat-display'):
         return
-    if p.path == '/api/sessions' or (p.path in ('/api/projects', '/api/mobile/events') and method == 'GET') or (p.path in ('/api/activity', '/api/mobile/events/read') and method == 'POST'):
+    if p.path == '/api/sessions' or (p.path in ('/api/projects', '/api/mobile/events') and method == 'GET') or (p.path in ('/api/activity', '/api/activity/changes', '/api/mobile/events/read') and method == 'POST'):
         return
     if (p.path in ('/api/projects', '/api/project-directories', '/api/sidebar-management') and method == 'POST') or (p.path in ('/api/project-directories', '/api/project-directory-operations', '/api/project-operations', '/api/sidebar-operations') and method == 'GET'):
         return

@@ -1,12 +1,88 @@
 """Passive descendant activity for list display, separate from writable sessions."""
 import threading
 import time
+import uuid
+from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.remote import RemoteUnavailable
 from bridge.features.sessions.model import apply_patches, ordered_turns, pending_requests, waiting_for_user
 from bridge.features.sessions.store import StoreUnavailable
+
+
+def activity_stamp(state, connected):
+    """Badge evidence only: neither text chunks nor observation timestamps."""
+    try:
+        state = state or {}
+        turns = ordered_turns(state)
+        last = turns[-1] if turns else {}
+        return (bool(connected), (state.get('threadRuntimeStatus') or {}).get('type', state.get('status')),
+                last.get('turnId', last.get('id')), last.get('status'),
+                state.get('waitingForUser') if isinstance(state.get('waitingForUser'), bool) else waiting_for_user(state) if connected else None)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return bool(connected), 'unknown', None, None, None
+
+
+class ActivityEvents:
+    """Bounded, passive invalidations shared by all hosts and HTTP listeners."""
+    TIMEOUT = 12
+    LIMIT = 2048
+    MAX_WAITERS = 64
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.stream_id, self.cursor = uuid.uuid4().hex, 0
+        self.events = deque(maxlen=self.LIMIT)
+        self.stamps = OrderedDict()
+        self.closed, self.waiters = False, 0
+
+    def publish(self, host, identifier, stamp, source='main'):
+        with self.condition:
+            if self.closed:
+                return
+            key = host, identifier, source
+            if key in self.stamps and self.stamps[key] == stamp:
+                return
+            self.stamps[key] = stamp
+            self.stamps.move_to_end(key)
+            while len(self.stamps) > self.LIMIT * 2:
+                self.stamps.popitem(last=False)
+            self.cursor += 1
+            self.events.append((self.cursor, host, identifier))
+            self.condition.notify_all()
+
+    def read(self, groups, after=None, stream_id=None, *, timeout=None):
+        selected = {host: set(ids) for host, ids in groups.items()}
+        with self.condition:
+            if self.waiters >= self.MAX_WAITERS:
+                raise TimeoutError('活动通知连接繁忙')
+
+            def snapshot():
+                reset = (after is None or stream_id != self.stream_id or after > self.cursor or
+                         bool(self.events) and after < self.events[0][0] - 1)
+                hosts = {}
+                if not reset:
+                    for cursor, host, identifier in self.events:
+                        if cursor > after and identifier in selected.get(host, ()):
+                            ids = hosts.setdefault(host, [])
+                            if identifier not in ids:
+                                ids.append(identifier)
+                return {'streamId': self.stream_id, 'cursor': self.cursor, 'reset': bool(reset),
+                        'hosts': hosts, 'closed': self.closed}
+
+            self.waiters += 1
+            try:
+                self.condition.wait_for(lambda: self.closed or (value := snapshot())['reset'] or value['hosts'],
+                                        timeout=self.TIMEOUT if timeout is None else timeout)
+                return snapshot()
+            finally:
+                self.waiters -= 1
+
+    def close(self):
+        with self.condition:
+            self.closed = True
+            self.condition.notify_all()
 
 
 class ActivityQueries:
@@ -106,7 +182,7 @@ def query_activity(bridge, groups, *, background=False):
 class SubagentActivity:
     MAX_FOLLOWERS = 1024
 
-    def __init__(self, store, endpoint, host):
+    def __init__(self, store, endpoint, host, *, on_change=None):
         self.store, self.endpoint, self.host = store, endpoint, host
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
@@ -115,6 +191,12 @@ class SubagentActivity:
         self.worker = None
         self.worker_done = None
         self.closed = False
+        self.on_change = on_change
+
+    def _publish(self, identifiers):
+        if self.on_change:
+            for identifier, row in self._summary(identifiers).items():
+                self.on_change(identifier, (row['runningSubagents'], row['subagentsKnown'], row['waitingSubagents']))
 
     def read(self, identifiers, *, force=False):
         identifiers = list(dict.fromkeys(identifiers))
@@ -129,6 +211,7 @@ class SubagentActivity:
                         with self.condition:
                             done.set()
                             self.condition.notify_all()
+                        self._publish(identifiers)
                 self.worker = threading.Thread(target=refresh, daemon=True)
                 self.worker.start()
             return self._summary(identifiers)
@@ -243,6 +326,10 @@ class SubagentActivity:
         with self.condition:
             self._apply_event(message)
             self.condition.notify_all()
+            identifier = message.get('params', {}).get('conversationId')
+            parents = [sid for sid, tree in self.trees.items()
+                       if identifier in tree.get('agents', ()) or message.get('method') == 'client-status-changed']
+        self._publish(parents)
 
     def _apply_event(self, message):
         params = message.get('params', {})
@@ -285,6 +372,8 @@ class SubagentActivity:
             for record in self.records.values():
                 record.update(connected=False, absent=False, retry=0, owner=None, revision=None)
             self.condition.notify_all()
+            parents = list(self.trees)
+        self._publish(parents)
 
     def prune(self):
         with self.lock:

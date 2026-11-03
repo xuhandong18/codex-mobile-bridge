@@ -256,6 +256,26 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get('/api/accounts', headers=p)).status, 403)
         self.assertEqual((await self.client.get('/api/auth', headers=p)).status, 200)
 
+    async def test_activity_cursor_long_poll_through_real_authenticated_connector(self):
+        from bridge.features.sessions.activity import ActivityEvents
+        self.state.timeout = 5
+        device = await self.device('Status')
+        connector = await self.real_connector(device)
+        events = ActivityEvents();self.addCleanup(events.close)
+        connector.server.bridge.activity_events = events
+        phone = await self.phone(device);body = {'hosts': {'local': [THREAD]}}
+        response = await self.client.post('/api/activity/changes', json=body, headers=phone)
+        self.assertEqual(response.status, 200);checkpoint = await response.json()
+        waiting = asyncio.create_task(self.client.post('/api/activity/changes', json={**body,
+            'after': checkpoint['cursor'], 'streamId': checkpoint['streamId']}, headers=phone))
+        events.publish('local', THREAD, ('active',))
+        response = await asyncio.wait_for(waiting, 2)
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())['hosts'], body['hosts'])
+        self.assertEqual(self.created, [])
+        denied = await self.client.post('/api/activity/changes', json=body, headers={**phone, 'X-CSRF-Token': 'bad'})
+        self.assertEqual(denied.status, 401)
+
     async def test_compressed_control_request_cannot_bypass_four_kib_limit(self):
         device = await self.device('Fixture')
         pair = self.state.registry.pair(device['deviceId'])

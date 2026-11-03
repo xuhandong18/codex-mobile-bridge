@@ -89,6 +89,7 @@ function renderHostErrors(hosts){
   root.hidden=!root.childElementCount;
 }
 function clearListSnapshot(){
+  activityChanges?.reset();activityChangeKeys.clear();
   sidebarPreferences.reset();
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(/^codex-list-v[12]:/.test(key||''))sessionStorage.removeItem(key);}
   createdChats.clear();createdChatVisibility.clear();projectChatPages.clear();
@@ -138,43 +139,32 @@ function renderActivity(updateList=true){
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
 }if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));if(unknownAppeared)scheduleActivityRefresh();}
 async function refreshActivity(resuming=false){
-  if($('app').hidden||document.hidden||clientNavigation.provider!=='codex')return;
-  const root=$('sessions');if(!root.clientWidth||!root.clientHeight)return;
-  const bounds=root.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(window.innerHeight,bounds.bottom),left=Math.max(0,bounds.left),right=Math.min(window.innerWidth,bounds.right);
-  if(bottom<=top||right<=left)return;
-  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),hosts={},visible=new Set(),reads=[];
-  for(const button of root.querySelectorAll('.session')){
-    if(button.closest('details:not([open]),[hidden]')||!button.getClientRects().length)continue;
-    const rect=button.getBoundingClientRect(),{id,host}=button.dataset,key=chatKey(id,host);
-    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key))continue;
-    visible.add(key);if(activityInFlight.has(key)||resuming===true&&!activityPendingKeys.has(key))continue;
-    const ids=hosts[host]??=[];if(!ids.includes(id))ids.push(id);
+  const targets=activityTargets();activityChanges?.setScope(targets?.watch||{});
+  if(!targets)return;
+  const {visible,projects,scope}=targets,hosts={},reads=[],eventsOnly=resuming==='changes';
+  const eligible=new Set(Object.entries(scope).flatMap(([host,ids])=>ids.map(id=>chatKey(id,host))));
+  for(const key of activityChangeKeys)if(!eligible.has(key))activityChangeKeys.delete(key);
+  for(const [key,row] of visible){
+    if(activityInFlight.has(key)||eventsOnly&&!activityChangeKeys.has(key)||resuming===true&&!activityPendingKeys.has(key)&&!activityChangeKeys.has(key))continue;
+    (hosts[row.host]??=[]).push(row.id);
   }
   for(const key of activityPendingKeys)if(!visible.has(key))activityPendingKeys.delete(key);
-  // Each host publishes independently. Hidden discovery cannot hold a visible
-  // batch open, and native desktop reads never exceed their 64-chat limit.
+  // Publish visible hosts independently; reserve capacity for foreground reads.
   for(const [host,ids] of Object.entries(hosts))for(let start=0;start<ids.length;start+=64){
     if(activityRequests.size>=4){for(const id of ids.slice(start))activityPendingKeys.add(chatKey(id,host));activityRefreshPending=true;break;}
     reads.push(readActivity(host,ids.slice(start,start+64)));
   }
-  // Status-only projects must also discover badges on their hidden chats.
-  // Inspect loaded metadata in bounded, rotating batches; never activate chats.
-  const projects=$('list-mode').value==='codex'?[...root.querySelectorAll('.project-group')].filter(group=>{
-    if(!group.open||group.closest('details:not([open]),[hidden]')||!group.getClientRects().length)return false;
-    const rect=group.getBoundingClientRect();
-    return rect.bottom>top&&rect.top<bottom&&rect.right>left&&rect.left<right;
-  }):[];
   if(activityRequests.size<4&&![...activityRequests].some(controller=>controller.background)){
-    const candidates=projects.map(group=>({rows:projectRows(group.dataset.projectKey),page:projectPage(group.dataset.projectKey)}));
-    const backgroundHosts=[...new Set(candidates.flatMap(({rows})=>rows.filter(row=>!visible.has(chatKey(row.id,row.host))&&!activityInFlight.has(chatKey(row.id,row.host))).map(row=>row.host)))];
+    const eligibleHidden=row=>{const key=chatKey(row.id,row.host);return !visible.has(key)&&!activityInFlight.has(key)&&(!eventsOnly||activityChangeKeys.has(key));};
+    const backgroundHosts=[...new Set(projects.flatMap(({rows})=>rows.filter(eligibleHidden).map(row=>row.host)))];
     if(backgroundHosts.length){
-      const host=backgroundHosts[activityBackgroundCursor++%backgroundHosts.length],groups=candidates.filter(({rows})=>rows.some(row=>row.host===host)),ids=[],batch=Math.max(1,Math.floor(64/groups.length));
+      const host=backgroundHosts[activityBackgroundCursor++%backgroundHosts.length],groups=projects.filter(({rows})=>rows.some(row=>row.host===host)),ids=[],batch=Math.max(1,Math.floor(64/groups.length));
       for(const {rows,page} of groups){
         let added=0;
+        const add=row=>{if(row.host===host&&eligibleHidden(row)&&!ids.includes(row.id)){ids.push(row.id);added++;}};
+        for(const row of rows){if(added>=batch||ids.length>=64)break;if(activityChangeKeys.has(chatKey(row.id,row.host)))add(row);}
         for(let count=0;count<rows.length&&added<batch&&ids.length<64;count++){
-          const index=(page.activityOffset||0)%rows.length,row=rows[index],key=chatKey(row.id,row.host);
-          page.activityOffset=index+1;
-          if(row.host===host&&!visible.has(key)&&!activityInFlight.has(key)&&!ids.includes(row.id)){ids.push(row.id);added++;}
+          const index=(page.activityOffset||0)%rows.length,row=rows[index];page.activityOffset=index+1;add(row);
         }
       }
       if(ids.length)reads.push(readActivity(host,ids,{background:true}));
@@ -182,11 +172,41 @@ async function refreshActivity(resuming=false){
   }
   await Promise.all(reads);
 }
+function activityTargets(){
+  if($('app').hidden||document.hidden||clientNavigation.provider!=='codex')return null;
+  const root=$('sessions');if(!root.clientWidth||!root.clientHeight)return null;
+  const bounds=root.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(window.innerHeight,bounds.bottom),left=Math.max(0,bounds.left),right=Math.min(window.innerWidth,bounds.right);
+  if(bottom<=top||right<=left)return null;
+  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),visible=new Map(),scope={};
+  const include=row=>{const ids=scope[row.host]??=[];if(!ids.includes(row.id))ids.push(row.id);};
+  for(const button of root.querySelectorAll('.session')){
+    if(button.closest('details:not([open]),[hidden]')||!button.getClientRects().length)continue;
+    const rect=button.getBoundingClientRect(),{id,host}=button.dataset,key=chatKey(id,host);
+    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key))continue;
+    visible.set(key,{id,host});include({id,host});
+  }
+  const projects=$('list-mode').value==='codex'?[...root.querySelectorAll('.project-group')].filter(group=>{
+    if(!group.open||group.closest('details:not([open]),[hidden]')||!group.getClientRects().length)return false;
+    const rect=group.getBoundingClientRect();return rect.bottom>top&&rect.top<bottom&&rect.right>left&&rect.left<right;
+  }).map(group=>({rows:projectRows(group.dataset.projectKey),page:projectPage(group.dataset.projectKey)})):[];
+  for(const {rows} of projects)for(const row of rows)include(row);
+  // Watching already loaded metadata costs no native reads. Keeping these keys
+  // stable lets a scroll reuse its long poll while reads stay viewport-bound.
+  const watch=Object.fromEntries(Object.entries(scope).map(([host,ids])=>[host,[...ids]]));
+  for(const row of listRows){const ids=watch[row.host]??=[];if(!ids.includes(row.id))ids.push(row.id);}
+  return {visible,projects,scope,watch};
+}
+function queueActivityChanges(hosts){
+  const targets=activityTargets();if(!targets)return;
+  const allowed=new Set(Object.entries(targets.scope).flatMap(([host,ids])=>ids.map(id=>chatKey(id,host)))),keys=[];
+  for(const [host,ids] of Object.entries(hosts))for(const id of ids){const key=chatKey(id,host);if(allowed.has(key)){activityChangeKeys.add(key);keys.push(key);}}
+  if(keys.length){sessionActivity.invalidate(keys);scheduleActivityRefresh('changes');}
+}
 async function readActivity(host,ids,{background=false}={}){
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
   controller.background=background;
   const keys=ids.map(id=>chatKey(id,host)),observation=sessionActivity.beginRead();
-  activityRequests.add(controller);for(const key of keys){activityInFlight.add(key);activityPendingKeys.delete(key);}activityBusy=true;
+  activityRequests.add(controller);for(const key of keys){activityInFlight.add(key);activityPendingKeys.delete(key);activityChangeKeys.delete(key);}activityBusy=true;
   try{
     const result=await api('/api/activity',{hosts:{[host]:ids},...(background?{background:true}:{})},controller.signal);
     if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'&&sessionActivity.isCurrentRead(observation)){
@@ -199,15 +219,16 @@ async function readActivity(host,ids,{background=false}={}){
       const rows=ids.map(id=>({id,host,connected:false,status:'unknown',activityError:controller.signal.aborted?'timeout':'unavailable'}));
       sessionActivity.update(rows,visibleChat(),{sync:false,observation});renderActivity();
     }
-  }finally{clearTimeout(timeout);activityRequests.delete(controller);for(const key of keys)activityInFlight.delete(key);activityBusy=activityRequests.size>0;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh(true);}}
+  }finally{clearTimeout(timeout);activityRequests.delete(controller);for(const key of keys)activityInFlight.delete(key);activityBusy=activityRequests.size>0;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh(true);}else if([...activityChangeKeys].some(key=>!activityInFlight.has(key)))scheduleActivityRefresh('changes');}
 }
-const activityPendingKeys=new Set();
+const activityPendingKeys=new Set(),activityChangeKeys=new Set();
+const activityChanges=typeof ActivityChanges==='function'?new ActivityChanges({request:api,onChange:queueActivityChanges}):null;
 let activityRefreshTimer=null,activityRefreshPending=false,activityBackgroundCursor=0;
-function scheduleActivityRefresh(resuming=false){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(()=>refreshActivity(resuming===true),100);}
+function scheduleActivityRefresh(resuming=false){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(()=>refreshActivity(resuming===true?true:resuming==='changes'?'changes':false),100);}
 setInterval(refreshActivity,5000);
 window.addEventListener('focus',refreshActivity);
 window.addEventListener('resize',scheduleActivityRefresh);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshActivity();});
+document.addEventListener('visibilitychange',()=>refreshActivity());
 if(typeof MutationObserver==='function')new MutationObserver(scheduleActivityRefresh).observe($('app'),{attributes:true,attributeFilter:['class','hidden']});
 let loginStatus={attemptsRemaining:5,attemptLimit:5,blocked:false};
 function renderLoginStatus(status=loginStatus){

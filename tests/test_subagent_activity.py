@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.clients.codex.ipc import IPCError
-from bridge.features.sessions.activity import SubagentActivity
+from bridge.features.sessions.activity import SubagentActivity, ActivityEvents
 from bridge.features.sessions.store import StoreUnavailable
 
 
@@ -81,6 +81,20 @@ class SubagentActivityTests(unittest.TestCase):
         self.assertTrue(all(call[0] in ('connect', 'owner', 'follow') for call in ipc.calls))
         AgentIPC.states['child'] = agent_state('child', 'idle', 'completed');ipc.publish('child', revision=2)
         self.assertEqual(self.refresh()['parent']['runningSubagents'], 0)
+
+    def test_child_stream_notifies_parent_without_rescanning_tree_or_text_events(self):
+        events = ActivityEvents();self.addCleanup(events.close)
+        self.monitor.on_change = lambda sid, stamp: events.publish('local', sid, stamp, 'subagents')
+        self.refresh();scope = {'local': ['parent']};checkpoint = events.read(scope)
+        calls = self.store.activity_tree.call_count
+        ipc = AgentIPC.instances[0]
+        AgentIPC.states['child'] = agent_state('child', 'idle', 'completed');ipc.publish('child', revision=2)
+        self.assertEqual(events.read(scope, checkpoint['cursor'], checkpoint['streamId'], timeout=0)['hosts'], scope)
+        self.assertEqual(self.store.activity_tree.call_count, calls)
+        cursor = events.cursor
+        AgentIPC.states['child']['turns'][0]['items'] = [{'type': 'agentMessage', 'text': 'text only'}]
+        ipc.publish('child', revision=3)
+        self.assertEqual(events.cursor, cursor)
 
     def test_idle_runtime_does_not_hide_a_still_running_turn_or_pending_approval(self):
         AgentIPC.states['child']['threadRuntimeStatus']['type'] = 'idle'

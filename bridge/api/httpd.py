@@ -752,7 +752,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, self.server.bridge.project_registry.directory_operation(query['id'][0], self.server.auth.key(self.token())))
             if not write and path == '/api/new-chat-models':
                 return self.output(200, self.server.bridge.new_chat_models(query.get('project', [''])[0], query.get('kind', ['desktop'])[0]))
-            if write and path == '/api/activity':
+            if write and path in ('/api/activity', '/api/activity/changes'):
                 body = self.read_json()
                 groups, background = body.get('hosts'), body.get('background', False)
                 if not isinstance(background, bool):
@@ -762,6 +762,19 @@ class Handler(BaseHTTPRequestHandler):
                 if any(not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(sid, str) for sid in ids)
                        for ids in groups.values()):
                     raise ValueError('会话状态请求无效')
+                if path == '/api/activity/changes':
+                    after, stream_id = body.get('after'), body.get('streamId')
+                    if ((after is not None and (type(after) is not int or after < 0)) or
+                            (stream_id is not None and (not isinstance(stream_id, str) or not re.fullmatch(r'[0-9a-f]{32}', stream_id))) or
+                            not any(groups.values())):
+                        raise ValueError('会话状态游标无效')
+                    events = getattr(self.server.bridge, 'activity_events', None)
+                    if events is None:
+                        return self.output(501, {'error': '此网关尚未提供活动通知'})
+                    result = events.read(groups, after, stream_id)
+                    if self.authorized():
+                        return self.output(200, result)
+                    return
                 result = query_activity(self.server.bridge, groups, background=background)
                 result['sessions'] = self.server.chat_read_state.activity(result['sessions'])
                 return self.output(200, result)
@@ -1061,6 +1074,9 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     result = self.server.desktop_sessions.call('codex', 'read-state', thread_id, {**body, 'host': bridge.host})
                 receipts = self.server.chat_read_state.remember(bridge.host, read_id, body)
+                events = getattr(self.server.bridge, 'activity_events', None)
+                if events is not None:
+                    events.publish(bridge.host, thread_id, tuple(receipts), 'read:' + read_id)
                 result = {**result, 'readCompletions': receipts}
             elif action == "message-action":
                 result = bridge.message_action(thread_id, body)

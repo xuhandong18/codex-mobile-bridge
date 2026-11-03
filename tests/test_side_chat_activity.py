@@ -30,6 +30,21 @@ class SideActivityTests(unittest.TestCase):
                             {'cwd': str(self.root)}, {'model': 'fixture', 'modelProvider': 'custom'})
         return manager.chats[(parent, slot)]
 
+    def test_saved_side_state_notifies_parent_and_ignores_text_only_changes(self):
+        chat = self.create();events = self.bridge.activity_events
+        scope = {'local': [support.THREAD]};checkpoint = events.read(scope)
+        with chat.lock:
+            chat.ready = True
+            chat.state['threadRuntimeStatus'] = {'type': 'active'}
+            chat.state['turns'] = [{'turnId': 'side-turn', 'status': 'inProgress', 'items': []}]
+            chat._persist()
+        self.assertEqual(events.read(scope, checkpoint['cursor'], checkpoint['streamId'], timeout=0)['hosts'], scope)
+        cursor = events.cursor
+        with chat.lock:
+            chat.state['turns'][0]['items'].append({'type': 'agentMessage', 'text': 'text only'})
+            chat._persist()
+        self.assertEqual(events.cursor, cursor)
+
     @contextmanager
     def hold(self, lock):
         entered, release = threading.Event(), threading.Event()

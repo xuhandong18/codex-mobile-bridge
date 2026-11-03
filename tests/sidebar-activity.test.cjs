@@ -47,6 +47,25 @@ test('较早活动请求失败不能把消息流新确认的状态标记为离�
   assert.equal(ui.activity.rows['local|visible'].offline,false);
 });
 
+test('增量通知只读取改变的可见聊天，屏外变化不会触发读取',async()=>{
+  const ui=fixture();
+  vm.runInContext("queueActivityChanges({local:['visible','below']})",ui.context);
+  await ui.next();
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.map(call=>call.body))),[{hosts:{local:['visible']}}]);
+});
+
+test('查询中到达的通知使旧响应失效，并在空位释放后补读一次',async()=>{
+  const ui=fixture(),key='local|visible';let release;
+  ui.activity.update([{...ui.rows[0],connected:true,status:'idle'}]);
+  ui.context.api=async()=>{await new Promise(resolve=>release=resolve);return {sessions:[{...ui.rows[0],connected:true,status:'active'}]};};
+  const reading=ui.refresh();
+  vm.runInContext("queueActivityChanges({local:['visible']})",ui.context);await ui.next();
+  release();await reading;
+  assert.equal(ui.activity.indicator(key),null,'通知后旧请求不能复活旧状态');
+  let calls=0;ui.context.api=async()=>{calls++;return {sessions:[{...ui.rows[0],connected:true,status:'idle'}]};};
+  await ui.next();assert.equal(calls,1);assert.equal(ui.timers.size,0);
+});
+
 test('不同主机的可见聊天独立返回，不等待同批慢主机',async()=>{
   const ui=fixture();let release;
   ui.nodes[2].getClientRects=()=>[{}];

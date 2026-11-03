@@ -22,7 +22,7 @@ from bridge.features.sessions.side_chat import SideChats
 from bridge.features.sessions.auto_titles import AutoTitles
 from bridge.features.sessions.title_rename import TitleRenames
 from bridge.clients.codex.title_runtime import generate_title, access_stamp, TitleError
-from bridge.features.sessions.activity import ActivityQueries, SubagentActivity
+from bridge.features.sessions.activity import ActivityQueries, SubagentActivity, ActivityEvents, activity_stamp
 from bridge.features.sessions.recovery import capacity_error
 from bridge.features.sessions.recency import RecencyIndex
 from bridge.features.sessions import linux_permissions
@@ -50,8 +50,9 @@ from bridge.clients.codex.remote import upload_file
 
 
 class LiveSession:
-    def __init__(self, thread_id):
+    def __init__(self, thread_id, on_activity=None):
         self.id = thread_id
+        self.on_activity = on_activity
         self.owner = None
         self.origin = "desktop"
         self.origin_verified = False
@@ -101,6 +102,8 @@ class LiveSession:
         self.sequence += 1
         self.waiting_observed_at = time.time_ns()//1000
         self.condition.notify_all()
+        if self.on_activity:
+            self.on_activity(self)
 
     def set_history(self, state):
         self.saved_view = normalize_state(state, False)
@@ -154,8 +157,10 @@ class LiveSession:
 
 
 class Bridge:
-    def __init__(self, codex_home, data_dir, host="local", alias=None, ipc_path=None, codex_bin=None, goal_rpc=None, owner_goal=None, cli_sessions=None):
+    def __init__(self, codex_home, data_dir, host="local", alias=None, ipc_path=None, codex_bin=None, goal_rpc=None, owner_goal=None, cli_sessions=None, activity_events=None):
         self.host = host
+        self.activity_events = activity_events if activity_events is not None else ActivityEvents()
+        self.owns_activity_events = activity_events is None
         self.codex_home = Path(codex_home)
         self.data_dir = Path(data_dir)
         from bridge.features.sessions.projects import Projects
@@ -196,11 +201,14 @@ class Bridge:
         self.cli_sessions = cli_sessions or CliSessions(self.codex_home, self._cli_state, self._cli_disconnected, alias=alias)
         self.lock = threading.RLock()
         self.ipc = DesktopIPC(ipc_path or ipc_endpoint(codex_home), self._event, self._disconnected)
-        self.subagent_activity = SubagentActivity(self.store, lambda: self.ipc.path, host)
+        self.subagent_activity = SubagentActivity(self.store, lambda: self.ipc.path, host,
+                                                on_change=lambda sid, stamp: self.activity_events.publish(host, sid, stamp, 'subagents'))
         self.desktop_activity = DesktopActivity(self)
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
                                    executable_getter=executable_getter, on_first_message=self._side_title,
-                                   parent_lookup=self.store.get)
+                                   parent_lookup=self.store.get,
+                                   on_activity=lambda parent, child, view: self.activity_events.publish(
+                                       host, parent, activity_stamp(view, view.get('connected')), 'side:' + child))
         if host == 'local':
             from bridge.clients.codex.native_side_chats import NativeSideChatSync
             self.side_chats.native_sync = NativeSideChatSync(self.ipc.path, host, self.store.get,
@@ -231,7 +239,7 @@ class Bridge:
 
         for key, value in self.submissions.items():
             if value.get("status") == "queued":
-                self.live.setdefault(key.split(":")[0], LiveSession(key.split(":")[0]))
+                self.live.setdefault(key.split(":")[0], LiveSession(key.split(":")[0], self._activity_changed))
         threading.Thread(target=self._maintain, daemon=True).start()
         threading.Thread(target=self._upload_gc, daemon=True).start()
 
@@ -620,7 +628,7 @@ class Bridge:
                 if kind == 'cli':
                     bridge = self.for_host(project['host'])
                     with bridge.lock:
-                        session = bridge.live.setdefault(thread_id, LiveSession(thread_id))
+                        session = bridge.live.setdefault(thread_id, LiveSession(thread_id, bridge._activity_changed))
                     with session.condition:
                         session.origin = 'cli'
                         session.origin_verified = True
@@ -824,6 +832,9 @@ class Bridge:
                 'action': entry['action'], 'draft': entry['text'] if entry['status'] == 'created' and entry['action'] == 'edit-fork' else None,
                 'source': {'id': entry['source'], 'title': entry['sourceTitle'], 'turnId': entry['turnId']}}
 
+    def _activity_changed(self, session):
+        self.activity_events.publish(self.host, session.id, activity_stamp(session.state, session.connected))
+
     def for_host(self, host):
         if host == self.host:
             return self
@@ -833,7 +844,7 @@ class Bridge:
         with self.lock:
             if host not in self.remote_bridges:
                 folder = self.data_dir / 'hosts' / hashlib.sha256(host.encode()).hexdigest()[:16]
-                self.remote_bridges[host] = Bridge(self.codex_home, folder, host, available[host]['alias'], ipc_path=self.ipc.path)
+                self.remote_bridges[host] = Bridge(self.codex_home, folder, host, available[host]['alias'], ipc_path=self.ipc.path, activity_events=self.activity_events)
                 self.remote_bridges[host].accounts = self.accounts
                 self.remote_bridges[host].recovery = self.recovery
             return self.remote_bridges[host]
@@ -1216,7 +1227,7 @@ class Bridge:
                     continue
                 session = self.live.get(identifier)
                 if session is None:
-                    session = self.live[identifier] = LiveSession(identifier)
+                    session = self.live[identifier] = LiveSession(identifier, self._activity_changed)
                     session.activity_only = True
                     session.origin = self.origins.get(identifier, "desktop")
                     session.access = self._access(session.origin, session)
@@ -1370,7 +1381,7 @@ class Bridge:
         with self.lock:
             session = self.live.get(thread_id)
             if session is None:
-                session = self.live[thread_id] = LiveSession(thread_id)
+                session = self.live[thread_id] = LiveSession(thread_id, self._activity_changed)
                 session.activity_only = True
         if not session.watched:
             session.notification_probe_until = time.monotonic() + 10
@@ -1387,7 +1398,7 @@ class Bridge:
         with self.lock:
             session = self.live.get(thread_id)
             if session is None:
-                session = self.live[thread_id] = LiveSession(thread_id)
+                session = self.live[thread_id] = LiveSession(thread_id, self._activity_changed)
                 session.activity_only = True
             session.supervised = True
         if not session.connected and time.monotonic() >= session.retry_at:
@@ -1549,7 +1560,7 @@ class Bridge:
             session = self.live.get(thread_id)
         if session is None:
             with self.lock:
-                session = self.live.setdefault(thread_id, LiveSession(thread_id))
+                session = self.live.setdefault(thread_id, LiveSession(thread_id, self._activity_changed))
         self._load_session_origin(session)
         session.touched = time.monotonic()
         if background:
@@ -3436,6 +3447,8 @@ class Bridge:
         return result
 
     def close(self):
+        if self.owns_activity_events:
+            self.activity_events.close()
         self.activity_queries.close()
         self.closed.set()
         self.recency_index.close()

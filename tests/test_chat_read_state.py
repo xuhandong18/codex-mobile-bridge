@@ -141,6 +141,10 @@ class ReadStateHttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', f'/api/sessions/{SID}/read-state', body(read=True), headers)[0], 400)
 
     def test_tablet_read_is_returned_to_phone_even_when_native_sync_is_unsupported(self):
+        from bridge.features.sessions.activity import ActivityEvents
+        events = ActivityEvents();self.addCleanup(events.close)
+        self.server.bridge.activity_events = events
+        scope = {'local': [SID]};checkpoint = events.read(scope)
         tablet, phone = self.login(), self.login()
         manager = self.server.desktop_sessions = Mock()
         manager.call.return_value = {'status': 'unsupported'}
@@ -148,6 +152,7 @@ class ReadStateHttpTests(unittest.TestCase):
             'status': 'idle', 'turnId': 'last', 'turnStatus': 'completed'}])
         path = f'/api/sessions/{SID}/read-state'
         self.assertEqual(self.request('POST', path, body(), tablet)[0], 200)
+        self.assertEqual(events.read(scope, checkpoint['cursor'], checkpoint['streamId'], timeout=0)['hosts'], scope)
         result = self.request('POST', '/api/activity', {'hosts': {'local': [SID]}}, phone)
         self.assertEqual(result[0], 200)
         self.assertEqual(result[2]['sessions'][0]['readCompletions'], ['last:completed'])

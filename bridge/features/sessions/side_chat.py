@@ -722,10 +722,11 @@ class SideChat:
 
 
 class SideChats:
-    def __init__(self, executable, home, directory, host, factory=SideChat, *, executable_getter=None, on_first_message=None, parent_lookup=None):
+    def __init__(self, executable, home, directory, host, factory=SideChat, *, executable_getter=None, on_first_message=None, parent_lookup=None, on_activity=None):
         self.executable, self.home, self.directory, self.host = executable, home, directory, host
         self.executable_getter = executable_getter
         self.on_first_message = on_first_message
+        self.on_activity = on_activity
         self.archive = SideChatArchive(directory, home, host)
         self.archive.disconnect()
         self.archive.import_snapshots(parent_lookup)
@@ -785,6 +786,12 @@ class SideChats:
                 if files:
                     message['attachments'] = files
         return self.archive.save(parent, child, view, source='desktop')
+
+    def _save_activity(self, parent, slot, view):
+        saved = self.archive.save(parent, slot, view, sync_state=view['syncState'])
+        if self.on_activity:
+            self.on_activity(parent, view['id'], view)
+        return saved
 
     def native_disconnected(self, child):
         try:
@@ -856,7 +863,7 @@ class SideChats:
                 if title:
                     chat.rename(title)
                 chat.uploads = self.saved_uploads
-                chat.on_change = lambda view: self.archive.save(parent, slot, view, sync_state=view['syncState'])
+                chat.on_change = lambda view: self._save_activity(parent, slot, view)
                 chat._persist()
                 self.chats[key] = chat
                 self.activity_chats = tuple(self.chats.items())

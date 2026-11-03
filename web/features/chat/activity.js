@@ -5,6 +5,13 @@ class SessionActivity {
   // fence late responses against newer stream observations and identity resets.
   beginRead(){return {epoch:this.observationEpoch,version:++this.observationVersion};}
   isCurrentRead(observation){return observation.epoch===this.observationEpoch;}
+  invalidate(keys){
+    const observation=this.beginRead();
+    for(const key of keys){
+      this.observations.set(key,observation.version);this.sideObservations.set(key,observation.version);
+      for(const child of this.rows[key]?.sideKeys||[])this.observations.set(child,observation.version);
+    }
+  }
   id(row){return row.host+'|'+row.id;}
   save(){try{this.storage.setItem(this.key,JSON.stringify(this.rows));}catch{}}
   waitingSnapshot(row,previous){
@@ -116,4 +123,54 @@ class SessionActivity {
   forget(key){delete this.rows[key];this.readTokens.delete(key);this.refreshes.delete(key);this.observations.set(key,++this.observationVersion);this.sideObservations.delete(key);}
   clear(){this.rows={};this.readTokens.clear();this.refreshes.clear();this.observations.clear();this.sideObservations.clear();this.observationEpoch++;this.storage.removeItem(this.key);}
 }
-if(typeof module!=='undefined')module.exports={SessionActivity};
+
+class ActivityChanges {
+  constructor({request,onChange,pause=null}){
+    Object.assign(this,{request,onChange});this.scope={};this.scopeStamp='';this.unsupported=false;
+    this.pause=pause||((ms,signal)=>new Promise(resolve=>{
+      const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve();};
+      const timer=setTimeout(done,ms);signal.addEventListener('abort',done,{once:true});if(signal.aborted)done();
+    }));
+  }
+  setScope(hosts){
+    const scope=Object.fromEntries(Object.entries(hosts).filter(([,ids])=>ids.length).sort(([a],[b])=>a.localeCompare(b)).slice(0,20).map(([host,ids])=>[host,[...new Set(ids)].slice(0,500).sort()]));
+    this.scope=scope;this.scopeStamp=JSON.stringify(scope);
+    if(!Object.keys(scope).length){this.stop();return;}
+    // Keep one long poll when scrolling changes the scope. After it returns,
+    // replay its cursor with the new scope instead of abandoning server waiters.
+    if(this.task||this.unsupported)return;
+    const task={};this.task=task;task.promise=this.run(task);
+  }
+  stop(){const task=this.task;this.task=null;task?.controller?.abort();}
+  reset(){this.stop();this.scope={};this.scopeStamp='';this.streamId=null;this.cursor=null;this.unsupported=false;}
+  async run(task){
+    let retry=1000;
+    try{
+      while(this.task===task){
+        const controller=task.controller=new AbortController(),stamp=this.scopeStamp,scope=this.scope,started=Date.now();
+        const timeout=setTimeout(()=>controller.abort(),20000);
+        try{
+          const value=await this.request('/api/activity/changes',{hosts:scope,...(this.streamId?{streamId:this.streamId,after:this.cursor}:{})},controller.signal);
+          if(this.task!==task)return;
+          if(!value||!Number.isSafeInteger(value.cursor)||value.cursor<0||!/^[0-9a-f]{32}$/.test(value.streamId)||typeof value.reset!=='boolean'||!value.hosts||typeof value.hosts!=='object'||Array.isArray(value.hosts)||Object.values(value.hosts).some(ids=>!Array.isArray(ids)||ids.some(id=>typeof id!=='string'))){this.unsupported=true;return;}
+          if(value.closed)return;
+          if(stamp!==this.scopeStamp)continue;
+          this.streamId=value.streamId;this.cursor=value.cursor;retry=1000;
+          if(value.reset)this.onChange(scope,true);
+          else if(!value.reset&&Object.keys(value.hosts).length)this.onChange(value.hosts,false);
+          clearTimeout(timeout);
+          // An immediate empty response from a proxy must not become a hot loop.
+          await this.pause(!value.reset&&!Object.keys(value.hosts).length&&Date.now()-started<1000?1000:150,controller.signal);
+        }catch(error){
+          if(this.task!==task)return;
+          if([404,405,501].includes(error.status)){this.unsupported=true;return;}
+          if(error.status===401)return;
+          clearTimeout(timeout);
+          const retryController=task.controller=new AbortController();
+          await this.pause(retry,retryController.signal);retry=Math.min(15000,retry*2);
+        }finally{clearTimeout(timeout);}
+      }
+    }finally{if(this.task===task)this.task=null;}
+  }
+}
+if(typeof module!=='undefined')module.exports={SessionActivity,ActivityChanges};
