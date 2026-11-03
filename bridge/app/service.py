@@ -1308,6 +1308,11 @@ class Bridge:
                          'turnId': last.get('turnId'), 'turnStatus': last.get('status')})
             if status == 'unknown':
                 rows[-1]['activityError'] = 'timeout' if time.monotonic() >= deadline else 'unavailable'
+            realtime = bool(connected and status != 'unknown' and activity['subagentsKnown'] and
+                            session.on_activity and self.subagent_activity.on_change and
+                            all(side.get('connected') for side in sides))
+            rows[-1]['activityRealtime'] = realtime
+            rows[-1]['activityStreamId'] = self.activity_events.stream_id if realtime else None
         return rows
 
     def notification_candidates(self):

@@ -6,6 +6,7 @@ class ChatDisplaySync {
     if(!value||!Number.isSafeInteger(value.revision)||value.revision<0||!value.settings||typeof value.settings!=='object')return false;
     const settings={};for(const key of ['showReasoning','showProcess'])if(typeof value.settings[key]==='boolean')settings[key]=value.settings[key];
     if(this.snapshot&&value.revision<this.snapshot.revision)return false;
+    if(this.snapshot&&value.revision===this.snapshot.revision&&JSON.stringify(settings)===JSON.stringify(this.snapshot.settings))return true;
     this.snapshot={revision:value.revision,settings};this.onChange(settings);return true;
   }
   refresh(){

@@ -174,6 +174,26 @@ class Handler(BaseHTTPRequestHandler):
                          "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src " + frame_source + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 
+    def versioned_snapshot(self, value):
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+        if 'versioned' not in query and 'knownVersion' not in query:
+            return value
+        known = query.get('knownVersion', [None])
+        if (query.get('versioned', ['1']) != ['1'] or len(known) != 1 or
+                known[0] is not None and not re.fullmatch(r'[0-9a-f]{64}', known[0])):
+            raise ValueError('展示快照版本无效')
+        # Always check authoritative data. Partial/failed host reads cannot
+        # confirm a cached list, and notification cursors are independent of it.
+        if value.get('complete') is False or value.get('unavailableHosts'):
+            return value
+        content = {key: item for key, item in value.items() if key != 'notificationRead'}
+        version = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False,
+                                            separators=(',', ':')).encode()).hexdigest()
+        if known[0] == version:
+            return {'unchanged': True, 'version': version,
+                    **({'notificationRead': value['notificationRead']} if 'notificationRead' in value else {})}
+        return {**value, 'version': version}
+
     def output(self, status, data, content_type="application/json; charset=utf-8", cookie=None, content_disposition=None, preview_shell=False):
         # Keep the browser cookie in step with the renewed server-side deadline,
         # including long-lived pages that do not revisit /api/auth.
@@ -385,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                 if write:
                     status, result = self.server.chat_display.save(self.read_json())
                     return self.output(status, result)
-                return self.output(200, self.server.chat_display.read())
+                return self.output(200, self.versioned_snapshot(self.server.chat_display.read()))
             if path == '/api/sidebar-preferences':
                 if write:
                     status, result = self.server.sidebar_preferences.save(self.read_json())
@@ -712,16 +732,16 @@ class Handler(BaseHTTPRequestHandler):
                                                   source=source, include_sources=True, local_only=True,
                                                   host_label=host_info.get('displayName') or host_info.get('alias'),
                                                   **({'ids': ids} if ids is not None else {}))
-                    return self.output(200, {'sessions': rows, 'availableSources': available,
+                    return self.output(200, self.versioned_snapshot({'sessions': rows, 'availableSources': available,
                                              'sidebar': self.server.bridge.hosts.sidebar() if host == 'local' else None,
                                              'sidebarPreferences': self.server.sidebar_preferences.read() if host == 'local' else None,
                                              'unavailableHosts': target.host_errors,
                                              'remoteHosts': list(host_infos) if host == 'local' else [],
                                              'complete': not target.host_errors,
-                                             'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
+                                             'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None}))
                 rows, available = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true", source=source, include_sources=True)
-                return self.output(200, {"sessions": rows, "availableSources": available, "unavailableHosts": self.server.bridge.host_errors,
-                                        'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
+                return self.output(200, self.versioned_snapshot({"sessions": rows, "availableSources": available, "unavailableHosts": self.server.bridge.host_errors,
+                                        'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None}))
             if not write and path == '/api/projects':
                 if query.get('metadata', [''])[0] == '1':
                     return self.output(200, {**self.server.bridge.hosts.sidebar(),

@@ -1,5 +1,32 @@
 'use strict';
 
+class VersionedReads {
+  constructor({request,maxBytes=4*1024*1024,maxEntries=16}){Object.assign(this,{request,maxBytes,maxEntries});this.entries=new Map();this.bytes=0;this.generation=0;}
+  clear(){this.generation++;this.entries.clear();this.bytes=0;}
+  remove(path){const cached=this.entries.get(path);if(cached){this.bytes-=cached.bytes;this.entries.delete(path);}}
+  async read(path,signal){
+    const generation=this.generation,cached=this.entries.get(path),url=path+(path.includes('?')?'&':'?')+'versioned=1';
+    let value=await this.request(url+(cached?'&knownVersion='+cached.version:''),undefined,signal);
+    if(generation!==this.generation)return value;
+    if(value.unchanged===true){
+      if(cached&&value.version===cached.version)return {...JSON.parse(cached.json),...value};
+      // A read result can be retried; an unknown write must never enter here.
+      value=await this.request(url,undefined,signal);
+      if(value.unchanged===true)throw Error('展示快照缺少完整内容，请重新刷新。');
+      if(generation!==this.generation)return value;
+    }
+    this.remove(path);
+    if(/^[0-9a-f]{64}$/.test(value.version)&&value.complete!==false&&!value.unavailableHosts?.length){
+      const json=JSON.stringify(value),bytes=json.length*2;
+      if(bytes<=this.maxBytes){
+        this.entries.set(path,{version:value.version,json,bytes});this.bytes+=bytes;
+        while(this.bytes>this.maxBytes||this.entries.size>this.maxEntries)this.remove(this.entries.keys().next().value);
+      }
+    }
+    return value;
+  }
+}
+
 class ListSync {
   constructor({root,status,refresh,visible,ready,automatic=true}) {
     Object.assign(this,{root,status,refresh,visible,ready});this.busy=false;this.frame=0;this.revision=0;this.automaticFailures=0;this.failureVisible=false;
@@ -64,3 +91,4 @@ class ListSync {
     finally{if(revision===this.revision){this.busy=false;this.recoveredWhileBusy=false;}}
   }
 }
+if(typeof module!=='undefined')module.exports={ListSync,VersionedReads};

@@ -1,8 +1,8 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-const {SessionActivity}=require('../web/features/chat/activity.js');
+const {SessionActivity,ActivityPolling}=require('../web/features/chat/activity.js');
 
-function fixture(){
+function fixture({adaptive=false}={}){
   const source=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');
   const calls=[],nodes=[],timers=new Map(),root={clientWidth:240,clientHeight:300,getBoundingClientRect:()=>({top:0,left:0,right:240,bottom:300}),querySelectorAll:()=>nodes};
   const rows=[{id:'visible',host:'local'},{id:'below',host:'local'},{id:'collapsed',host:'ssh'},{id:'not-rendered',host:'ssh'}];
@@ -14,6 +14,7 @@ function fixture(){
     setTimeout:(fn,delay=0)=>{const id={delay,at:now+delay};timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),
     chatKey:(id,host)=>host+'|'+id,renderActivity(){},syncRecencies(){},bumpRecency(){},api:async(url,body)=>{calls.push({url,body});return {sessions:[]};}});
   const start=source.indexOf('async function refreshActivity(');
+  if(adaptive){context.ActivityPolling=class extends ActivityPolling{constructor(){super({now:()=>now});}};context.ActivityChanges=class{setScope(){}canConfirm(){return context.healthy;} };context.healthy=true;}
   vm.runInContext(source.slice(start,source.indexOf("window.addEventListener('focus'",start)),context);
   const next=async()=>{const id=[...timers.keys()].sort((a,b)=>a.at-b.at)[0];assert.ok(id,'An automatic refresh must be scheduled');const fn=timers.get(id);timers.delete(id);now=id.at;await fn();return id.delay;};
   return {context,calls,nodes,root,rows,timers,activity,next,at:value=>now=value,periodic:()=>periodic(),refresh:()=>vm.runInContext('refreshActivity()',context),schedule:()=>vm.runInContext('scheduleActivityRefresh()',context)};
@@ -23,6 +24,17 @@ test('sidebar automatically polls only chats currently visible in its viewport',
   const ui=fixture();await ui.refresh();
   assert.equal(ui.calls.length,1);
   assert.deepEqual(JSON.parse(JSON.stringify(ui.calls[0].body)),{hosts:{local:['visible']}});
+});
+
+test('实际定时入口减少可靠实时聊天的补读，通知断开时下个五秒周期恢复',async()=>{
+  const ui=fixture({adaptive:true});
+  ui.context.api=async(url,body)=>{ui.calls.push({url,body});return {sessions:[{...ui.rows[0],connected:true,status:'active',activityRealtime:true,activityStreamId:'a'.repeat(32)}]};};
+  await ui.refresh();assert.equal(ui.calls.length,1);
+  ui.at(5000);await ui.periodic();ui.at(10000);await ui.periodic();assert.equal(ui.calls.length,1);
+  ui.at(30000);await ui.periodic();assert.equal(ui.calls.length,2);
+  ui.context.healthy=false;ui.at(35000);await ui.periodic();assert.equal(ui.calls.length,3);
+  ui.context.healthy=true;vm.runInContext("queueActivityChanges({local:['visible']})",ui.context);await ui.next();
+  assert.equal(ui.calls.length,4,'通知到达时不等三十秒，立即定向读取');
 });
 
 test('较早的活动响应不能把消息流已确认结束的聊天重新变绿',async()=>{

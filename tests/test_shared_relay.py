@@ -276,6 +276,19 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         denied = await self.client.post('/api/activity/changes', json=body, headers={**phone, 'X-CSRF-Token': 'bad'})
         self.assertEqual(denied.status, 401)
 
+    async def test_versioned_list_and_settings_through_authenticated_connector(self):
+        self.state.timeout = 5
+        device = await self.device('Snapshot')
+        await self.real_connector(device)
+        phone = await self.phone(device)
+        for route in ('/api/sessions', '/api/chat-display'):
+            response = await self.client.get(route+'?versioned=1', headers=phone)
+            self.assertEqual(response.status, 200);snapshot = await response.json()
+            response = await self.client.get(route+'?versioned=1&knownVersion='+snapshot['version'], headers=phone)
+            self.assertEqual(response.status, 200);same = await response.json()
+            self.assertTrue(same['unchanged']);self.assertEqual(same['version'], snapshot['version'])
+        self.assertEqual(self.created, [])
+
     async def test_compressed_control_request_cannot_bypass_four_kib_limit(self):
         device = await self.device('Fixture')
         pair = self.state.registry.pair(device['deviceId'])

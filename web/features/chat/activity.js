@@ -125,8 +125,8 @@ class SessionActivity {
 }
 
 class ActivityChanges {
-  constructor({request,onChange,pause=null}){
-    Object.assign(this,{request,onChange});this.scope={};this.scopeStamp='';this.unsupported=false;
+  constructor({request,onChange,pause=null,now=()=>globalThis.performance?.now()??Date.now()}){
+    Object.assign(this,{request,onChange,now});this.scope={};this.scopeStamp='';this.unsupported=false;this.healthy=false;
     this.pause=pause||((ms,signal)=>new Promise(resolve=>{
       const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve();};
       const timer=setTimeout(done,ms);signal.addEventListener('abort',done,{once:true});if(signal.aborted)done();
@@ -134,14 +134,16 @@ class ActivityChanges {
   }
   setScope(hosts){
     const scope=Object.fromEntries(Object.entries(hosts).filter(([,ids])=>ids.length).sort(([a],[b])=>a.localeCompare(b)).slice(0,20).map(([host,ids])=>[host,[...new Set(ids)].slice(0,500).sort()]));
-    this.scope=scope;this.scopeStamp=JSON.stringify(scope);
+    const stamp=JSON.stringify(scope);if(stamp!==this.scopeStamp)this.healthy=false;
+    this.scope=scope;this.scopeStamp=stamp;
     if(!Object.keys(scope).length){this.stop();return;}
     // Keep one long poll when scrolling changes the scope. After it returns,
     // replay its cursor with the new scope instead of abandoning server waiters.
     if(this.task||this.unsupported)return;
     const task={};this.task=task;task.promise=this.run(task);
   }
-  stop(){const task=this.task;this.task=null;task?.controller?.abort();}
+  canConfirm(host,id,streamId){return this.healthy&&!!this.task&&!this.unsupported&&this.streamId===streamId&&this.now()-this.confirmedAt<20000&&this.scope[host]?.includes(id)===true;}
+  stop(){this.healthy=false;const task=this.task;this.task=null;task?.controller?.abort();}
   reset(){this.stop();this.scope={};this.scopeStamp='';this.streamId=null;this.cursor=null;this.unsupported=false;}
   async run(task){
     let retry=1000;
@@ -153,9 +155,10 @@ class ActivityChanges {
           const value=await this.request('/api/activity/changes',{hosts:scope,...(this.streamId?{streamId:this.streamId,after:this.cursor}:{})},controller.signal);
           if(this.task!==task)return;
           if(!value||!Number.isSafeInteger(value.cursor)||value.cursor<0||!/^[0-9a-f]{32}$/.test(value.streamId)||typeof value.reset!=='boolean'||!value.hosts||typeof value.hosts!=='object'||Array.isArray(value.hosts)||Object.values(value.hosts).some(ids=>!Array.isArray(ids)||ids.some(id=>typeof id!=='string'))){this.unsupported=true;return;}
-          if(value.closed)return;
+          if(value.closed){this.healthy=false;return;}
           if(stamp!==this.scopeStamp)continue;
           this.streamId=value.streamId;this.cursor=value.cursor;retry=1000;
+          this.healthy=true;this.confirmedAt=this.now();
           if(value.reset)this.onChange(scope,true);
           else if(!value.reset&&Object.keys(value.hosts).length)this.onChange(value.hosts,false);
           clearTimeout(timeout);
@@ -163,6 +166,7 @@ class ActivityChanges {
           await this.pause(!value.reset&&!Object.keys(value.hosts).length&&Date.now()-started<1000?1000:150,controller.signal);
         }catch(error){
           if(this.task!==task)return;
+          this.healthy=false;
           if([404,405,501].includes(error.status)){this.unsupported=true;return;}
           if(error.status===401)return;
           clearTimeout(timeout);
@@ -170,7 +174,21 @@ class ActivityChanges {
           await this.pause(retry,retryController.signal);retry=Math.min(15000,retry*2);
         }finally{clearTimeout(timeout);}
       }
-    }finally{if(this.task===task)this.task=null;}
+    }finally{if(this.task===task){this.task=null;this.healthy=false;}}
   }
 }
-if(typeof module!=='undefined')module.exports={SessionActivity,ActivityChanges};
+
+class ActivityPolling {
+  constructor({now=()=>globalThis.performance?.now()??Date.now()}={}){this.now=now;this.confirmed=new Map();}
+  observe(rows){
+    for(const row of rows){
+      const key=row.host+'|'+row.id;this.confirmed.delete(key);
+      if(row.connected&&row.status!=='unknown'&&!row.activityError&&row.activityRealtime===true&&/^[0-9a-f]{32}$/.test(row.activityStreamId))this.confirmed.set(key,{at:this.now(),streamId:row.activityStreamId});
+    }
+    while(this.confirmed.size>4000)this.confirmed.delete(this.confirmed.keys().next().value);
+  }
+  due(row,changes){const known=this.confirmed.get(row.host+'|'+row.id);return !known||this.now()-known.at>=30000||!changes?.canConfirm(row.host,row.id,known.streamId);}
+  fail(keys){for(const key of keys)this.confirmed.delete(key);}
+  clear(){this.confirmed.clear();}
+}
+if(typeof module!=='undefined')module.exports={SessionActivity,ActivityChanges,ActivityPolling};

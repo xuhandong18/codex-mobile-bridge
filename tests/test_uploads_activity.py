@@ -300,6 +300,19 @@ class UploadActivityTests(unittest.TestCase):
             self.assertEqual(self.bridge.activity([THREAD], .2)[0]['recency'], 123)
             self.bridge.activity_recency_worker.join(1)
 
+    def test_realtime_hint_requires_owner_and_confirmed_subtree_and_side_sources(self):
+        self.bridge.list();self.bridge.session(THREAD)
+        known = {'runningSubagents': 0, 'subagentsKnown': True}
+        with patch.object(self.bridge.subagent_activity, 'read', return_value={THREAD: known}), \
+                patch.object(self.bridge.subagent_activity, 'wait', return_value={THREAD: known}):
+            row = self.bridge.activity([THREAD], .5)[0]
+            self.assertTrue(row['activityRealtime'])
+            self.assertEqual(row['activityStreamId'], self.bridge.activity_events.stream_id)
+            with patch.object(self.bridge.side_chats, 'activity', return_value=[{'id': 'side', 'connected': False, 'status': 'unknown'}]):
+                self.assertFalse(self.bridge.activity([THREAD], .5)[0]['activityRealtime'])
+            known['subagentsKnown'] = False
+            self.assertFalse(self.bridge.activity([THREAD], .5)[0]['activityRealtime'])
+
     def test_parent_updates_received_while_waiting_for_descendants_are_in_the_response(self):
         self.bridge.list();session=self.bridge.session(THREAD)
         entered, release, waiting_descendants = threading.Event(), threading.Event(), threading.Event()

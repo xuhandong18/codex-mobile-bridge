@@ -89,14 +89,16 @@ function renderHostErrors(hosts){
   root.hidden=!root.childElementCount;
 }
 function clearListSnapshot(){
-  activityChanges?.reset();activityChangeKeys.clear();
+  activityChanges?.reset();activityChangeKeys.clear();activityPolling?.clear();versionedReads?.clear();
   sidebarPreferences.reset();
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(/^codex-list-v[12]:/.test(key||''))sessionStorage.removeItem(key);}
   createdChats.clear();createdChatVisibility.clear();projectChatPages.clear();
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
-async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);if(path==='/api/answer-drafts'&&new Blob([options.body]).size<60000)options.keepalive=true;}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
+async function rawApi(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);if(path==='/api/answer-drafts'&&new Blob([options.body]).size<60000)options.keepalive=true;}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
+const versionedReads=typeof VersionedReads==='function'?new VersionedReads({request:rawApi}):null;
+function api(path,body,signal){return body===undefined&&versionedReads&&/^\/api\/(sessions|chat-display)(?:\?|$)/.test(path)?versionedReads.read(path,signal):rawApi(path,body,signal);}
 const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat,loadReferences:loadComposerReferences});
 workbench.onSideChatActivity=(session,view,visible)=>{
   if(session.provider&&session.provider!=='codex'||!view.id||view.expired)return;
@@ -145,7 +147,7 @@ async function refreshActivity(resuming=false){
   const eligible=new Set(Object.entries(scope).flatMap(([host,ids])=>ids.map(id=>chatKey(id,host))));
   for(const key of activityChangeKeys)if(!eligible.has(key))activityChangeKeys.delete(key);
   for(const [key,row] of visible){
-    if(activityInFlight.has(key)||eventsOnly&&!activityChangeKeys.has(key)||resuming===true&&!activityPendingKeys.has(key)&&!activityChangeKeys.has(key))continue;
+    if(activityInFlight.has(key)||resuming==='poll'&&!activityChangeKeys.has(key)&&activityPolling&&!activityPolling.due(row,activityChanges)||eventsOnly&&!activityChangeKeys.has(key)||resuming===true&&!activityPendingKeys.has(key)&&!activityChangeKeys.has(key))continue;
     (hosts[row.host]??=[]).push(row.id);
   }
   for(const key of activityPendingKeys)if(!visible.has(key))activityPendingKeys.delete(key);
@@ -155,7 +157,7 @@ async function refreshActivity(resuming=false){
     reads.push(readActivity(host,ids.slice(start,start+64)));
   }
   if(activityRequests.size<4&&![...activityRequests].some(controller=>controller.background)){
-    const eligibleHidden=row=>{const key=chatKey(row.id,row.host);return !visible.has(key)&&!activityInFlight.has(key)&&(!eventsOnly||activityChangeKeys.has(key));};
+    const eligibleHidden=row=>{const key=chatKey(row.id,row.host);return !visible.has(key)&&!activityInFlight.has(key)&&(!eventsOnly||activityChangeKeys.has(key))&&(resuming!=='poll'||activityChangeKeys.has(key)||!activityPolling||activityPolling.due(row,activityChanges));};
     const backgroundHosts=[...new Set(projects.flatMap(({rows})=>rows.filter(eligibleHidden).map(row=>row.host)))];
     if(backgroundHosts.length){
       const host=backgroundHosts[activityBackgroundCursor++%backgroundHosts.length],groups=projects.filter(({rows})=>rows.some(row=>row.host===host)),ids=[],batch=Math.max(1,Math.floor(64/groups.length));
@@ -210,22 +212,25 @@ async function readActivity(host,ids,{background=false}={}){
   try{
     const result=await api('/api/activity',{hosts:{[host]:ids},...(background?{background:true}:{})},controller.signal);
     if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'&&sessionActivity.isCurrentRead(observation)){
-      sessionActivity.update(result.sessions,visibleChat(),{sync:false,observation});
+      const confirmed=result.sessions.filter(row=>observation.version>=(sessionActivity.observations.get(chatKey(row.id,row.host))||0));
+      sessionActivity.update(result.sessions,visibleChat(),{sync:false,observation});activityPolling?.observe(confirmed);
       syncRecencies(result.sessions);
       renderActivity();
     }
   }catch{
     if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'&&sessionActivity.isCurrentRead(observation)){
+      activityPolling?.fail(keys);
       const rows=ids.map(id=>({id,host,connected:false,status:'unknown',activityError:controller.signal.aborted?'timeout':'unavailable'}));
       sessionActivity.update(rows,visibleChat(),{sync:false,observation});renderActivity();
     }
   }finally{clearTimeout(timeout);activityRequests.delete(controller);for(const key of keys)activityInFlight.delete(key);activityBusy=activityRequests.size>0;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh(true);}else if([...activityChangeKeys].some(key=>!activityInFlight.has(key)))scheduleActivityRefresh('changes');}
 }
 const activityPendingKeys=new Set(),activityChangeKeys=new Set();
+const activityPolling=typeof ActivityPolling==='function'?new ActivityPolling():null;
 const activityChanges=typeof ActivityChanges==='function'?new ActivityChanges({request:api,onChange:queueActivityChanges}):null;
 let activityRefreshTimer=null,activityRefreshPending=false,activityBackgroundCursor=0;
-function scheduleActivityRefresh(resuming=false){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(()=>refreshActivity(resuming===true?true:resuming==='changes'?'changes':false),100);}
-setInterval(refreshActivity,5000);
+function scheduleActivityRefresh(resuming=false){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(()=>refreshActivity(resuming===true?true:resuming==='changes'?'changes':'poll'),100);}
+setInterval(()=>refreshActivity('poll'),5000);
 window.addEventListener('focus',refreshActivity);
 window.addEventListener('resize',scheduleActivityRefresh);
 document.addEventListener('visibilitychange',()=>refreshActivity());
@@ -437,9 +442,9 @@ function collapseSidebarGroups(){
 }
 function renderList(){
   if(typeof syncListModeTabs==='function')syncListModeTabs();
-  const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,listLoading,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.loading])]:null;
+  const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.loading])]:null;
   const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,$('list-mode').value==='codex'&&hasProjectStatus(row.id,row.host)])]);
-  if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity(false);return;}
+  if(stamp===listRenderStamp&&$('sessions').children.length){for(const button of $('sessions').querySelectorAll('.project-load-more')){const key=button.closest('.project-group')?.dataset.projectKey;if(key)button.disabled=!!listLoading||!!projectPage(key).loading;}renderActivity(false);return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
   // A native toggle event can still be queued when a status refresh rebuilds
@@ -556,6 +561,7 @@ async function loadList(reset=false){
   const targetCount=reset?Math.max(100,listOffset):offset+100;
   listComplete=false;listReadFinished=false;listLoading++;renderList();
   const groups=new Map();for(const row of listRows)(groups.get(row.host)||groups.set(row.host,[]).get(row.host)).push(row);
+  let unchanged=true;
   const sources=new Set(availableSources),freshSources=new Map(),errors=[],pinnedGroups=new Map();
   const publish=()=>{
     if(generation!==listGeneration)return [];
@@ -569,6 +575,7 @@ async function loadList(reset=false){
     const url='/api/sessions?scope=host&host='+encodeURIComponent(host)+'&q='+encodeURIComponent(query)+'&offset='+(targetCount-100)+'&archived='+archived+'&source='+source;
     try{
       const result=await api(url);if(generation!==listGeneration)return null;
+      if(result.unchanged!==true)unchanged=false;
       if(host==='local'&&result.sidebarPreferences){await sidebarPreferences.receive(result.sidebarPreferences);if(generation!==listGeneration)return null;}
       const visible=new Set((result.sessions||[]).map(row=>row.id));
       const missing=[...new Set(projectPins.entries().filter(([project,id])=>project.startsWith(host+'|')&&/^[0-9a-f-]{36}$/.test(id)&&!visible.has(id)).map(([,id])=>id))];
@@ -617,7 +624,7 @@ async function loadList(reset=false){
       if(!renderSourceFilter()){loadList(true).catch(e=>toast(e.message));return false;}
       saveListSnapshot(filter);clientNavigation.acknowledgeList('codex',{...local,unavailableHosts:[],complete:true});listSync.acknowledgeSuccess();
     }
-    renderHostErrors(errors);renderList();refreshActivity();
+    renderHostErrors(errors);renderList();refreshActivity(unchanged?'poll':false);
     if(errors.length)throw Error(errors[0].error);
     return true;
   }finally{listLoading--;renderList();}
