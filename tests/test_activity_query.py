@@ -245,3 +245,22 @@ class ActivityHttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/activity', value, {'Cookie': headers['Cookie']})[0], 403)
         for ids in (None, 'chat', [{}], ['chat']*501):
             self.assertEqual(self.request('POST', '/api/activity', {'hosts': {'local': ids}}, headers)[0], 400)
+
+    def test_background_scan_has_a_shorter_shared_deadline(self):
+        headers = self.login()
+        source = SimpleNamespace(activity=Mock(return_value=[]))
+        with patch.object(self.server.bridge, 'for_host', return_value=source):
+            self.assertEqual(self.request('POST', '/api/activity', {'hosts': {'local': ['chat']}, 'background': True}, headers)[0], 200)
+            background_timeout = source.activity.call_args.args[1]
+            self.assertEqual(self.request('POST', '/api/activity', {'hosts': {'local': ['chat']}}, headers)[0], 200)
+            foreground_timeout = source.activity.call_args.args[1]
+        self.assertGreater(background_timeout, 0)
+        self.assertLessEqual(background_timeout, 1)
+        self.assertGreater(foreground_timeout, 4)
+
+    def test_background_flag_does_not_relax_auth_or_accept_other_types(self):
+        headers = self.login();value = {'hosts': {'local': ['chat']}, 'background': True}
+        self.assertEqual(self.request('POST', '/api/activity', value)[0], 401)
+        self.assertEqual(self.request('POST', '/api/activity', value, {'Cookie': headers['Cookie']})[0], 403)
+        for flag in ('true', 1, None, {}):
+            self.assertEqual(self.request('POST', '/api/activity', {**value, 'background': flag}, headers)[0], 400)

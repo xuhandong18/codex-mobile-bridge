@@ -40,10 +40,17 @@ function bumpRecency(id,host,at=Date.now()){
   syncRecency(id,host,at);
 }
 function syncRecency(id,host,at,{partial=false}={}){
-  if(!Number.isFinite(at)||at<0)return;
-  const key=chatKey(id,host),value=Math.max(at,recentInteractions.get(key)||0);
-  const row=listRows.find(row=>row.id===id&&row.host===host);
-  if(row&&value!==row.recency&&(!partial||value>row.recency)){row.recency=value;listRows.sort((a,b)=>b.recency-a.recency||b.id.localeCompare(a.id)||b.host.localeCompare(a.host));renderList();}
+  if(syncRecencies([{id,host,recency:at}],{partial}))renderList();
+}
+function syncRecencies(rows,{partial=false}={}){
+  const listed=new Map(listRows.map(row=>[chatKey(row.id,row.host),row]));let changed=false;
+  for(const update of rows){
+    if(!Number.isFinite(update.recency)||update.recency<0)continue;
+    const key=chatKey(update.id,update.host),row=listed.get(key),value=Math.max(update.recency,recentInteractions.get(key)||0);
+    if(row&&value!==row.recency&&(!partial||value>row.recency)){row.recency=value;changed=true;}
+  }
+  if(changed)listRows.sort((a,b)=>b.recency-a.recency||b.id.localeCompare(a.id)||b.host.localeCompare(a.host));
+  return changed;
 }
 let activityBusy=false;
 const activityRequests=new Set(),activityInFlight=new Set();
@@ -119,7 +126,7 @@ const attachments=new ChatAttachments({root:$('attachment-list'),button:$('attac
 function visibleChat(){return clientNavigation.provider==='codex'&&currentId&&!workbench.isFileVisible&&!document.hidden&&$('app').classList.contains('chat-open')?chatKey():null;}
 function readVisibleChat(view=state){
   if(!visibleChat()||!view||view.loadingHistory)return;
-  sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus,waitingForUser:view.waitingForUser,requests:view.requests,waitingObservedAt:view.waitingObservedAt}],chatKey());
+  sessionActivity.update([{id:currentId,host:currentHost,connected:view.connected,status:view.status,turnId:view.turnId,turnStatus:view.turnStatus,waitingForUser:view.waitingForUser,requests:view.requests,waitingObservedAt:view.waitingObservedAt}],chatKey(),{observation:view.activityObservation});
   sessionActivity.read(chatKey(),{sync:false});renderActivity();
 }
 function renderActivity(updateList=true){
@@ -130,17 +137,25 @@ function renderActivity(updateList=true){
   previous?.remove();
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
 }if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));if(unknownAppeared)scheduleActivityRefresh();}
-async function refreshActivity(){
+async function refreshActivity(resuming=false){
   if($('app').hidden||document.hidden||clientNavigation.provider!=='codex')return;
   const root=$('sessions');if(!root.clientWidth||!root.clientHeight)return;
   const bounds=root.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(window.innerHeight,bounds.bottom),left=Math.max(0,bounds.left),right=Math.min(window.innerWidth,bounds.right);
   if(bottom<=top||right<=left)return;
-  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),hosts={};
+  const listed=new Set(listRows.map(row=>chatKey(row.id,row.host))),hosts={},visible=new Set(),reads=[];
   for(const button of root.querySelectorAll('.session')){
     if(button.closest('details:not([open]),[hidden]')||!button.getClientRects().length)continue;
     const rect=button.getBoundingClientRect(),{id,host}=button.dataset,key=chatKey(id,host);
-    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key)||activityInFlight.has(key))continue;
+    if(rect.bottom<=top||rect.top>=bottom||rect.right<=left||rect.left>=right||!listed.has(key))continue;
+    visible.add(key);if(activityInFlight.has(key)||resuming===true&&!activityPendingKeys.has(key))continue;
     const ids=hosts[host]??=[];if(!ids.includes(id))ids.push(id);
+  }
+  for(const key of activityPendingKeys)if(!visible.has(key))activityPendingKeys.delete(key);
+  // Each host publishes independently. Hidden discovery cannot hold a visible
+  // batch open, and native desktop reads never exceed their 64-chat limit.
+  for(const [host,ids] of Object.entries(hosts))for(let start=0;start<ids.length;start+=64){
+    if(activityRequests.size>=4){for(const id of ids.slice(start))activityPendingKeys.add(chatKey(id,host));activityRefreshPending=true;break;}
+    reads.push(readActivity(host,ids.slice(start,start+64)));
   }
   // Status-only projects must also discover badges on their hidden chats.
   // Inspect loaded metadata in bounded, rotating batches; never activate chats.
@@ -149,38 +164,46 @@ async function refreshActivity(){
     const rect=group.getBoundingClientRect();
     return rect.bottom>top&&rect.top<bottom&&rect.right>left&&rect.left<right;
   }):[];
-  for(const group of projects){
-    const rows=projectRows(group.dataset.projectKey),page=projectPage(group.dataset.projectKey);
-    const batch=Math.max(1,Math.floor(64/projects.length));let added=0;
-    for(let count=0;count<rows.length&&added<batch;count++){
-      const index=(page.activityOffset||0)%rows.length,row=rows[index],key=chatKey(row.id,row.host),ids=hosts[row.host]??=[];
-      if(ids.length>=64)break;
-      page.activityOffset=index+1;
-      if(!activityInFlight.has(key)&&!ids.includes(row.id)){ids.push(row.id);added++;}
+  if(activityRequests.size<4&&![...activityRequests].some(controller=>controller.background)){
+    const candidates=projects.map(group=>({rows:projectRows(group.dataset.projectKey),page:projectPage(group.dataset.projectKey)}));
+    const backgroundHosts=[...new Set(candidates.flatMap(({rows})=>rows.filter(row=>!visible.has(chatKey(row.id,row.host))&&!activityInFlight.has(chatKey(row.id,row.host))).map(row=>row.host)))];
+    if(backgroundHosts.length){
+      const host=backgroundHosts[activityBackgroundCursor++%backgroundHosts.length],groups=candidates.filter(({rows})=>rows.some(row=>row.host===host)),ids=[],batch=Math.max(1,Math.floor(64/groups.length));
+      for(const {rows,page} of groups){
+        let added=0;
+        for(let count=0;count<rows.length&&added<batch&&ids.length<64;count++){
+          const index=(page.activityOffset||0)%rows.length,row=rows[index],key=chatKey(row.id,row.host);
+          page.activityOffset=index+1;
+          if(row.host===host&&!visible.has(key)&&!activityInFlight.has(key)&&!ids.includes(row.id)){ids.push(row.id);added++;}
+        }
+      }
+      if(ids.length)reads.push(readActivity(host,ids,{background:true}));
     }
   }
-  for(const host of Object.keys(hosts))if(!hosts[host].length)delete hosts[host];
-  if(!Object.keys(hosts).length)return;
-  if(activityRequests.size>=4){activityRefreshPending=true;return;}
+  await Promise.all(reads);
+}
+async function readActivity(host,ids,{background=false}={}){
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
-  const keys=Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>chatKey(id,host)));
-  activityRequests.add(controller);for(const key of keys)activityInFlight.add(key);activityBusy=true;
+  controller.background=background;
+  const keys=ids.map(id=>chatKey(id,host)),observation=sessionActivity.beginRead();
+  activityRequests.add(controller);for(const key of keys){activityInFlight.add(key);activityPendingKeys.delete(key);}activityBusy=true;
   try{
-    const result=await api('/api/activity',{hosts},controller.signal);
-    if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'){
-      sessionActivity.update(result.sessions,visibleChat(),{sync:false});
-      for(const row of result.sessions)if(Number.isFinite(row.recency))syncRecency(row.id,row.host,row.recency);
+    const result=await api('/api/activity',{hosts:{[host]:ids},...(background?{background:true}:{})},controller.signal);
+    if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'&&sessionActivity.isCurrentRead(observation)){
+      sessionActivity.update(result.sessions,visibleChat(),{sync:false,observation});
+      syncRecencies(result.sessions);
       renderActivity();
     }
   }catch{
-    if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'){
-      const rows=Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>({id,host,connected:false,status:'unknown',activityError:controller.signal.aborted?'timeout':'unavailable'})));
-      sessionActivity.update(rows,visibleChat(),{sync:false});renderActivity();
+    if(!$('app').hidden&&!document.hidden&&clientNavigation.provider==='codex'&&sessionActivity.isCurrentRead(observation)){
+      const rows=ids.map(id=>({id,host,connected:false,status:'unknown',activityError:controller.signal.aborted?'timeout':'unavailable'}));
+      sessionActivity.update(rows,visibleChat(),{sync:false,observation});renderActivity();
     }
-  }finally{clearTimeout(timeout);activityRequests.delete(controller);for(const key of keys)activityInFlight.delete(key);activityBusy=activityRequests.size>0;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh();}}
+  }finally{clearTimeout(timeout);activityRequests.delete(controller);for(const key of keys)activityInFlight.delete(key);activityBusy=activityRequests.size>0;if(activityRefreshPending){activityRefreshPending=false;scheduleActivityRefresh(true);}}
 }
-let activityRefreshTimer=null,activityRefreshPending=false;
-function scheduleActivityRefresh(){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(refreshActivity,100);}
+const activityPendingKeys=new Set();
+let activityRefreshTimer=null,activityRefreshPending=false,activityBackgroundCursor=0;
+function scheduleActivityRefresh(resuming=false){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(()=>refreshActivity(resuming===true),100);}
 setInterval(refreshActivity,5000);
 window.addEventListener('focus',refreshActivity);
 window.addEventListener('resize',scheduleActivityRefresh);
@@ -940,7 +963,7 @@ function fillMainFollowup(id,host,timeline,prompt){
   catch(error){toast(error.message);}
 }
 let catalogStarted=false;
-async function openChat(id,host="local",{ready}={}){if(messageActions.pending&&messageActions.dialog.open)return;messageActions.dialog.close();workbench.open(id,host);saveDraft();chatTimeline?.dispose();currentId=id;currentHost=host;state=null;catalogStarted=false;workbench.current.access=sessionAccess(listRows.find(row=>row.id===id&&row.host===host)?.access);contextUsageControl.update(null);workModes.open(chatKey(id,host));attachments.open(chatKey(id,host));modelCatalogGeneration++;catalogData={models:null};catalogResults={models:null};catalogTasks={models:null};modelRequest++;modelTarget=null;fastModeControl.reset();$('model-dialog').close();notificationState={available:false,watching:false,notifyOnCompletion:false};notificationRequest++;$('notify-dialog').close();$('rename-dialog').close();$('chat-details-dialog').close();$('notify-button').disabled=true;renderNotificationState();approvalStamp='';submittedRequestIds.clear();$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('message').value=composerDrafts.get('codex:'+chatKey(id,host))||sessionStorage.getItem('draft:'+chatKey(id,host))||'';sessionStorage.removeItem('draft:'+chatKey(id,host));composerDrafts.set('codex:'+chatKey(id,host),$('message').value);$('send-error').textContent='';$('chat-title').textContent=t('正在连接…');$('chat-meta').textContent='';$('status').textContent=t('连接中');$('welcome').hidden=true;$('chat').hidden=false;$('app').classList.add('chat-open');$('send').disabled=true;history.replaceState(null,'','#'+id+'~'+encodeURIComponent(host));document.querySelectorAll('.session').forEach(n=>n.classList.toggle('selected',n.dataset.id===id&&n.dataset.host===host));const timeline=chatTimeline=new ChatTimeline({url:action=>sessionUrl(id,action,host),request:api,renderMeta:renderState,canEdit:()=>currentAccess().canEditMessages,renderText:(node,text,files,fullText,row,complete)=>renderMarkdown(node,text,files,file=>sessionUrl(id,'files/'+file.id,host),{fullText,complete,onFollowup:row?.role==='assistant'?prompt=>fillMainFollowup(id,host,timeline,prompt):undefined}),onAction:(action,row,timeline)=>{if(!currentAccess().canEditMessages)return;const pendingKey='fork-edit:'+host+'|'+id;let pending;try{pending=JSON.parse(sessionStorage.getItem(pendingKey));}catch{}if(pending&&pending.sourceTurnId===row.turnId&&action==='edit'){sessionStorage.setItem('message-edit:'+timeline.url('message-action')+':'+row.key,pending.text);sessionStorage.removeItem(pendingKey);}return messageActions.open(action,row,timeline);},status:text=>{$('status').textContent=t(text);}});
+async function openChat(id,host="local",{ready}={}){if(messageActions.pending&&messageActions.dialog.open)return;messageActions.dialog.close();workbench.open(id,host);saveDraft();chatTimeline?.dispose();currentId=id;currentHost=host;state=null;catalogStarted=false;workbench.current.access=sessionAccess(listRows.find(row=>row.id===id&&row.host===host)?.access);contextUsageControl.update(null);workModes.open(chatKey(id,host));attachments.open(chatKey(id,host));modelCatalogGeneration++;catalogData={models:null};catalogResults={models:null};catalogTasks={models:null};modelRequest++;modelTarget=null;fastModeControl.reset();$('model-dialog').close();notificationState={available:false,watching:false,notifyOnCompletion:false};notificationRequest++;$('notify-dialog').close();$('rename-dialog').close();$('chat-details-dialog').close();$('notify-button').disabled=true;renderNotificationState();approvalStamp='';submittedRequestIds.clear();$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('message').value=composerDrafts.get('codex:'+chatKey(id,host))||sessionStorage.getItem('draft:'+chatKey(id,host))||'';sessionStorage.removeItem('draft:'+chatKey(id,host));composerDrafts.set('codex:'+chatKey(id,host),$('message').value);$('send-error').textContent='';$('chat-title').textContent=t('正在连接…');$('chat-meta').textContent='';$('status').textContent=t('连接中');$('welcome').hidden=true;$('chat').hidden=false;$('app').classList.add('chat-open');$('send').disabled=true;history.replaceState(null,'','#'+id+'~'+encodeURIComponent(host));document.querySelectorAll('.session').forEach(n=>n.classList.toggle('selected',n.dataset.id===id&&n.dataset.host===host));const timeline=chatTimeline=new ChatTimeline({url:action=>sessionUrl(id,action,host),request:async(...args)=>{const value=await api(...args);if(value.meta)value.meta.activityObservation=sessionActivity.beginRead();return value;},renderMeta:renderState,canEdit:()=>currentAccess().canEditMessages,renderText:(node,text,files,fullText,row,complete)=>renderMarkdown(node,text,files,file=>sessionUrl(id,'files/'+file.id,host),{fullText,complete,onFollowup:row?.role==='assistant'?prompt=>fillMainFollowup(id,host,timeline,prompt):undefined}),onAction:(action,row,timeline)=>{if(!currentAccess().canEditMessages)return;const pendingKey='fork-edit:'+host+'|'+id;let pending;try{pending=JSON.parse(sessionStorage.getItem(pendingKey));}catch{}if(pending&&pending.sourceTurnId===row.turnId&&action==='edit'){sessionStorage.setItem('message-edit:'+timeline.url('message-action')+':'+row.key,pending.text);sessionStorage.removeItem(pendingKey);}return messageActions.open(action,row,timeline);},status:text=>{$('status').textContent=t(text);}});
   reconnectFailure=null;
   window.BridgePresentation?.openChat();
   sessionActivity.read(chatKey(id,host),{explicit:true,sync:false});renderActivity();

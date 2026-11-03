@@ -753,13 +753,16 @@ class Handler(BaseHTTPRequestHandler):
             if not write and path == '/api/new-chat-models':
                 return self.output(200, self.server.bridge.new_chat_models(query.get('project', [''])[0], query.get('kind', ['desktop'])[0]))
             if write and path == '/api/activity':
-                groups = self.read_json().get('hosts')
+                body = self.read_json()
+                groups, background = body.get('hosts'), body.get('background', False)
+                if not isinstance(background, bool):
+                    raise ValueError('会话状态后台标识无效')
                 if not isinstance(groups, dict) or len(groups) > 20:
                     raise ValueError('会话状态请求无效')
                 if any(not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(sid, str) for sid in ids)
                        for ids in groups.values()):
                     raise ValueError('会话状态请求无效')
-                result = query_activity(self.server.bridge, groups)
+                result = query_activity(self.server.bridge, groups, background=background)
                 result['sessions'] = self.server.chat_read_state.activity(result['sessions'])
                 return self.output(200, result)
             if write and path == '/api/sessions':

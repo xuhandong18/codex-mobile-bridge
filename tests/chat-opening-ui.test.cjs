@@ -19,7 +19,7 @@ function fixture({source='desktop',canReconnect=true}={}){
     api:async(url,body,signal)=>{events.push('reconnect');ctx.reconnect={url,body,signal};return {connected:true};},
     loadNotificationState(){events.push('notifications');},toast(){},
     ChatTimeline:class{
-      constructor(){this.abort=new AbortController();}
+      constructor({request}){this.abort=new AbortController();this.request=request;}
       start(){events.push('history');return new Promise(resolve=>finishReading=resolve);}
       dispose(){this.abort.abort();}
     }};
@@ -41,6 +41,20 @@ test('opening CLI history never starts an automatic runtime connection',async()=
   const f=fixture({source:'cli'}),pending=f.ctx.openChat('a');
   assert.ok(!f.events.includes('reconnect'));
   f.finish();await pending;
+});
+
+test('长轮询在拿到新快照时记录观察版本，早发出的长轮询仍可更新状态',async()=>{
+  const {SessionActivity}=require('../web/features/chat/activity.js');
+  const f=fixture();f.ctx.sessionActivity=new SessionActivity({storage:{getItem:()=>null,setItem(){}}});
+  const opening=f.ctx.openChat('a');f.finish();await opening;
+  let release;f.ctx.api=()=>new Promise(resolve=>release=resolve);
+  const reading=f.ctx.chatTimeline.request('/changes');
+  const row={id:'a',host:'local',connected:true,status:'active',turnId:'one',turnStatus:'inProgress'};
+  f.ctx.sessionActivity.update([row]);
+  release({meta:{status:'idle',turnStatus:'completed'}});
+  const value=await reading;
+  f.ctx.sessionActivity.update([{...row,...value.meta}],'local|a',{observation:value.meta.activityObservation});
+  assert.equal(f.ctx.sessionActivity.indicator('local|a'),null);
 });
 
 test('新会话等待可见性时先显示页面，再开始历史和自动连接',async()=>{

@@ -1,6 +1,10 @@
 'use strict';
 class SessionActivity {
-  constructor({storage=localStorage,key='bridge-session-activity',onRead=null,now=()=>globalThis.performance?.now()??Date.now()}={}){this.storage=storage;this.key=key;this.onRead=onRead;this.now=now;this.readTokens=new Map();this.refreshes=new Map();try{this.rows=JSON.parse(storage.getItem(key)||'{}');}catch{this.rows={};}}
+  constructor({storage=localStorage,key='bridge-session-activity',onRead=null,now=()=>globalThis.performance?.now()??Date.now()}={}){this.storage=storage;this.key=key;this.onRead=onRead;this.now=now;this.readTokens=new Map();this.refreshes=new Map();this.observationEpoch=0;this.observationVersion=0;this.observations=new Map();this.sideObservations=new Map();try{this.rows=JSON.parse(storage.getItem(key)||'{}');}catch{this.rows={};}}
+  // Capture before an asynchronous read. These versions are page-local and
+  // fence late responses against newer stream observations and identity resets.
+  beginRead(){return {epoch:this.observationEpoch,version:++this.observationVersion};}
+  isCurrentRead(observation){return observation.epoch===this.observationEpoch;}
   id(row){return row.host+'|'+row.id;}
   save(){try{this.storage.setItem(this.key,JSON.stringify(this.rows));}catch{}}
   waitingSnapshot(row,previous){
@@ -15,47 +19,54 @@ class SessionActivity {
     if(subtreeFresh&&Number.isInteger(row.waitingSubagents)&&row.waitingSubagents>=0&&(row.waitingSubagents>0||row.subagentsKnown!==false)){result.waitingSubagents=row.waitingSubagents;if(Number.isFinite(row.waitingSubagentsObservedAt))result.waitingSubagentsObservedAt=row.waitingSubagentsObservedAt;}
     return result;
   }
-  update(rows,visible=null,{sync=true,save=true}={}){
+  update(rows,visible=null,{sync=true,save=true,observation=this.beginRead()}={}){
+    if(!this.isCurrentRead(observation))return;
     for(const row of rows){
       const key=this.id(row),parentStatus=row.parentStatus??row.status;
       let previous=this.rows[key];
-      const waiting=this.waitingSnapshot(row,previous);
+      const fresh=observation.version>=(this.observations.get(key)||0);
+      if(!fresh&&!previous)continue;
       if(Array.isArray(row.readCompletions)&&row.readCompletions.length){
         previous={...previous};
         for(const token of row.readCompletions)if(!previous.readCompletions?.includes(token))this.rememberRead(previous,token);
         if(previous.readCompletions?.includes(previous.pending))previous.pending=null;
         this.rows[key]=previous;
       }
-      // A different device may have observed the run. Gateway completion
-      // evidence is independent of this device's historical baseline.
-      if(row.completionToken&&row.completionToken!==previous?.completionToken){
-        previous={...previous,completionToken:row.completionToken};
-        if(!previous.readCompletions?.includes(row.completionToken))previous.pending=row.completionToken;
-        this.rows[key]=previous;
-      }
-      const running=parentStatus==='active'||row.runningSubagents>0;
-      const terminal=parentStatus!=='active'&&['completed','failed','interrupted'].includes(row.turnStatus);
-      if(!(row.activityConnected??row.connected)||!row.status||row.status==='unknown'){
-        const refresh=this.refreshes.get(key);
-        if(refresh&&refresh.failedAt===null)refresh.failedAt=this.now();
-        this.rows[key]={...previous,...waiting,offline:true,offlineReason:row.activityError||null};
-      }else{
-        // Display grace is page-local. Persisted badges never establish a fresh
-        // baseline, and failed reads remain offline for sync/write decisions.
-        this.refreshes.set(key,{failedAt:null});
-        const token=terminal&&row.turnId?row.turnId+':'+row.turnStatus:previous?.token||null;
-        const subtreeFinished=previous?.runningSubagents>0&&!(row.runningSubagents>0);
-        const wasActive=(previous?.parentStatus??previous?.status)==='active'||subtreeFinished;
-        const pending=terminal&&token&&previous&&(!previous.readCompletions?.includes(token)||subtreeFinished)&&(previous.turnKnown||previous.token||wasActive)&&(token!==previous.token||previous.pending||wasActive)?token:previous?.pending||null;
-        this.rows[key]={...previous,...waiting,status:running?'active':parentStatus,parentStatus,runningSubagents:row.runningSubagents||0,turnId:row.turnId||previous?.turnId,turnStatus:row.turnStatus||previous?.turnStatus,turnKnown:!!row.turnStatus||previous?.turnKnown||false,token,pending:visible===key?null:pending,manualUnread:!!previous?.manualUnread,offline:false};
-        if(visible===key)this.rememberRead(this.rows[key],terminal?token:previous?.pending);
-        if(sync&&visible===key&&terminal&&row.turnId)this.syncRead(key);
+      if(fresh){
+        this.observations.set(key,observation.version);
+        const waiting=this.waitingSnapshot(row,previous);
+        // A different device may have observed the run. Gateway completion
+        // evidence is independent of this device's historical baseline.
+        if(row.completionToken&&row.completionToken!==previous?.completionToken){
+          previous={...previous,completionToken:row.completionToken};
+          if(!previous.readCompletions?.includes(row.completionToken))previous.pending=row.completionToken;
+          this.rows[key]=previous;
+        }
+        const running=parentStatus==='active'||row.runningSubagents>0;
+        const terminal=parentStatus!=='active'&&['completed','failed','interrupted'].includes(row.turnStatus);
+        if(!(row.activityConnected??row.connected)||!row.status||row.status==='unknown'){
+          const refresh=this.refreshes.get(key);
+          if(refresh&&refresh.failedAt===null)refresh.failedAt=this.now();
+          this.rows[key]={...previous,...waiting,offline:true,offlineReason:row.activityError||null};
+        }else{
+          // Display grace is page-local. Persisted badges never establish a fresh
+          // baseline, and failed reads remain offline for sync/write decisions.
+          this.refreshes.set(key,{failedAt:null});
+          const token=terminal&&row.turnId?row.turnId+':'+row.turnStatus:previous?.token||null;
+          const subtreeFinished=previous?.runningSubagents>0&&!(row.runningSubagents>0);
+          const wasActive=(previous?.parentStatus??previous?.status)==='active'||subtreeFinished;
+          const pending=terminal&&token&&previous&&(!previous.readCompletions?.includes(token)||subtreeFinished)&&(previous.turnKnown||previous.token||wasActive)&&(token!==previous.token||previous.pending||wasActive)?token:previous?.pending||null;
+          this.rows[key]={...previous,...waiting,status:running?'active':parentStatus,parentStatus,runningSubagents:row.runningSubagents||0,turnId:row.turnId||previous?.turnId,turnStatus:row.turnStatus||previous?.turnStatus,turnKnown:!!row.turnStatus||previous?.turnKnown||false,token,pending:visible===key?null:pending,manualUnread:!!previous?.manualUnread,offline:false};
+          if(visible===key)this.rememberRead(this.rows[key],terminal?token:previous?.pending);
+          if(sync&&visible===key&&terminal&&row.turnId)this.syncRead(key);
+        }
       }
       // Main-chat stream snapshots omit sideChats. Only a complete activity
       // response may remove children; reading the main chat never reads them.
-      if(Array.isArray(row.sideChats)&&(!Number.isFinite(this.rows[key].sideChatsObservedAt)||Number.isFinite(row.sideChatsObservedAt)&&row.sideChatsObservedAt>=this.rows[key].sideChatsObservedAt)){
+      if(Array.isArray(row.sideChats)&&observation.version>=(this.sideObservations.get(key)||0)&&(!Number.isFinite(this.rows[key].sideChatsObservedAt)||Number.isFinite(row.sideChatsObservedAt)&&row.sideChatsObservedAt>=this.rows[key].sideChatsObservedAt)){
+        this.sideObservations.set(key,observation.version);
         const old=this.rows[key].sideKeys||[],next=[];
-        for(const child of row.sideChats)next.push(this.updateSideChat(row,child,false,{save:false}));
+        for(const child of row.sideChats)next.push(this.updateSideChat(row,child,false,{save:false,observation}));
         for(const child of old)if(!next.includes(child))this.forget(child);
         this.rows[key].sideKeys=next;
         if(Number.isFinite(row.sideChatsObservedAt))this.rows[key].sideChatsObservedAt=Math.max(row.sideChatsObservedAt,this.rows[key].sideChatsObservedAt||0);
@@ -63,13 +74,15 @@ class SessionActivity {
     }
     if(save)this.save();
   }
-  updateSideChat(parent,row,visible=false,{save=true}={}){
+  updateSideChat(parent,row,visible=false,{save=true,observation=this.beginRead()}={}){
     const turn=row.turns?.at(-1);
     const key=this.id(parent),child={...row,turnId:row.turnId??turn?.turnId??turn?.id,turnStatus:row.turnStatus??turn?.status,host:parent.host,id:parent.id+'/side/'+row.id},childKey=this.id(child);
+    if(!this.isCurrentRead(observation)||observation.version<(this.observations.get(childKey)||0)||!this.rows[key]&&observation.version<(this.observations.get(key)||0))return childKey;
+    this.sideObservations.set(key,Math.max(observation.version,this.sideObservations.get(key)||0));
     this.rows[key]??={};
     if(Number.isFinite(row.waitingObservedAt))this.rows[key].sideChatsObservedAt=Math.max(row.waitingObservedAt,this.rows[key].sideChatsObservedAt||0);
     this.rows[key].sideKeys=[...new Set([...(this.rows[key].sideKeys||[]),childKey])];
-    this.update([child],visible?childKey:null,{sync:visible,save});
+    this.update([child],visible?childKey:null,{sync:visible,save,observation});
     return childKey;
   }
   rememberRead(row,token){if(token)row.readCompletions=[...(row.readCompletions||[]).filter(value=>value!==token),token].slice(-64);}
@@ -100,7 +113,7 @@ class SessionActivity {
     if(row.status==='active')return {kind:'running',label:row.runningSubagents?'子代理运行中':'运行中'};
     return null;
   }
-  forget(key){delete this.rows[key];this.readTokens.delete(key);this.refreshes.delete(key);}
-  clear(){this.rows={};this.readTokens.clear();this.refreshes.clear();this.storage.removeItem(this.key);}
+  forget(key){delete this.rows[key];this.readTokens.delete(key);this.refreshes.delete(key);this.observations.set(key,++this.observationVersion);this.sideObservations.delete(key);}
+  clear(){this.rows={};this.readTokens.clear();this.refreshes.clear();this.observations.clear();this.sideObservations.clear();this.observationEpoch++;this.storage.removeItem(this.key);}
 }
 if(typeof module!=='undefined')module.exports={SessionActivity};

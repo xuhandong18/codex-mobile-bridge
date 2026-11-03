@@ -77,9 +77,11 @@ class ActivityQueries:
             self.queue.clear()
 
 
-def query_activity(bridge, groups):
+def query_activity(bridge, groups, *, background=False):
     """Read the selected hosts in parallel within one HTTP request deadline."""
-    deadline = time.monotonic()+ActivityQueries.TIMEOUT
+    # Hidden discovery yields native inspection capacity promptly; visible reads
+    # retain the full deadline. Both remain passive, bounded activity queries.
+    deadline = time.monotonic()+(min(1, ActivityQueries.TIMEOUT) if background else ActivityQueries.TIMEOUT)
     sources = [(bridge.for_host(host), identifiers) for host, identifiers in groups.items()]
     rows = []
     if sources:

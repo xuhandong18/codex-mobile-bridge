@@ -7,7 +7,7 @@ const project='local|fixture-project',access={source:'desktop',canSend:false,can
 const rows=Array.from({length:36},(_,i)=>({id:'11111111-1111-4111-8111-'+String(i+1).padStart(12,'0'),host:'local',title:'自动状态测试 '+(i+1),
   cwd:'/fixture',projectKey:project,projectName:'测试项目',projectId:'fixture-project',updatedAt:100-i,recency:100-i,access}));
 const observations=[],writes=[],errors=[];
-let coldMode='ready',coldStarted;
+let coldMode='ready',coldStarted,completedMain=false;
 const coldWaiters=new Set();
 function blockCold(){coldMode='wait';return new Promise(resolve=>coldStarted=resolve);}
 function releaseCold(){coldMode='ready';for(const resolve of coldWaiters)resolve();coldWaiters.clear();}
@@ -23,14 +23,14 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/api/activity'){
       let data='';for await(const part of req)data+=part;
       const hosts=JSON.parse(data).hosts;observations.push(hosts);
-      if(coldMode==='wait'&&hosts.local?.includes(rows[1].id)){
-        await new Promise(resolve=>{coldWaiters.add(resolve);coldStarted?.();});
-      }
       value={sessions:Object.entries(hosts).flatMap(([host,ids])=>ids.map(id=>
         coldMode==='all-timeout'||id===rows[1].id&&coldMode==='timeout'?
           {id,host,connected:false,activityConnected:false,status:'unknown',activityError:'timeout'}:id===rows[1].id?
           {id,host,connected:false,activityConnected:true,status:'notLoaded',turnId:id+'-turn',turnStatus:'completed'}:
-          {id,host,connected:true,activityConnected:true,status:'active',turnId:id+'-turn',turnStatus:'inProgress'}))};
+          {id,host,connected:true,activityConnected:true,status:completedMain&&id===rows[0].id?'idle':'active',turnId:id+'-turn',turnStatus:completedMain&&id===rows[0].id?'completed':'inProgress'}))};
+      if(coldMode==='wait'&&hosts.local?.includes(rows[1].id)){
+        await new Promise(resolve=>{coldWaiters.add(resolve);coldStarted?.();});
+      }
     }else if(p.endsWith('/reconnect')||p.endsWith('/send')||p.endsWith('/timeline')||p.endsWith('/updates'))writes.push(p);
     res.end(JSON.stringify(value));return;
   }
@@ -132,6 +132,17 @@ const server=http.createServer(async(req,res)=>{
       check(await page.locator(runningSelector+' .session-indicator.unknown').count()===1,'运行聊天持续失败三十秒后变灰 '+width);
       coldMode='ready';await page.evaluate(()=>refreshActivity());
       check(await page.locator(runningSelector+' .session-indicator.running').getAttribute('title')==='运行中','恢复成功后立即显示新确认的运行状态 '+width);
+      const lateRead=blockCold();
+      await page.evaluate(()=>{window.fixtureLateActivity=refreshActivity();});
+      await lateRead;completedMain=true;
+      await page.evaluate(id=>{
+        sessionActivity.update([{id,host:'local',connected:true,status:'idle',turnId:id+'-turn',turnStatus:'completed'}],'local|'+id,{sync:false});
+        renderActivity();
+      },rows[0].id);
+      check(await page.locator(runningSelector+' .session-indicator.running').count()===0,'新快照确认完成后立即消除运行圆点 '+width);
+      releaseCold();await page.evaluate(()=>window.fixtureLateActivity);
+      check(await page.locator(runningSelector+' .session-indicator.running').count()===0,'较早活动响应晚到后不会重新变绿 '+width);
+      completedMain=false;
       await page.addScriptTag({content:fs.readFileSync(path.join(root,'tests/browser/subagent-activity.browser.js'),'utf8')});
       const subagentChecks=await page.evaluate(id=>{
         const results=[],key='local|'+id,base={id,host:'local',connected:true,activityConnected:true,parentStatus:'idle',turnId:'agents',turnStatus:'completed',subagentsKnown:true};
