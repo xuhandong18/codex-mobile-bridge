@@ -2,6 +2,9 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"登录状态已失效，请重新登录。":"Your session has expired. Please sign in again.",
+"连接异常，操作结果尚未确认，请先刷新查看状态，勿重复提交。":"The connection failed and the result is unconfirmed. Refresh to check the status before submitting again.",
+"网关返回了异常响应，请检查连接或稍后刷新。":"The gateway returned an unexpected response. Check the connection or refresh later.",
 "侧边聊天历史":"Side chat history",
 "查看已保存和已失效的侧边聊天":"View saved and expired side chats",
 "聊天记录持续保存在网关。结束聊天或重启网关后，已保存的记录仍可查看。":"Chat history is saved to the gateway. Saved records remain available after ending a chat or restarting the gateway.",

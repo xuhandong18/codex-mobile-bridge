@@ -96,7 +96,38 @@ function clearListSnapshot(){
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
-async function rawApi(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);if(path==='/api/answer-drafts'&&new Blob([options.body]).size<60000)options.keepalive=true;}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
+async function rawApi(path,body,signal){
+  const url=hostUrl(path),write=body!==undefined,options={signal,credentials:'same-origin',cache:'no-store',headers:{}};
+  if(write){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);if(path==='/api/answer-drafts'&&new Blob([options.body]).size<60000)options.keepalive=true;}
+  for(let attempt=0;;attempt++){
+    if(signal?.aborted)throw new DOMException('Aborted','AbortError');
+    const response=await fetch(url,options);
+    // Authentication must not depend on whether a proxy supplied valid JSON.
+    if(response.status===401)authLost();
+    let data;
+    try{data=await response.json();}
+    catch(error){
+      if(error.name!=='SyntaxError')throw error;
+      // Only repeat reads, and only for a potentially transient response.
+      // A write may already have succeeded even when its response is HTML.
+      if(!write&&attempt<2&&!response.redirected&&(response.ok||[502,503,504].includes(response.status))){
+        await waitForApiRetry(300*(attempt+1),signal);continue;
+      }
+      const message=response.status===401?'登录状态已失效，请重新登录。':write?'连接异常，操作结果尚未确认，请先刷新查看状态，勿重复提交。':'网关返回了异常响应，请检查连接或稍后刷新。';
+      throw Object.assign(Error(t(message)),{status:response.status,code:write?'outcome_unknown':'invalid_api_response'});
+    }
+    if(!response.ok)throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});
+    return data;
+  }
+}
+function waitForApiRetry(delay,signal){
+  return new Promise((resolve,reject)=>{
+    const cancel=()=>{clearTimeout(timer);signal?.removeEventListener('abort',cancel);reject(new DOMException('Aborted','AbortError'));};
+    const timer=setTimeout(()=>{signal?.removeEventListener('abort',cancel);resolve();},delay);
+    signal?.addEventListener('abort',cancel,{once:true});
+    if(signal?.aborted)cancel();
+  });
+}
 const versionedReads=typeof VersionedReads==='function'?new VersionedReads({request:rawApi}):null;
 function api(path,body,signal){return body===undefined&&versionedReads&&/^\/api\/(sessions|chat-display)(?:\?|$)/.test(path)?versionedReads.read(path,signal):rawApi(path,body,signal);}
 const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat,loadReferences:loadComposerReferences});
