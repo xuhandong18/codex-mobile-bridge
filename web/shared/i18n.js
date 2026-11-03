@@ -84,6 +84,7 @@ const en={
 "处匹配":"matches",
 "关闭查找":"Close search",
 "复制 Markdown":"Copy Markdown",
+"文稿":"Draft",
 "文字":"text",
 "代码":"code",
 "内容":"content",

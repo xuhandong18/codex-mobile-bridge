@@ -67,6 +67,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 ## Node 与浏览器
 
+文稿块格式识别运行 `node --test tests/markdown-writing.test.cjs`，覆盖截图中的 `:::writing`、正文复制、多个文稿、流式闭合、代码和引用排除、邮件标题与安全边界；`node scripts/test-chat-followups-browser.cjs` 同时在手机、平板和电脑的深浅主题中检查主聊天、侧边聊天及其他客户端的真实文稿布局和剪贴板内容，使用合成 API，不连接真实客户端。
+
 启动时偶发的 HTML／JSON 解析报错运行 `node --test tests/api-response.test.cjs tests/bootstrap.test.cjs` 和 `node scripts/test-api-response-browser.cjs`。覆盖非 JSON 响应、有限补读、固定主机、取消、HTML 401 与正常 JSON 业务错误，以及发送／审批／停止等写入不重放。浏览器使用正式页面和隔离合成接口，在 390、820、1280 像素检查启动短暂异常恢复、持续异常中文提示及合成写入只提交一次；需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`，不操作真实客户端。
 
 Codex 分区的项目标题使用灰色箭头展开／收起其他聊天，展开后的底部箭头每次补充十条。运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs tests/chat-creation-list.test.cjs` 和 `node scripts/test-project-status-browser.cjs`，覆盖零／一／两条状态聊天、空项目及未知分页探查、项目间隔离、刷新保留、读取期间收起与旧回包失效、分页转圈与失败重试、键盘和至少 40px 点击区域。浏览器使用正式页面与合成只读接口，在 390、820、1280 像素执行；加 `--screenshots` 将默认／展开截图写入 `.tmp/project-arrows/`，不操作真实客户端。

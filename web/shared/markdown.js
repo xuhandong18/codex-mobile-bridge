@@ -5,6 +5,46 @@
   markdown.use(texmath, {engine:window.katex, delimiters:['brackets','dollars']});
   const tags = new Set(['p','h1','h2','h3','h4','h5','h6','ul','ol','li','strong','em','s','blockquote','hr','br','table','thead','tbody','tr','th','td']);
 
+  // Writing containers are chat presentation, not Markdown source rewriting.
+  // Parse at the block boundary so code examples and quoted markers stay literal.
+  markdown.block.ruler.before('fence', 'writing', (state, start, end, silent) => {
+    if (!state.env.writingBlocks || state.level !== 0 || state.sCount[start] - state.blkIndent >= 4) return false;
+    const line = n => state.src.slice(state.bMarks[n] + state.tShift[n], state.eMarks[n]);
+    const match = /^:::writing\{(.*)\}[ \t]*$/.exec(line(start));
+    if (!match) return false;
+    const attributes = Object.create(null), attribute = /([a-zA-Z][\w-]*)=("(?:[^"\\\r\n]|\\.)*")(?:[ \t]+|$)/y;
+    let offset = 0;
+    try {
+      while (offset < match[1].length) {
+        attribute.lastIndex = offset;
+        const part = attribute.exec(match[1]);
+        if (!part || Object.hasOwn(attributes, part[1])) return false;
+        attributes[part[1]] = JSON.parse(part[2]); offset = attribute.lastIndex;
+      }
+    } catch { return false; }
+    if (!['standard', 'email'].includes(attributes.variant)) return false;
+    if (silent) return true;
+    let next = start + 1, fence = null, closed = false;
+    for (; next < end; next++) {
+      const source = line(next), indent = state.sCount[next] - state.blkIndent;
+      if (indent >= 4) continue;
+      if (fence) {
+        if (new RegExp('^' + fence[0] + '{' + fence.length + ',}[ \\t]*$').test(source)) fence = null;
+      } else {
+        if (/^:::[ \t]*$/.test(source)) { closed = true; break; }
+        const marker = /^(`{3,}|~{3,})(.*)$/.exec(source);
+        if (marker && (marker[1][0] !== '`' || !marker[2].includes('`'))) fence = marker[1];
+      }
+    }
+    const token = state.push('writing_block', '', 0);
+    token.block = true; token.map = [start, next + (closed ? 1 : 0)];
+    token.content = state.getLines(start + 1, next, state.blkIndent, false).replace(/\n$/, '');
+    token.meta = {closed, subject:attributes.subject || ''};
+    token.children = state.md.parse(token.content, {...state.env, writingBlocks:false});
+    state.line = token.map[1];
+    return true;
+  }, {alt:['paragraph']});
+
   function followup(source) {
     const match = /^:codex-followup\[([^\]\r\n]+)\]\{prompt=("(?:[^"\\\r\n]|\\.)*")\}$/u.exec(source.trim());
     if (!match) return null;
@@ -47,7 +87,7 @@
       // Only server-authorized file URLs may pass the parser's local-URL filter.
       // Rendering still replaces them with authenticated gateway routes below.
       markdown.validateLink = reference => validate(reference) || /^file:\/\//i.test(reference) && artifacts.has(reference);
-      try { return markdown.parse(source, {}); }
+      try { return markdown.parse(source, {writingBlocks:options.writingBlocks === true}); }
       finally { markdown.validateLink = validate; }
     }
     function target(reference, local = false) {
@@ -64,15 +104,15 @@
       if (title) anchor.title = title;
       return anchor;
     }
-    let codeIndex=0;
-    function appendTokens(tokens, root) {
+    let codeIndex=0, writingIndex=0;
+    function appendTokens(tokens, root, inWriting = false) {
       const parents = [root];
       for (let index = 0; index < tokens.length; index++) {
         const token = tokens[index];
         if (token.hidden) continue;
         const parent = parents[parents.length - 1];
         // Match a whole list item before inline parsing unescapes its attributes.
-        const action = typeof options.onFollowup === 'function' && token.type === 'list_item_open' &&
+        const action = !inWriting && typeof options.onFollowup === 'function' && token.type === 'list_item_open' &&
           !parents.some(node => node.tagName === 'BLOCKQUOTE') &&
           // A preview or streaming tail can still acquire a continuation later.
           (options.complete !== false || token.map?.[1] < lastContentLine) &&
@@ -88,8 +128,25 @@
             if (button.isConnected) options.onFollowup(action.prompt);
           };
           item.append(button); parent.append(item); index += 4;
+        } else if (token.type === 'writing_block') {
+          const card = document.createElement('section'); card.className = 'writing-block';
+          const header = document.createElement('div'); header.className = 'writing-header';
+          const title = document.createElement('strong'); title.textContent = token.meta.subject || (typeof BridgeI18n === 'undefined' ? '文稿' : BridgeI18n.t('文稿'));
+          const button = document.createElement('button'); button.className = 'plain writing-copy'; button.type = 'button';
+          button.textContent = typeof BridgeI18n === 'undefined' ? '复制' : BridgeI18n.t('复制');
+          button.disabled = !token.meta.closed;
+          const index = writingIndex++;
+          button.onclick = () => window.BridgeClipboard?.copy(async () => {
+            if (!options.fullText) return token.content;
+            const blocks = parse(await options.fullText()).filter(t => t.type === 'writing_block');
+            if (!blocks[index]?.meta.closed) throw Error('读取完整正文失败，请重试');
+            return blocks[index].content;
+          }, button);
+          const content = document.createElement('div'); content.className = 'writing-content';
+          appendTokens(token.children || [], content, true);
+          header.append(title, button); card.append(header, content); parent.append(card);
         } else if (token.type === 'inline') {
-          appendTokens(token.children || [], parent);
+          appendTokens(token.children || [], parent, inWriting);
         } else if (token.type.startsWith('math_')) {
           const display = token.block || token.type === 'math_inline_double';
           const formula = document.createElement(token.block ? 'div' : 'span');
@@ -129,7 +186,7 @@
             button.onclick=()=>window.BridgeClipboard?.copy(async()=>{
               if(!options.fullText)return token.content;
               const complete=await options.fullText();
-              const blocks=parse(complete).filter(t=>t.type==='fence'||t.type==='code_block');
+              const blocks=parse(complete).flatMap(t=>t.type==='writing_block'?t.children:[t]).filter(t=>t.type==='fence'||t.type==='code_block');
               if(!blocks[index])throw Error('读取完整正文失败，请重试');
               return blocks[index].content;
             },button);

@@ -9,6 +9,8 @@ const escapedPrompt='请检查 "中文引号"、C:\\fixture\\file.txt\n并保留
 const longLabel='检查中文、引号与路径，并在手机平板和电脑上继续明确市场需求标准'.repeat(3);
 const action=(title,text)=>'- :codex-followup['+title+']{prompt='+JSON.stringify(text)+'}';
 const single=action(label,prompt),multiple=action('检查中文与路径',escapedPrompt)+'\n'+action(longLabel,'长标题对应内容');
+const writingContent='请帮我实现一个独立的研究工具。\n\n**工作方式**\n\n1. 保持原系统独立\n2. 由 AI 完成探测与回测\n\n工作区：D:\\fixture\\研究工具';
+const writing='把下面整段复制到新聊天即可：\n\n:::writing{variant="standard" id="91846"}\n'+writingContent+'\n:::\n\n文稿之后的说明。';
 const examples=[
   '> '+single,
   '```markdown\n'+single+'\n```',
@@ -25,7 +27,9 @@ const messages=[
   {key:'user',role:'user',kind:'userMessage',text:single},
   {key:'single',role:'assistant',kind:'agentMessage',text:single},
   {key:'multiple',role:'assistant',kind:'agentMessage',text:multiple},
-  {key:'examples',role:'assistant',kind:'agentMessage',text:examples}
+  {key:'examples',role:'assistant',kind:'agentMessage',text:examples},
+  {key:'writing',role:'assistant',kind:'agentMessage',text:writing},
+  {key:'user-writing',role:'user',kind:'userMessage',text:writing}
 ].map((message,order)=>({...message,id:message.key,phase:'final_answer',turnId:'fixture-history',turnStatus:'completed',order,version:'v1',timestamp:Date.parse('2026-10-23T01:02:03Z')+order*1000}));
 const longSession='33333333-3333-4333-8333-333333333333';
 const longPrefix='长消息合成正文，用于验证截断边界，必须由完整正文决定快捷操作是否有效。'.repeat(80)+'\n\n';
@@ -47,7 +51,8 @@ const server=http.createServer(async(req,res)=>{
     const json=(value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
     if(p.startsWith('/api/')){
       let raw='';for await(const chunk of req)raw+=chunk;const body=raw?JSON.parse(raw):null;
-      // activity 的 POST 是批量只读查询；既有阅读记账另计，业务写入仍必须为零。
+      // activity 的 POST 是只读查询；既有阅读记账另计，业务写入仍必须为零。
+      if(p==='/api/activity/changes')return json({error:'夹具使用普通状态查询'},501);
       const mutation=!['GET','HEAD'].includes(req.method)&&p!=='/api/activity';
       if(mutation&&p.endsWith('/read-state')){readWrites.push({method:req.method,path:p,body});return json({status:'accepted',readCompletions:[body.turnId+':'+body.turnStatus]});}
       if(mutation)writes.push({method:req.method,path:p,body});
@@ -141,6 +146,20 @@ async function checkRendering(page,kind){
   assert.equal(actual.type,'button','按钮不能提交表单');
   assert.ok(!actual.text.includes('codex-followup')&&!actual.text.includes('prompt=')&&!actual.text.includes('预设内容'),'有效操作正文不能暴露标记和预设内容');
   assert.ok((await root.innerText()).includes(':codex-followup'),'代码、引用和无效示例仍可阅读');
+}
+async function checkWriting(page,kind){
+  const root=page.locator(messageSelector(kind)),cards=root.locator('.writing-block');
+  assert.equal(await cards.count(),1,'助手文稿应识别为独立区域，用户原文不转换');
+  const card=cards.first();
+  assert.equal(await card.locator('ol li').count(),2,'文稿正文仍使用 Markdown 排版');
+  assert.ok(!(await card.innerText()).includes(':::writing'));
+  const bounds=await card.boundingBox(),container=await root.boundingBox();
+  assert.ok(bounds.width>0&&bounds.x>=container.x-1&&bounds.x+bounds.width<=container.x+container.width+1,'手机与分屏文稿不能超出聊天区域');
+  await card.locator('button.writing-copy').click();
+  const copied=await page.evaluate(()=>navigator.clipboard.readText());
+  assert.equal(copied.replace(/\r\n/g,'\n'),writingContent,'实际复制只包含完整文稿正文，不含容器标记和前后说明（兼容 Windows 剪贴板换行）');
+  assert.ok((await root.locator('.user').allTextContents()).some(text=>text.includes(':::writing')),'用户粘贴的原文仍可阅读');
+  if(screenshots&&kind==='side')await card.screenshot({path:path.join(screenshots,'writing-side-'+page.viewportSize().width+'.png')});
 }
 async function checkClick(page,kind){
   const root=page.locator(messageSelector(kind)),input=page.locator(inputSelector(kind));
@@ -320,6 +339,7 @@ async function checkLiveCompletion(page,kind){
     const base='http://127.0.0.1:'+server.address().port;
     for(const [width,theme] of [[390,'light'],[820,'dark'],[1280,'light']]){
       const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1280,timezoneId:'Asia/Hong_Kong',serviceWorkers:'block'});
+      await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:base});
       const page=await context.newPage(),errors=[],external=[];page.setDefaultTimeout(7000);
       // 禁止任何非夹具流量，即使生产页面意外增加外部请求也不会接触真实服务。
       await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin===base||['data:','blob:'].includes(url.protocol))return route.continue();external.push(url.origin);return route.abort();});
@@ -334,6 +354,7 @@ async function checkLiveCompletion(page,kind){
         await test('合成页面初始化与主题 '+suffix,async()=>{assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),theme);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);});
         await test('解析边界、流式刷新与填入长度 '+suffix,()=>checkParserAndFill(page));
         await test('主聊天历史正文与角色隔离 '+suffix,()=>checkRendering(page,'main'));
+        await test('主聊天文稿识别、布局与真实复制 '+suffix,()=>checkWriting(page,'main'));
         await test('主聊天真实点击、键盘、展开、焦点和草稿 '+suffix,()=>checkClick(page,'main'));
         await test('主聊天附件引用保留与合计长度限制 '+suffix,()=>checkPreservation(page,'main'));
         await test('主聊天只读、断开及输入区限制 '+suffix,()=>checkReadonly(page,'main'));
@@ -342,6 +363,7 @@ async function checkLiveCompletion(page,kind){
         await test('主聊天切换、旧时间线和主机隔离 '+suffix,()=>checkStaleMain(page));
         await selectSide(page);
         await test('侧边聊天历史正文与角色隔离 '+suffix,()=>checkRendering(page,'side'));
+        await test('侧边聊天文稿识别、布局与真实复制 '+suffix,()=>checkWriting(page,'side'));
         await test('侧边聊天真实点击、键盘、展开和焦点 '+suffix,()=>checkClick(page,'side'));
         await test('侧边聊天附件引用保留与长度限制 '+suffix,()=>checkPreservation(page,'side'));
         await test('侧边聊天只读、过期及断开 '+suffix,()=>checkReadonly(page,'side'));
@@ -352,6 +374,7 @@ async function checkLiveCompletion(page,kind){
         for(const provider of ['claude','deepseek']){
           await open(page,first,provider);await selectMain(page,'desktop');
           await test(provider+' 历史主消息与角色隔离 '+suffix,()=>checkRendering(page,'desktop'));
+          await test(provider+' 文稿识别、布局与真实复制 '+suffix,()=>checkWriting(page,'desktop'));
           await test(provider+' 真实点击、键盘、展开、焦点和草稿 '+suffix,()=>checkClick(page,'desktop'));
           await test(provider+' 附件引用保留与长度限制 '+suffix,()=>checkPreservation(page,'desktop'));
           await test(provider+' 旧缓存与禁止发送限制 '+suffix,()=>checkReadonly(page,'desktop'));
