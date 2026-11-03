@@ -67,6 +67,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 ## Node 与浏览器
 
+Codex 分区的项目标题使用灰色箭头展开／收起其他聊天，展开后的底部箭头每次补充十条。运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs tests/chat-creation-list.test.cjs` 和 `node scripts/test-project-status-browser.cjs`，覆盖零／一／两条状态聊天、空项目及未知分页探查、项目间隔离、刷新保留、读取期间收起与旧回包失效、分页转圈与失败重试、键盘和至少 40px 点击区域。浏览器使用正式页面与合成只读接口，在 390、820、1280 像素执行；加 `--screenshots` 将默认／展开截图写入 `.tmp/project-arrows/`，不操作真实客户端。
+
 聊天末尾快捷按钮运行 `node --test tests/markdown-followups.test.cjs` 和 `node scripts/test-chat-followups-browser.cjs`。前者执行生产 Markdown 解析及输入填充逻辑，覆盖完整标记、转义、不完整输入、代码和引用排除、长度校验及草稿保留；后者使用生产页面和合成 API，在手机、平板和电脑尺寸实际点击主聊天与侧边聊天的按钮，检查展开、追加、焦点、草稿恢复、上下文隔离及零消息提交，并实际展开长消息的分段详情，核验截断末尾不误转、完整加载后恢复合法按钮，以及流式结束时正文未变也能正确重绘。需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`；不操作真实聊天，也不调用模型。
 
 项目菜单的“置顶／取消置顶”由 `tests/sidebar-sync.test.cjs` 验证原生及回退菜单、分区及项目视图、本地及远程项目、空项目和取消后恢复原分区；`node scripts/test-sidebar-preferences-browser.cjs` 在手机／平板长按及电脑右键中实际操作，检查跨设备同步和重载保留。项目菜单的“隐藏无状态聊天”也由 `tests/sidebar-sync.test.cjs` 验证原生及回退菜单、项目隔离、已读保留聊天收回、重新加载和在途加载更多失效；`node scripts/test-project-status-browser.cjs` 在手机／平板长按及电脑右键中实际点击该入口，检查显示、后台刷新和再次加载。均使用合成数据，不操作真实聊天。

@@ -145,21 +145,73 @@ test('分区项目默认显示明确状态，初始灰点和普通置顶聊天�
   context.projectPins.toggle('local|p','chat-26');context.projectPins.toggle('local|p','chat-24');
   const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
   const ids=()=>group('local|p').children.filter(node=>node.dataset.id).map(node=>node.dataset.id);
-  const more=()=>group('local|p').children.find(node=>node.className==='plain project-load-more');
+  const more=()=>group('local|p').querySelectorAll('.project-load-more')[0]||group('local|p').querySelectorAll('.project-chat-toggle')[0];
   context.renderList();
   const marked=['chat-26','chat-25','chat-28','chat-29','chat-30'];
   assert.deepEqual(ids(),marked,'红绿蓝橙及侧边汇总标记默认显示，带标记的置顶优先');
   assert.equal(group('local|other').children.filter(node=>node.dataset.id).length,0);
   const ordinary=['chat-24',...Array.from({length:24},(_,i)=>'chat-'+i),'chat-27','chat-31'];
   for(const count of [10,20,27]){
-    await more().onclick();
+    await more().onclick({preventDefault(){},stopPropagation(){}});
     assert.deepEqual(new Set(ids()),new Set([...marked,...ordinary.slice(0,count)]));
     assert.equal(ids()[0],'chat-24','加载后仍保持项目置顶优先');
     assert.equal(group('local|other').children.filter(node=>node.dataset.id).length,0,'加载进度不影响其他项目');
     context.listRows[0].title+='!';context.renderList();
     assert.equal(ids().length,marked.length+count,'刷新保留加载进度');
   }
-  assert.equal(more(),undefined);
+  assert.equal(group('local|p').querySelectorAll('.project-load-more').length,0);
+  assert.equal(more()['aria-expanded'],'true');
+});
+
+for(const marked of [0,1,2])test('分区项目只有 '+marked+' 条状态聊天时，箭头仅放在标题且空项目不显示入口',async()=>{
+  const {context,nodes,selected}=fixture();
+  context.listRows=Array.from({length:marked+3},(_,i)=>({id:'small-'+i,host:'local',title:'Small '+i,projectKey:'local|p',projectName:'Project',recency:100-i}));
+  context.sessionActivity.update(context.listRows.slice(0,marked).map(row=>({...row,connected:true,status:'active'})));
+  context.renderList();
+  const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
+  const toggle=()=>group('local|p').querySelectorAll('.project-chat-toggle')[0];
+  const count=()=>group('local|p').children.filter(node=>node.dataset.id).length;
+  assert.equal(count(),marked);
+  assert.equal(group('local|p').querySelectorAll('.project-load-more').length,0);
+  assert.equal(group('local|empty').querySelectorAll('.project-chat-toggle').length,0);
+  let prevented=false,stopped=false;
+  group('local|p').open=false;
+  await toggle().onclick({preventDefault(){prevented=true;},stopPropagation(){stopped=true;}});
+  assert.ok(prevented&&stopped);assert.equal(group('local|p').open,true);
+  assert.equal(count(),marked+3);assert.equal(toggle()['aria-expanded'],'true');
+  assert.equal(group('local|p').querySelectorAll('.project-load-more').length,0);
+  toggle().onclick({preventDefault(){},stopPropagation(){}});
+  assert.equal(count(),marked);assert.equal(toggle()['aria-expanded'],'false');
+  group('local|p').querySelectorAll('.project-create')[0].onclick({preventDefault(){},stopPropagation(){}});
+  assert.equal(selected[0].key,'local|p');assert.equal(count(),marked);
+});
+
+test('标题加载失败可通过底部箭头重试，已确认空项目不保留展开入口',async()=>{
+  const {context,nodes}=fixture();context.listHasMore=true;
+  const group=key=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key);
+  context.loadList=async()=>{throw Error('offline');};
+  await context.loadProjectChats('local|empty');
+  assert.equal(context.projectPage('local|empty').expanded,true);
+  assert.equal(group('local|empty').querySelectorAll('.project-load-more')[0].disabled,false);
+  context.loadList=async()=>{context.listHasMore=false;return true;};
+  await group('local|empty').querySelectorAll('.project-load-more')[0].onclick();
+  assert.equal(context.projectPage('local|empty').expanded,false);
+  assert.equal(group('local|empty').querySelectorAll('.project-chat-toggle').length,0);
+});
+
+test('标题转圈期间可以收起，旧读取完成不能恢复展开',async()=>{
+  const {context,nodes}=fixture();context.listHasMore=true;
+  const group=()=>nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
+  const toggle=()=>group().querySelectorAll('.project-chat-toggle')[0];
+  let finish;context.loadList=()=>new Promise(resolve=>finish=resolve);
+  const pending=context.loadProjectChats('local|p');
+  assert.equal(toggle()['aria-busy'],'true');assert.equal(toggle().disabled,false);
+  toggle().onclick({preventDefault(){},stopPropagation(){}});
+  context.listRows.push(...Array.from({length:15},(_,i)=>({...context.listRows[0],id:'arrow-late-'+i})));
+  context.listHasMore=false;finish(true);await pending;
+  assert.equal(context.projectPage('local|p').expanded,false);
+  assert.equal(toggle()['aria-expanded'],'false');
+  assert.deepEqual(group().children.filter(node=>node.dataset.id).map(node=>node.dataset.id),['thread']);
 });
 
 test('分区项目已显示的聊天在已读和状态消失后留在原处，新页面才恢复默认筛选',()=>{
@@ -313,7 +365,7 @@ for(const native of [true,false])test('项目菜单隐藏无状态聊天并保�
   assert.deepEqual(ids('local|other'),other,'只收起当前项目');
   assert.equal(JSON.stringify(context.listRows),beforeRows,'只修改本页面显示，不改聊天和归属');
   context.listRows[0].title='Updated';context.renderList();assert.deepEqual(ids('local|p'),['thread']);
-  assert.ok(group('local|p').children.some(node=>node.className==='plain project-load-more'));
+  assert.ok(group('local|p').querySelectorAll('.project-chat-toggle').length);
   await context.loadProjectChats('local|p');assert.equal(ids('local|p').length,11,'仍可再次加载十条普通聊天');
 });
 

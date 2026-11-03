@@ -407,20 +407,25 @@ function hasProjectStatus(id,host){
   return !!indicator&&indicator.kind!=='unknown';
 }
 function projectPage(key){
-  if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,statusLimit:0,statusChats:new Set(),loading:false,activityOffset:0});
+  if(!projectChatPages.has(key))projectChatPages.set(key,{limit:5,statusLimit:0,expanded:false,statusChats:new Set(),loading:false,activityOffset:0});
   return projectChatPages.get(key);
 }
-function hideProjectChats(item){
-  const current=currentSidebarEntry(item),page=projectPage(current.id);
+function collapseProjectChats(key){
+  const page=projectPage(key);
   // Replace the page so a pending load-more response cannot reopen hidden rows.
-  projectChatPages.set(current.id,{...page,statusLimit:0,statusChats:new Set(),loading:false});
+  projectChatPages.set(key,{...page,statusLimit:0,expanded:false,statusChats:new Set(),loading:false,loadingControl:null});
   listRenderStamp='';renderList();
+}
+function hideProjectChats(item){
+  collapseProjectChats(currentSidebarEntry(item).id);
 }
 async function loadProjectChats(key){
   const page=projectPage(key);
   if(page.loading||listLoading)return;
   const native=$('list-mode').value==='codex',limitKey=native?'statusLimit':'limit';
   const target=page[limitKey]+10,filter=listFilterKey;
+  page.loadingControl=native&&!page.expanded?'toggle':'more';
+  if(native)page.expanded=true;
   page.loading=true;listRenderStamp='';renderList();
   try{
     // The existing API reads cumulative global pages. Keep reading metadata until
@@ -429,9 +434,25 @@ async function loadProjectChats(key){
       if(await loadList()===false)return;
       if(projectChatPages.get(key)!==page||filter!==listFilterKey)return;
     }
-    if(projectChatPages.get(key)===page&&filter===listFilterKey)page[limitKey]=target;
+    if(projectChatPages.get(key)===page&&filter===listFilterKey){
+      page[limitKey]=target;
+      if(native&&!listHasMore&&!projectRows(key).some(row=>!page.statusChats.has(chatKey(row.id,row.host))&&!createdChatVisibility.has(chatKey(row.id,row.host))&&!hasProjectStatus(row.id,row.host))){page.expanded=false;page.statusLimit=0;}
+    }
   }catch(error){toast(error.message);}
-  finally{page.loading=false;listRenderStamp='';renderList();}
+  finally{page.loading=false;page.loadingControl=null;listRenderStamp='';renderList();}
+}
+function projectChatArrow(kind,page){
+  const toggle=kind==='toggle',expanded=toggle&&page.expanded;
+  const button=el('button','plain project-chat-arrow '+(toggle?'project-chat-toggle':'project-load-more'));
+  button.type='button';button.title=t(toggle?(expanded?'收起其他聊天':'展开其他聊天'):'再显示 10 条聊天');
+  button.setAttribute('aria-label',button.title);
+  if(toggle)button.setAttribute('aria-expanded',String(expanded));
+  const busy=page.loading&&page.loadingControl===kind;
+  button.setAttribute('aria-busy',String(busy));
+  const icon=el('span','project-chat-arrow-icon'+(busy?' loading':expanded?' expanded':''));
+  icon.setAttribute('aria-hidden','true');button.append(icon);
+  button.disabled=!(toggle&&expanded)&&(page.loading||!!listLoading);
+  return button;
 }
 function collapseSidebarGroups(){
   for(const group of $('sessions').querySelectorAll('.sidebar-section, .project-group')){
@@ -442,10 +463,10 @@ function collapseSidebarGroups(){
 }
 function renderList(){
   if(typeof syncListModeTabs==='function')syncListModeTabs();
-  const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.loading])]:null;
+  const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.expanded||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.expanded,page.loading,page.loadingControl])]:null;
   const statusChats=new Set(['codex','recent'].includes($('list-mode').value)?listRows.filter(row=>hasProjectStatus(row.id,row.host)).map(row=>chatKey(row.id,row.host)):[]);
   const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,statusChats.has(chatKey(row.id,row.host))])]);
-  if(stamp===listRenderStamp&&$('sessions').children.length){for(const button of $('sessions').querySelectorAll('.project-load-more')){const key=button.closest('.project-group')?.dataset.projectKey;if(key)button.disabled=!!listLoading||!!projectPage(key).loading;}renderActivity(false);return;}
+  if(stamp===listRenderStamp&&$('sessions').children.length){for(const button of $('sessions').querySelectorAll('.project-load-more, .project-chat-toggle')){const key=button.closest('.project-group')?.dataset.projectKey;if(key)button.disabled=!(button.className.includes('project-chat-toggle')&&projectPage(key).expanded)&&(!!listLoading||!!projectPage(key).loading);}renderActivity(false);return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
   // A native toggle event can still be queued when a status refresh rebuilds
@@ -542,9 +563,19 @@ function renderList(){
       const ordinary=all.filter(node=>!marked(node)),shown=new Set(ordinary.slice(0,page.statusLimit));
       root.replaceChildren(summary,...all.filter(node=>marked(node)||shown.has(node)));
       hasMore=ordinary.length>page.statusLimit;
+      if(page.expanded||hasMore||listHasMore){
+        const toggle=projectChatArrow('toggle',page);
+        toggle.onclick=event=>{
+          event.preventDefault();event.stopPropagation();
+          if(projectPage(key).expanded){collapseProjectChats(key);return;}
+          root.open=true;root.ontoggle?.();
+          return loadProjectChats(key);
+        };
+        summary.replaceChildren(summary.children[0],toggle,summary.children[1]);
+      }
     }else root.replaceChildren(summary,...pinned,...ordered.slice(0,page.limit));
-    if(hasMore||listHasMore){
-      const more=el('button','plain project-load-more',t(page.loading?'正在读取…':'加载更多'));more.type='button';more.disabled=page.loading||!!listLoading;
+    if((hasMore||listHasMore)&&(!native||page.expanded&&page.loadingControl!=='toggle')){
+      const more=native?projectChatArrow('more',page):el('button','plain project-load-more',t(page.loading?'正在读取…':'加载更多'));more.type='button';more.disabled=page.loading||!!listLoading;
       more.onclick=()=>loadProjectChats(key);root.append(more);
     }
   }
