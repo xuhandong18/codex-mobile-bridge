@@ -834,6 +834,7 @@ const newChatScopes=new Map();
 try{for(const row of JSON.parse(localStorage.getItem('new-chat-scopes')||'[]'))if(Array.isArray(row)&&row.length===2&&row.every(value=>typeof value==='string'))newChatScopes.set(...row);}catch{}
 function newChatPreferencePrefix(){return (window.BridgeRelayBase||location.origin||location.host||'gateway')+'|';}
 const newChatSettings=new NewChatSettings($('new-chat-form'),{request:api,scope:(project,kind)=>newChatPreferencePrefix()+(newChatProjects.find(row=>row.key===project)?.host||'local')+'|'+kind});
+for(const event of ['bridge-auth-lost','bridge-logged-out'])document.addEventListener(event,()=>newChatSettings.clearCatalog());
 function rememberNewChatSetting(id,host,changes){const scope=newChatScopes.get(chatKey(id,host));if(scope?.startsWith(newChatPreferencePrefix()))newChatSettings.defaults.remember(scope,changes);}
 $('new-chat-title').value=t('新聊天');
 $('new-chat-title').oninput=()=>{$('new-chat-title').dataset.edited='true';};
@@ -1409,6 +1410,8 @@ async function loadCatalogKind(kind,refresh=false){
 }
 function startCatalog(){loadCatalogKind('models').catch(()=>{});}
 function resetModelCatalog(){
+  newChatSettings.clearCatalog();
+  if($('new-chat-dialog').open)newChatSettings.load($('new-chat-project').value,$('new-chat-type').value);
   composerReferences.close();composerReferences.states.clear();
   modelCatalogGeneration++;catalogData.models=null;catalogResults.models=null;catalogTasks.models=null;
   modelRequest++;modelTarget=null;fastModeControl.reset();$('model-dialog').close();

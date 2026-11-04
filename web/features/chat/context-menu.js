@@ -49,7 +49,7 @@ class NewChatDefaults {
 
 class NewChatSettings {
   constructor(form,{request,scope}){
-    this.request=request;this.scope=scope;this.defaults=new NewChatDefaults();this.revision=0;
+    this.request=request;this.scope=scope;this.defaults=new NewChatDefaults();this.revision=0;this.catalogs=new Map();
     const field=(label,node)=>{const row=document.createElement('label'),caption=document.createElement('span');caption.dataset.i18n=label;caption.textContent=BridgeI18n.t(label);row.append(caption,node);form.querySelector('#new-chat-error').before(row);return node;};
     this.model=field('模型',document.createElement('select'));this.model.id='new-chat-model';
     this.custom=field('自定义模型 ID',document.createElement('input'));this.custom.maxLength=200;this.custom.id='new-chat-custom-model';
@@ -71,11 +71,25 @@ class NewChatSettings {
     this.model.disabled=!project;this.permission.disabled=!project;
     this.catalogStatus.textContent='';this.retry.hidden=true;
     if(!project)return;
+    const cached=this.catalogs.get(this.catalogKey());
+    if(cached){
+      this.applyCatalog(cached.catalog);
+      if(Date.now()-cached.at<300000)return;
+    }
     return this.loadCatalog();
   }
   cancel(){this.revision++;this.controller?.abort();this.loading=false;}
+  clearCatalog(){this.cancel();this.catalogs.clear();}
+  catalogKey(){return JSON.stringify([this.key,this.project,this.kind]);}
+  applyCatalog(catalog){
+    const selected=this.value(),custom=this.model.value==='__custom__';
+    this.rows=catalog.models;
+    this.model.replaceChildren(this.option('沿用 Codex 默认设置',''),...this.rows.map(row=>new Option(row.name||row.id,row.id)),this.option('自定义模型…','__custom__'));
+    this.model.value=selected.model?(this.rows.some(row=>row.id===selected.model)?selected.model:'__custom__'):custom?'__custom__':'';
+    this.custom.value=selected.model;this.fillEfforts(selected.effort);
+  }
   async loadCatalog(){
-    const revision=this.revision,project=this.project,kind=this.kind;this.loading=true;this.retry.hidden=true;
+    const revision=this.revision,project=this.project,kind=this.kind,key=this.catalogKey();this.loading=true;this.retry.hidden=true;
     this.catalogStatus.textContent=BridgeI18n.t('正在加载模型列表…');
     try{
       let catalog;
@@ -91,11 +105,9 @@ class NewChatSettings {
       if(revision!==this.revision)return;
       if(catalog.modelError)throw Error(catalog.modelError);
       if(!Array.isArray(catalog.models)||!catalog.models.length)throw Error(BridgeI18n.t('未获取到可用模型，请重试。'));
-      const selected=this.value(),custom=this.model.value==='__custom__';
-      this.rows=Array.isArray(catalog.models)?catalog.models:[];
-      this.model.replaceChildren(this.option('沿用 Codex 默认设置',''),...this.rows.map(row=>new Option(row.name||row.id,row.id)),this.option('自定义模型…','__custom__'));
-      this.model.value=selected.model?(this.rows.some(row=>row.id===selected.model)?selected.model:'__custom__'):custom?'__custom__':'';
-      this.custom.value=selected.model;this.fillEfforts(selected.effort);
+      this.catalogs.delete(key);this.catalogs.set(key,{at:Date.now(),catalog});
+      while(this.catalogs.size>16)this.catalogs.delete(this.catalogs.keys().next().value);
+      this.applyCatalog(catalog);
       this.catalogStatus.textContent='';
     }catch(error){
       if(revision!==this.revision)return;

@@ -32,12 +32,13 @@ async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage,accountS
   for(const match of html.matchAll(/<([a-z]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)){
     const n=node(match[1]);n.hidden=/\bhidden\b/.test(match[2]);nodes.set(match[3],n);
   }
-  const document={body:node('body'),activeElement:null,addEventListener(){},dispatchEvent(){},documentElement:{},getElementById:id=>nodes.get(id)||allNodes(document.body).find(node=>node.id===id),querySelector:()=>({classList:{toggle(){}}}),querySelectorAll:()=>[],createElement:node};
+  const documentListeners=new Map();
+  const document={body:node('body'),activeElement:null,addEventListener(name,fn){if(!documentListeners.has(name))documentListeners.set(name,[]);documentListeners.get(name).push(fn);},dispatchEvent(event){for(const fn of documentListeners.get(event.type)||[])fn(event);},documentElement:{},getElementById:id=>nodes.get(id)||allNodes(document.body).find(node=>node.id===id),querySelector:()=>({classList:{toggle(){}}}),querySelectorAll:()=>[],createElement:node};
   document.body.append(...nodes.values());
   for(const value of ['default','plan','goal']){const option=node('option');option.value=value;nodes.get('work-mode').append(option);}
   const storage=()=>{const saved=new Map();return {getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,String(value)),removeItem:key=>saved.delete(key),clear:()=>saved.clear()};};
   const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
-  const context=vm.createContext({SidebarNavigation:class{},ChatContextMenu:class{},SelectedTextAction:class{},NewChatSettings:class{constructor(){this.defaults={remember(){}};}load(){}},ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}async openChatLink(hash){assert.equal(hash,'','This fixture enters without a chat deep link');return false;}},DesktopSessionsView:class{clear(){}},Workbench:class{constructor(){this.fileQuotes={rows:[],validate:()=>nodes.get('message').value,text:()=>nodes.get('message').value,clear(){},forget(){}};}open(){}reset(){}setThumbnails(){}relabel(){}},Event:class{constructor(type){this.type=type;}},navigator:{userAgent:'test'},Date,crypto:webcrypto,Option:function(text,value){return {...node('option'),textContent:text,value};},document,
+  const context=vm.createContext({SidebarNavigation:class{},ChatContextMenu:class{},SelectedTextAction:class{},NewChatSettings:class{constructor(){this.defaults={remember(){}};this.catalogClears=0;this.loads=[];}clearCatalog(){this.catalogClears++;}load(project,kind){this.loads.push({project,kind});}},ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}async openChatLink(hash){assert.equal(hash,'','This fixture enters without a chat deep link');return false;}},DesktopSessionsView:class{clear(){}},Workbench:class{constructor(){this.fileQuotes={rows:[],validate:()=>nodes.get('message').value,text:()=>nodes.get('message').value,clear(){},forget(){}};}open(){}reset(){}setThumbnails(){}relabel(){}},Event:class{constructor(type){this.type=type;}},navigator:{userAgent:'test'},Date,crypto:webcrypto,Option:function(text,value){return {...node('option'),textContent:text,value};},document,
     AbortController,window:{addEventListener:(name,fn)=>events[name]=fn},localStorage:storage(),sessionStorage:storage(),
     location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},
     setTimeout(fn,delay){timers.set(++timerId,{fn,delay});return timerId;},clearTimeout(id){timers.delete(id);},setInterval(fn,delay){intervals.push({fn,delay});},
@@ -315,9 +316,23 @@ test('an account catalog reset closes references and discards cached source page
   await ui.nodes.get('skills-button').onclick();
   assert.equal(ui.run('composerReferences.dialog.open'),true);assert.equal(ui.run('composerReferences.active.items.length'),1);
   ui.run('resetModelCatalog()');
+  assert.equal(ui.run('newChatSettings.catalogClears'),1);
   assert.equal(ui.run('composerReferences.dialog.open'),false);assert.equal(ui.run('composerReferences.states.size'),0);
   await ui.nodes.get('skills-button').onclick();
   assert.equal(ui.requests.filter(url=>url.includes('kind=skills')).length,2,'The same chat must reload its new account catalog');
+});
+
+test('账号变化刷新已打开的新建模型列表，认证失效和退出清理目录缓存',async()=>{
+  const ui=await fixture(r=>r(official));
+  ui.nodes.get('new-chat-dialog').open=true;ui.nodes.get('new-chat-project').value='remote|p';ui.nodes.get('new-chat-type').value='cli';
+  ui.run('resetModelCatalog()');
+  assert.equal(ui.run('newChatSettings.catalogClears'),1);
+  assert.equal(ui.run('JSON.stringify(newChatSettings.loads)'),JSON.stringify([{project:'remote|p',kind:'cli'}]));
+  for(const event of ['bridge-auth-lost','bridge-logged-out']){
+    const before=ui.run('newChatSettings.catalogClears');
+    ui.run('document.dispatchEvent(new Event('+JSON.stringify(event)+'))');
+    assert.equal(ui.run('newChatSettings.catalogClears'),before+1);
+  }
 });
 
 test('Skill failure clears the loading state and refresh can recover',async()=>{

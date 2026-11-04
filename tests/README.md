@@ -6,6 +6,8 @@
 
 新建聊天模型列表恢复运行 `node --test tests/new-chat-settings.test.cjs`、`python -B scripts/test-backend.py --source-only -p test_api_catalog.py` 和 `node scripts/test-composer-drafts-browser.cjs`。覆盖完整目录后台补齐、目录服务临时失败只读重试一次、失败与空目录提示、手动重试保留设置、切换项目和关闭窗口丢弃旧响应，以及失败目录不阻塞后续读取。浏览器只使用合成接口，不创建真实聊天或调用模型。
 
+重复打开的目录复用另运行 `node --test tests/account-startup.test.cjs`。可控时钟检查五分钟内不重复请求、到期后立即展示旧目录并后台更新、更新失败不延长有效期、最新已保存设置恢复、网关/主机/项目/类型隔离、十六份缓存上限，以及账号变化、认证失效和退出清理。上述浏览器驱动在手机、平板和电脑宽度实际关闭重开窗口，统计目录请求，并阻塞到期查询，确认完整模型选项可直接使用且用户选择不会被晚到结果覆盖。
+
 DeepSeek 第 10 版主聊天和侧边聊天分别验收：运行 `node --test tests/deepseek-personal.test.mjs tests/deepseek-history.test.mjs tests/deepseek-inline-edit.test.mjs tests/deepseek-capacity.test.mjs`，后端运行 `python -B scripts/test-backend.py --source-only -p 'test_deepseek*.py'` 和 `-p test_desktop_uploads.py`。新增真实浏览器入口 `node scripts/test-deepseek-history-browser.cjs` 使用正式原生历史转换，在手机竖横屏、平板和电脑执行 132 项断言，包括主侧完整目录、两个相邻窗口、新回复保留阅读位置、普通文件实际上传与子会话归属、计划正文、关闭重开和失效恢复。已有能力另跑 `node scripts/test-deepseek-browser.cjs`。边界及交付说明见 [DeepSeek 本轮补齐](../docs/deepseek-feature-parity.md)。
 
 ## Python 后端

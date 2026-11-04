@@ -11,15 +11,86 @@ class Element{
   set value(value){this._value=this.tag==='select'&&!this.children.some(n=>n.value===value)?'':value;}
 }
 function fixture(saved={}){
+  let now=1000000;
   const pending=[],values=new Map([['new-chat-defaults:local|desktop',JSON.stringify(saved)]]);
-  const context=vm.createContext({AbortController,setTimeout,clearTimeout,BridgeI18n:{t:x=>x},localStorage:{getItem:key=>values.get(key)||null},
+  const context=vm.createContext({AbortController,setTimeout,clearTimeout,Date:{now:()=>now},BridgeI18n:{t:x=>x},localStorage:{getItem:key=>values.get(key)||null},
     document:{createElement:tag=>new Element(tag)},Option:function(label,value){const node=new Element('option');node.textContent=label;node.value=value;return node;}});
   vm.runInContext(fs.readFileSync('web/features/chat/context-menu.js','utf8'),context);
   const Settings=vm.runInContext('NewChatSettings',context),settings=new Settings({querySelector:()=>new Element()},{
     scope:(project,kind)=>project.split('|')[0]+'|'+kind,request:(url,_body,signal)=>new Promise((resolve,reject)=>pending.push({url,resolve,reject,signal}))});
-  return {settings,pending};
+  return {settings,pending,values,advance:ms=>now+=ms};
 }
 const catalog={models:[{id:'fast',name:'Fast',efforts:['low','high'],defaultEffort:'low'}]};
+
+test('关闭后重开同一项目立即复用完整模型目录，不重复等待请求',async()=>{
+  const {settings:s,pending}=fixture(),first=s.load('local|p','desktop');
+  pending[0].resolve(catalog);await first;s.cancel();
+  const reopened=s.load('local|p','desktop');
+  // Resolve an unexpected request as well so a failing test leaves no timeout behind.
+  if(pending[1])pending[1].resolve(catalog);
+  assert.equal(s.model.children.some(node=>node.value==='fast'),true,'重开时完整模型列表应立即可选');
+  assert.equal(pending.length,1,'新建窗口不应每次重复读取同一份模型目录');
+  await reopened;
+});
+
+test('目录缓存命中仍恢复最新记住的模型、推理强度和权限',async()=>{
+  const {settings:s,pending,values,advance}=fixture(),first=s.load('local|p','desktop');
+  pending[0].resolve(catalog);await first;s.cancel();advance(299999);
+  const saved={model:'fast',effort:'high',permission:'ask'};
+  values.set('new-chat-defaults:local|desktop',JSON.stringify(saved));
+  await s.load('local|p','desktop');
+  assert.equal(pending.length,1);assert.equal(s.loading,false);assert.equal(s.catalogStatus.textContent,'');
+  assert.deepEqual({...s.value()},saved);
+});
+
+test('五分钟后先展示旧目录再后台更新，失败不清空列表且不会延长缓存有效期',async()=>{
+  const {settings:s,pending,advance}=fixture(),first=s.load('local|p','desktop');
+  pending[0].resolve(catalog);await first;s.cancel();advance(300000);
+  const refresh=s.load('local|p','desktop');
+  assert.equal(s.model.children.some(node=>node.value==='fast'),true);assert.equal(s.loading,true);
+  s.model.value='fast';s.model.onchange();s.effort.value='high';s.permission.value='ask';
+  pending[1].reject(Error('连接失败'));await refresh;
+  assert.equal(s.retry.hidden,false);assert.deepEqual({...s.value()},{model:'fast',effort:'high',permission:'ask'});
+  const reopened=s.load('local|p','desktop');assert.equal(pending.length,3);
+  pending[2].resolve({models:[{id:'updated',efforts:['high']}]});await reopened;
+  assert.equal(s.model.children.some(node=>node.value==='updated'),true);
+  await s.load('local|p','desktop');assert.equal(pending.length,3);
+});
+
+test('不同项目、主机、聊天类型和网关不混用目录，切回原项目可以复用',async()=>{
+  const {settings:s,pending}=fixture(),first=s.load('local|p','desktop');
+  pending[0].resolve(catalog);await first;
+  const originalScope=s.scope;
+  for(const [project,kind] of [['local|other','desktop'],['remote|p','desktop'],['local|p','cli'],['local|p','desktop']]){
+    if(pending.length===4)s.scope=(project,kind)=>'other-gateway|'+originalScope(project,kind);
+    const index=pending.length,load=s.load(project,kind);
+    assert.equal(s.model.children.some(node=>node.value==='fast'),false);
+    assert.equal(pending.length,index+1);pending[index].resolve({models:[{id:'isolated-'+index}]});await load;
+  }
+  s.scope=originalScope;await s.load('local|p','desktop');
+  assert.equal(s.model.children.some(node=>node.value==='fast'),true);assert.equal(pending.length,5);
+});
+
+test('身份或账号变化清理目录并丢弃在途旧响应，下一次重新查询',async()=>{
+  const {settings:s,pending}=fixture(),first=s.load('local|p','desktop');
+  pending[0].resolve(catalog);await first;
+  const old=s.loadCatalog();s.clearCatalog();
+  assert.equal(pending[1].signal.aborted,true);
+  pending[1].resolve({models:[{id:'old-account'}]});await old;
+  const next=s.load('local|p','desktop');
+  assert.equal(s.model.children.some(node=>node.value==='fast'||node.value==='old-account'),false);
+  assert.equal(pending.length,3);pending[2].resolve({models:[{id:'new-account'}]});await next;
+  await s.load('local|p','desktop');assert.equal(pending.length,3);
+});
+
+test('目录只保留最近十六份，淘汰后重新查询',async()=>{
+  const {settings:s,pending}=fixture();
+  for(let i=0;i<17;i++){
+    const load=s.load('local|p'+i,'desktop');pending[i].resolve(catalog);await load;
+  }
+  await s.load('local|p16','desktop');assert.equal(pending.length,17);
+  const evicted=s.load('local|p0','desktop');assert.equal(pending.length,18);pending[17].resolve(catalog);await evicted;
+});
 
 test('首次模型请求未返回时，默认设置、权限和自定义模型可直接使用',async()=>{
   const {settings:s,pending}=fixture(),load=s.load('local|p','desktop');
