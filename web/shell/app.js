@@ -89,7 +89,7 @@ function renderHostErrors(hosts){
   root.hidden=!root.childElementCount;
 }
 function clearListSnapshot(){
-  activityChanges?.reset();activityChangeKeys.clear();activityPolling?.clear();versionedReads?.clear();
+  activityChangesEnabled=false;activityChanges?.reset();activityChangeKeys.clear();activityPolling?.clear();versionedReads?.clear();
   sidebarPreferences.reset();
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(/^codex-list-v[12]:/.test(key||''))sessionStorage.removeItem(key);}
   createdChats.clear();createdChatVisibility.clear();projectChatPages.clear();
@@ -172,7 +172,7 @@ function renderActivity(updateList=true){
   if(indicator){const dot=el('span','session-indicator '+indicator.kind);dot.title=t(indicator.label);dot.setAttribute('aria-label',t(indicator.label));button.querySelector('strong').prepend(dot);}
 }if(state&&currentId)$('status').textContent=chatStatusText(state,sessionAccess(state.access));if(unknownAppeared)scheduleActivityRefresh();}
 async function refreshActivity(resuming=false){
-  const targets=activityTargets();activityChanges?.setScope(targets?.watch||{});
+  const targets=activityTargets();activityChanges?.setScope(activityChangesEnabled?targets?.watch||{}:{});
   if(!targets)return;
   const {visible,projects,scope}=targets,hosts={},reads=[],eventsOnly=resuming==='changes';
   const eligible=new Set(Object.entries(scope).flatMap(([host,ids])=>ids.map(id=>chatKey(id,host))));
@@ -258,6 +258,7 @@ async function readActivity(host,ids,{background=false}={}){
 }
 const activityPendingKeys=new Set(),activityChangeKeys=new Set();
 const activityPolling=typeof ActivityPolling==='function'?new ActivityPolling():null;
+let activityChangesEnabled=false;
 const activityChanges=typeof ActivityChanges==='function'?new ActivityChanges({request:api,onChange:queueActivityChanges}):null;
 let activityRefreshTimer=null,activityRefreshPending=false,activityBackgroundCursor=0;
 function scheduleActivityRefresh(resuming=false){clearTimeout(activityRefreshTimer);activityRefreshTimer=setTimeout(()=>refreshActivity(resuming===true?true:resuming==='changes'?'changes':'poll'),100);}
@@ -309,6 +310,7 @@ async function enter(authInfo){
     if(/(?:^|[?&])open=harness(?:&|$)/.test(location.search||'')){history.replaceState(null,'','/');await openHarness();}
     const verified=authInfo?.authenticated?authInfo:await api('/api/auth');
     if(!verified.authenticated)throw Error(t('登录状态暂不可用'));
+    activityChangesEnabled=verified.activityChanges===true;
     window.BridgeChatDisplaySnapshot=verified.chatDisplay;
     window.BridgePresentation?.acceptDisplay(verified.chatDisplay);
     sidebarData={sections:[],projects:[]};

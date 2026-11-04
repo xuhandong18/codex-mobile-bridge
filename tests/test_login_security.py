@@ -181,6 +181,42 @@ class LoginHttpTests(unittest.TestCase):
         client.close()
         return result
 
+    def test_unread_post_body_does_not_corrupt_the_next_startup_read(self):
+        from types import SimpleNamespace
+        self.server.bridge = SimpleNamespace(for_host=lambda host: SimpleNamespace())
+        status, headers, auth = self.request('/api/login', {'username': 'tester', 'password': 'correct-password'})
+        self.assertEqual(status, 200)
+        cookie = headers['Set-Cookie'].split(';')[0]
+        for endpoint, expected_status, close in [('/api/missing-startup-endpoint', 404, True),
+                                                  ('/api/clients', 503, True),
+                                                  ('/api/logout', 200, False)]:
+            with self.subTest(endpoint=endpoint):
+                client = http.client.HTTPConnection('127.0.0.1', self.port, timeout=3)
+                self.addCleanup(client.close)
+                client.request('POST', endpoint, json.dumps({'hosts': {'local': ['synthetic-chat']}}, separators=(',', ':')),
+                               headers={'Origin': self.origin, 'Content-Type': 'application/json',
+                                        'Cookie': cookie, 'X-CSRF-Token': auth['csrf']})
+                response = client.getresponse()
+                response.read()
+                self.assertEqual(response.status, expected_status)
+                self.assertEqual(response.getheader('Connection') == 'close', close)
+                client.request('GET', '/api/auth', headers={'Origin': self.origin})
+                followup = client.getresponse()
+                self.assertEqual(followup.status, 200, '请求正文不能被当作下一条 GET 的方法名')
+                self.assertIsInstance(json.loads(followup.read()), dict)
+
+    def test_unexpected_get_body_is_not_reused_as_a_request_line(self):
+        client = http.client.HTTPConnection('127.0.0.1', self.port, timeout=3)
+        self.addCleanup(client.close)
+        client.request('GET', '/api/auth', '{"unexpected":true}')
+        response = client.getresponse()
+        response.read()
+        self.assertEqual(response.getheader('Connection'), 'close')
+        client.request('GET', '/api/auth')
+        response = client.getresponse()
+        self.assertEqual(response.status, 200)
+        self.assertFalse(json.loads(response.read())['authenticated'])
+
     def test_live_remaining_attempts_reload_block_and_no_public_unblock(self):
         for remaining in range(4, -1, -1):
             status, _, value = self.request('/api/login', {'username': 'tester', 'password': 'wrong'})

@@ -11,12 +11,12 @@ const server=http.createServer((req,res)=>{
   if(p.startsWith('/api/')){
     fixture.calls[p]=(fixture.calls[p]||0)+1;
     req.resume();
-    if(p.endsWith('/stop')||p==='/api/auth'&&fixture.calls[p]===1||p==='/api/clients'&&(fixture.persistent||fixture.calls[p]===1)){
+    if(p.endsWith('/stop')||!fixture.legacy&&(p==='/api/auth'&&fixture.calls[p]===1||p==='/api/clients'&&(fixture.persistent||fixture.calls[p]===1))){
       if(p.endsWith('/stop'))fixture.writes++;
       res.writeHead(502,{'Content-Type':'text/html'});return res.end(html);
     }
     let data={};
-    if(p==='/api/auth')data={authenticated:true,csrf:'synthetic',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'}};
+    if(p==='/api/auth')data={authenticated:true,csrf:'synthetic',listCacheIdentity:'a'.repeat(64),computer:{name:'Fixture'},...(fixture.capability===undefined?{}:{activityChanges:fixture.capability})};
     else if(p==='/api/clients')data={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
     else if(p==='/api/accounts')data={accounts:[],current:{kind:'api'}};
     else if(p==='/api/sessions')data={sessions:[{id:'11111111-1111-4111-8111-111111111111',host:'local',title:'启动恢复测试',cwd:'/fixture',projectKey:'local|fixture',projectName:'Fixture',is_pinned:true,recency:1}],hosts:[],availableSources:['desktop'],complete:true,hasMore:false};
@@ -57,6 +57,18 @@ const server=http.createServer((req,res)=>{
       assert.deepEqual(errors,[]);checks++;
       await context.close();
     }
-    console.log(JSON.stringify({passed:checks,widths:[390,820,1280],scenarios:['启动短暂异常自动恢复','持续异常中文提示','写入异常不重发']},null,2));
+    for(const width of [390,820,1280])for(const capability of [undefined,false]){
+      fixture={legacy:true,capability,calls:{},writes:0};
+      const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage();
+      for(let restart=0;restart<3;restart++){
+        await page.goto('http://127.0.0.1:'+server.address().port+'/');
+        await page.waitForFunction(()=>clientNavigation.statusLoaded&&listReadFinished);
+        await page.waitForTimeout(250);
+        assert.equal(fixture.calls['/api/activity/changes']||0,0,'旧网关启动不得用未知 POST 探测能力');
+        assert.equal(await page.locator('#toast').isVisible(),false);checks+=2;
+      }
+      assert.equal(fixture.writes,0);checks++;await context.close();
+    }
+    console.log(JSON.stringify({passed:checks,widths:[390,820,1280],scenarios:['启动短暂异常自动恢复','持续异常中文提示','写入异常不重发','旧网关连续重开不提交未知接口']},null,2));
   }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

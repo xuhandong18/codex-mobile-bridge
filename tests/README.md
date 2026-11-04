@@ -71,6 +71,8 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 启动时偶发的 HTML／JSON 解析报错运行 `node --test tests/api-response.test.cjs tests/bootstrap.test.cjs` 和 `node scripts/test-api-response-browser.cjs`。覆盖非 JSON 响应、有限补读、固定主机、取消、HTML 401 与正常 JSON 业务错误，以及发送／审批／停止等写入不重放。浏览器使用正式页面和隔离合成接口，在 390、820、1280 像素检查启动短暂异常恢复、持续异常中文提示及合成写入只提交一次；需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`，不操作真实客户端。
 
+同一浏览器入口还在三种宽度下连续重开旧网关页面，检查能力声明缺失或为假时不发送未知活动通知 POST。`test_login_security.py` 使用同一 HTTP 连接复现未知 POST／组件不可用后残留正文将下一条 GET 变成 501 的故障，验证未读正文时关闭连接、正文已读完时仍可复用，以及异常 GET 正文的隔离。`test_activity_events.py` 核对已认证启动响应的活动通知能力声明；`node scripts/test-activity-changes-browser.cjs` 和 `node scripts/test-idle-refresh-browser.cjs` 继续验证新网关增量通知与旧网关五秒轮询。
+
 Codex 分区的项目标题使用灰色箭头展开／收起其他聊天，展开后的底部箭头每次补充十条。运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs tests/chat-creation-list.test.cjs` 和 `node scripts/test-project-status-browser.cjs`，覆盖零／一／两条状态聊天、空项目及未知分页探查、项目间隔离、刷新保留、读取期间收起与旧回包失效、分页转圈与失败重试、键盘和至少 40px 点击区域。浏览器使用正式页面与合成只读接口，在 390、820、1280 像素执行；加 `--screenshots` 将默认／展开截图写入 `.tmp/project-arrows/`，不操作真实客户端。
 
 聊天末尾快捷按钮运行 `node --test tests/markdown-followups.test.cjs` 和 `node scripts/test-chat-followups-browser.cjs`。前者执行生产 Markdown 解析及输入填充逻辑，覆盖完整标记、转义、不完整输入、代码和引用排除、长度校验及草稿保留；后者使用生产页面和合成 API，在手机、平板和电脑尺寸实际点击主聊天与侧边聊天的按钮，检查展开、追加、焦点、草稿恢复、上下文隔离及零消息提交，并实际展开长消息的分段详情，核验截断末尾不误转、完整加载后恢复合法按钮，以及流式结束时正文未变也能正确重绘。需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`；不操作真实聊天，也不调用模型。

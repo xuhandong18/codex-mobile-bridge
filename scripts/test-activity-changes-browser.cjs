@@ -25,7 +25,7 @@ const server=http.createServer(async(req,res)=>{
     let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):null;
     res.setHeader('Content-Type','application/json');let value={};
     if(req.method==='POST'&&!['/api/activity','/api/activity/changes'].includes(p))writes.push(p);
-    if(p==='/api/auth')value={authenticated:true,csrf:'fixture-csrf',listCacheIdentity:'b'.repeat(64),computer:{name:'Fixture'}};
+    if(p==='/api/auth')value={authenticated:true,csrf:'fixture-csrf',listCacheIdentity:'b'.repeat(64),computer:{name:'Fixture'},...(supported?{activityChanges:true}:{})};
     else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
     else if(p==='/api/sessions')value={sessions:rows,complete:true,sidebar:{sections:[],projects:[]}};
@@ -95,11 +95,12 @@ const server=http.createServer(async(req,res)=>{
     // Exercise old gateways with the actual unchanged five-second fallback.
     supported=false;states.clear();const context=await browser.newContext({viewport:{width:820,height:720}}),page=await context.newPage();
     await context.addInitScript(()=>{localStorage.setItem('list-mode','recent');localStorage.setItem('navigation:sidebar','open');});
+    const legacyNotifications=notifications.length;
     await page.goto('http://127.0.0.1:'+server.address().port+'/');
-    await page.waitForFunction(()=>activityChanges?.unsupported&&!activityBusy);
-    const before=notifications.length;states.set(rows[0].id,{status:'idle',turnStatus:'completed'});
+    await page.waitForFunction(()=>!activityChangesEnabled&&!activityBusy&&listReadFinished);
+    states.set(rows[0].id,{status:'idle',turnStatus:'completed'});
     await page.waitForFunction(id=>sessionActivity.rows['local|'+id]?.turnStatus==='completed',rows[0].id,{timeout:6500});
-    check(notifications.length===before,'旧网关只探测一次，五秒轮询继续更新状态');
+    check(notifications.length===legacyNotifications,'旧网关不探测不支持的 POST，五秒轮询继续更新状态');
     await context.close();
     check(writes.length===0,'通知及定向刷新没有提交业务写操作');check(errors.length===0,'无页面脚本异常：'+errors.join('; '));
     console.log(JSON.stringify({passed:checks.length,checks},null,2));

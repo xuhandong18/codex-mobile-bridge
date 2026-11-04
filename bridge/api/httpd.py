@@ -195,6 +195,13 @@ class Handler(BaseHTTPRequestHandler):
         return {**value, 'version': version}
 
     def output(self, status, data, content_type="application/json; charset=utf-8", cookie=None, content_disposition=None, preview_shell=False):
+        # An early response may leave a request body in the socket. Do not let
+        # HTTP/1.1 reuse interpret that body as the next request's method.
+        sizes = self.headers.get_all('Content-Length', [])
+        if (self.headers.get('Transfer-Encoding') or sizes and
+                (len(sizes) != 1 or not sizes[0].isdigit() or
+                 int(sizes[0]) != getattr(self, '_body_bytes_read', 0))):
+            self.close_connection = True
         # Keep the browser cookie in step with the renewed server-side deadline,
         # including long-lived pages that do not revisit /api/auth.
         if cookie is None and 200 <= status < 300 and urlsplit(self.path).path.startswith('/api/'):
@@ -294,10 +301,15 @@ class Handler(BaseHTTPRequestHandler):
         size = int(sizes[0])
         if not 0 < size <= max_size:
             raise ValueError("请求过大或为空")
-        value = json.loads(self.rfile.read(size))
+        value = json.loads(self.read_body(size))
         if not isinstance(value, dict):
             raise ValueError("请求内容必须为对象")
         return value
+
+    def read_body(self, size):
+        data = self.rfile.read(size)
+        self._body_bytes_read += len(data)
+        return data
 
     def do_GET(self):
         self.handle_method(False)
@@ -321,6 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(405)
 
     def handle_method(self, write):
+        self._body_bytes_read = 0
         try:
             if urlsplit(self.path).path == '/harness' or urlsplit(self.path).path.startswith('/harness/'):
                 return harness_proxy(self)
@@ -362,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                                          **({'listCacheIdentity': hashlib.sha256((self.server.instance_id + '\0' + session['csrf']).encode()).hexdigest()} if session else {}),
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
                                          **({'chatDisplay': self.server.chat_display.read()} if session else {}),
+                                         **({'activityChanges': getattr(self.server.bridge, 'activity_events', None) is not None} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
                                          "notifications": self.server.notifications is not None,
                                          "passwordless": self.server.auth.config.get("mode") == "none",
@@ -486,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
                 sizes = self.headers.get_all('Content-Length', [])
                 if self.headers.get('Transfer-Encoding') or len(sizes) != 1 or not sizes[0].isdigit() or not 0 < int(sizes[0]) <= maximum:
                     raise ValueError('附件大小无效')
-                data = self.rfile.read(int(sizes[0]))
+                data = self.read_body(int(sizes[0]))
                 if len(data) != int(sizes[0]):
                     raise ValueError('附件上传中断，请重试')
                 if operation == 'thumb':
@@ -936,7 +950,7 @@ class Handler(BaseHTTPRequestHandler):
                     sizes = self.headers.get_all('Content-Length', [])
                     if self.headers.get('Transfer-Encoding') or len(sizes) != 1 or not sizes[0].isdigit() or not 0 <= int(sizes[0]) <= MAX_TRANSFER:
                         raise ValueError('每个文件不能超过 20 MB')
-                    content = self.rfile.read(int(sizes[0]))
+                    content = self.read_body(int(sizes[0]))
                     if len(content) != int(sizes[0]): raise ValueError('上传中断，请重试')
                     return self.output(200, bridge.workspace(thread_id, 'upload', {'path': relative, 'encoded': base64.b64encode(content).decode()}))
                 if operation == 'upload': return self.output(405, {'error': '请使用上传操作'})
@@ -990,7 +1004,7 @@ class Handler(BaseHTTPRequestHandler):
                 sizes = self.headers.get_all('Content-Length', [])
                 if self.headers.get('Transfer-Encoding') or len(sizes) != 1 or not sizes[0].isdigit() or not 0 < int(sizes[0]) <= 1024 * 1024:
                     raise ValueError('缩略图需为 1 字节至 1 MB')
-                data = self.rfile.read(int(sizes[0]))
+                data = self.read_body(int(sizes[0]))
                 if len(data) != int(sizes[0]):
                     raise ValueError('缩略图上传中断，请重试')
                 try:
@@ -1021,7 +1035,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get('Transfer-Encoding') or len(sizes) != 1 or not sizes[0].isdigit() or not 0 < int(sizes[0]) <= MAX_FILE:
                     raise ValueError('每个附件需为 1 字节至 20 MB')
                 size = int(sizes[0])
-                data = self.rfile.read(size)
+                data = self.read_body(size)
                 if len(data) != size:
                     raise ValueError('附件上传中断，请重试')
                 return self.output(200, bridge.side_attachment(thread_id, side, 'put', query.get('id', [''])[0], query.get('name', [''])[0], data) if side is not None else bridge.upload(thread_id, query.get('id', [''])[0], query.get('name', [''])[0], data))

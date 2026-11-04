@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const root=path.resolve(__dirname,'..'),html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
 const workbenchBack=vm.runInNewContext(fs.readFileSync(path.join(root,'web/features/workspace/workbench.js'),'utf8')+'\nWorkbench.prototype.back');
 
-async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPending=false,navigationPending=false,allDisabled=false}={}){
+async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPending=false,navigationPending=false,allDisabled=false,activityChanges}={}){
   const nodes=new Map(),timers=new Map(),listeners=new Map(),requests=[],writes=[],navigation=[];let clock=0,reloads=0,error=null,releaseNavigation;
   const node=(tag='div')=>({tagName:tag.toUpperCase(),value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],parentElement:{},style:{setProperty(){}},scrollTop:0,
     classList:(()=>{const classes=new Set();return {add(...names){names.forEach(name=>classes.add(name));},remove(...names){names.forEach(name=>classes.delete(name));},toggle(name,force){const enabled=force??!classes.has(name);if(enabled)classes.add(name);else classes.delete(name);return enabled;},contains(name){return classes.has(name);}};})(),click(){this.onclick?.();},getBoundingClientRect(){return {width:0};},addEventListener(){},setAttribute(k,v){this[k]=v;},closest(){return nodes.get('accounts-dialog');},
@@ -28,7 +28,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
       if(url==='/api/auth'){
         if(auth==='pending')return new Promise(()=>{});
         if(auth==='reject')throw Error('private-token-in-network-message');
-        return response({authenticated:auth==='signed-in',csrf:'fixture'});
+        return response({authenticated:auth==='signed-in',csrf:'fixture',activityChanges});
       }
       if(url==='/api/pair')return pairPending?new Promise(()=>{}):response({csrf:'paired'});
       if(url==='/api/accounts')return response({accounts:[],current:{kind:'api'}});
@@ -42,8 +42,16 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
   try{run('web/shell/app.js');}catch(e){error=e;dispatch('error',{target:window,message:e.message});}
   await new Promise(setImmediate);
   return {nodes,requests,writes,location,error,timers,listeners,dispatch,window,navigation,releaseNavigation(){releaseNavigation?.();},
-    get reloads(){return reloads;},timeout(){for(const [id,timer] of timers)if(timer.delay===12000){timers.delete(id);timer.fn();break;}}};
+    get reloads(){return reloads;},activityChangesEnabled(){return vm.runInContext('activityChangesEnabled',context);},timeout(){for(const [id,timer] of timers)if(timer.delay===12000){timers.delete(id);timer.fn();break;}}};
 }
+
+test('手机启动只在已认证网关明确声明支持时启用活动通知',async()=>{
+  for(const activityChanges of [undefined,false,true,'true']){
+    const ui=await fixture({auth:'signed-in',activityChanges});
+    assert.equal(ui.activityChangesEnabled(),activityChanges===true);
+    assert.equal(ui.nodes.get('app').hidden,false);
+  }
+});
 
 test('HTML provides visible status before the independent CSP-safe bootstrap, without revealing login',()=>{
   assert.match(html,/<section id="bootstrap-status"[^>]*aria-busy="true"/);

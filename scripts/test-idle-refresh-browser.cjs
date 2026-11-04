@@ -26,7 +26,7 @@ const server=http.createServer(async(req,res)=>{
     let raw='';for await(const part of req)raw+=part;const body=raw?JSON.parse(raw):null;
     res.setHeader('Content-Type','application/json');let value={};
     if(req.method==='POST'&&!['/api/activity','/api/activity/changes'].includes(p))writes.push(p);
-    if(p==='/api/auth')value={authenticated:true,csrf:'fixture-csrf',listCacheIdentity:'b'.repeat(64),computer:{name:'Fixture'}};
+    if(p==='/api/auth')value={authenticated:true,csrf:'fixture-csrf',listCacheIdentity:'b'.repeat(64),computer:{name:'Fixture'},activityChanges:supported};
     else if(p==='/api/clients')value={clients:[{id:'codex',name:'Codex',enabled:true,configured:true,connected:true,installed:true,running:true}]};
     else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
     else if(p==='/api/sessions')value={sessions:rows,complete:true,sidebar:{sections:[],projects:[{key:'local|p',host:'local',name:'Project',cwd:'/fixture'}]}};

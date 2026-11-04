@@ -105,6 +105,16 @@ class ActivityEventsHttpTests(unittest.TestCase):
     request = test_bridge.HttpTests.request
     login = test_bridge.HttpTests.login
 
+    def test_authenticated_startup_advertises_available_activity_notifications(self):
+        headers = self.login()
+        events = ActivityEvents()
+        self.addCleanup(events.close)
+        for available in (False, True):
+            with patch.object(self.server.bridge, 'activity_events', events if available else None, create=True):
+                status, _, value = self.request('GET', '/api/auth', headers=headers)
+                self.assertEqual(status, 200)
+                self.assertIs(value.get('activityChanges'), available)
+
     def test_cursor_route_waits_for_keys_without_activity_reads_or_body(self):
         headers = self.login()
         events = ActivityEvents()
