@@ -3,6 +3,7 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json');
+const diagramMode=process.argv.includes('--diagrams'),diagramTests=diagramMode?require('../tests/browser/diagrams.browser.cjs'):null;
 const first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222';
 const label='继续明确市场需求标准',prompt='预设内容';
 const escapedPrompt='请检查 "中文引号"、C:\\fixture\\file.txt\n并保留第二行。';
@@ -30,13 +31,13 @@ const messages=[
   {key:'examples',role:'assistant',kind:'agentMessage',text:examples},
   {key:'writing',role:'assistant',kind:'agentMessage',text:writing},
   {key:'user-writing',role:'user',kind:'userMessage',text:writing}
-].map((message,order)=>({...message,id:message.key,phase:'final_answer',turnId:'fixture-history',turnStatus:'completed',order,version:'v1',timestamp:Date.parse('2026-10-23T01:02:03Z')+order*1000}));
+].concat(diagramTests?.messages||[]).map((message,order)=>({...message,id:message.key,phase:'final_answer',turnId:'fixture-history',turnStatus:'completed',order,version:'v1',timestamp:Date.parse('2026-10-23T01:02:03Z')+order*1000}));
 const longSession='33333333-3333-4333-8333-333333333333';
 const longPrefix='长消息合成正文，用于验证截断边界，必须由完整正文决定快捷操作是否有效。'.repeat(80)+'\n\n';
 const longCases=[
   {key:'truncated-example',title:'完整项后仍有说明',label:'不可误转的长消息示例',prompt:'这个示例不能填入',suffix:' 该列表项后面还有说明，因此它不是独立的快捷操作。'},
   {key:'truncated-legal',title:'完整正文以合法操作结尾',label:'完整加载后继续讨论',prompt:'合法长消息的预设内容',suffix:'\n\n'}
-].map((value,order)=>({...value,preview:longPrefix+action(value.label,value.prompt),order}));
+].concat(diagramTests?.longCases||[]).map((value,order)=>({...value,preview:value.preview??longPrefix+action(value.label,value.prompt),order}));
 const longMessages=longCases.map(value=>({...messages[1],id:value.key,key:value.key,text:value.preview,order:value.order,truncated:true,turnId:'fixture-long-history'}));
 const detailReads=[];
 const access={source:'cli',canSend:true,canConfigure:false,canReconnect:false,canApprove:true,canUseSideChat:true};
@@ -89,6 +90,16 @@ const server=http.createServer(async(req,res)=>{
       if(p.endsWith('/message-index'))return json({revision:'fixture',status:'ready',complete:true,total:1,entries:[],nextCursor:null});
       return json({});
     }
+    if(p==='/html-preview-shell'){
+      const policy=fs.readFileSync(path.resolve(__dirname,'../bridge/api/html_preview.py'),'utf8').split('SHELL_CSP = (')[1];
+      res.setHeader('Content-Security-Policy',[...policy.matchAll(/"([^"]*)"/g)].map(match=>match[1]).join(''));
+      res.setHeader('X-Frame-Options','SAMEORIGIN');res.setHeader('Content-Type','text/html; charset=utf-8');
+      return res.end(fs.readFileSync(path.join(web,'features/workspace/html-preview-shell.html')));
+    }
+    if(diagramMode&&p==='/image-zoom-fixture.js'){
+      res.setHeader('Content-Type','text/javascript');return res.end(fs.readFileSync(path.resolve(__dirname,'../tests/browser/image-zoom-ui.browser.js')));
+    }
+    if(diagramMode)res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src http://"+req.headers.host+"/html-preview-shell; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
     const sources=assets[p]||((p.startsWith('/vendor/')||/^\/client-icons\/(codex|claude|deepseek)\.png$/.test(p))&&!p.includes('..')?p.slice(1):null);
     if(!sources){res.writeHead(404);return res.end();}
     res.setHeader('Content-Type',p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.html')||p==='/'?'text/html; charset=utf-8':p.endsWith('.png')?'image/png':'application/octet-stream');
@@ -100,7 +111,7 @@ const checks=[],failures=[],screenshots=process.argv.includes('--screenshots')?p
 async function test(name,fn){
   const baseline=writes.length;
   try{await fn();assert.deepEqual(writes.slice(baseline),[],'操作期间业务写入增量必须为零（阅读记账另计）');checks.push(name);console.log('通过：'+name);}
-  catch(error){failures.push({name,error:error.message});console.error('失败：'+name+'\n'+error.message);}
+  catch(error){failures.push({name,error:error.message});console.error('失败：'+name+'\n'+(diagramMode?error.stack:error.message));}
 }
 async function open(page,id=first,provider='codex',host='local'){
   await page.evaluate(hash=>window.BridgeNavigation.openChat(hash),'#'+id+'~'+encodeURIComponent(provider==='codex'?host:'desktop:'+provider));
@@ -337,20 +348,26 @@ async function checkLiveCompletion(page,kind){
     if(screenshots)fs.mkdirSync(screenshots,{recursive:true});
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     const base='http://127.0.0.1:'+server.address().port;
-    for(const [width,theme] of [[390,'light'],[820,'dark'],[1280,'light']]){
-      const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1280,timezoneId:'Asia/Hong_Kong',serviceWorkers:'block'});
+    const sizes=diagramMode?[[390,'light'],[390,'dark'],[820,'light'],[820,'dark'],[1280,'light'],[1280,'dark']]:[[390,'light'],[820,'dark'],[1280,'light']];
+    for(const [width,theme] of (process.argv.includes('--first-size')?sizes.slice(0,1):sizes)){
+      const context=await browser.newContext({viewport:{width,height:900},hasTouch:width<1280,timezoneId:'Asia/Hong_Kong',serviceWorkers:diagramMode?'allow':'block'});
       await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:base});
       const page=await context.newPage(),errors=[],external=[];page.setDefaultTimeout(7000);
       // 禁止任何非夹具流量，即使生产页面意外增加外部请求也不会接触真实服务。
       await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin===base||['data:','blob:'].includes(url.protocol))return route.continue();external.push(url.origin);return route.abort();});
       page.on('pageerror',error=>errors.push(error.message));
-      await context.addInitScript(theme=>localStorage.setItem('bridge-appearance',JSON.stringify({theme})),theme);
+      await context.addInitScript(theme=>{if(window===top)localStorage.setItem('bridge-appearance',JSON.stringify({theme}));},theme);
       const suffix=width+' / '+theme;
       try{
         // 先完成目录读取，避免缺少 access 的冷启动链接触发既有自动重连。
         await page.goto(base);await page.waitForFunction(()=>listReadFinished&&clientNavigation.provider==='codex');
         await open(page);await page.waitForFunction(()=>window.BridgeWorkbench?.current);
         await installHelpers(page);await selectMain(page,'main');
+        if(diagramMode){
+          await diagramTests.run({page,context,base,width,theme,test,open,selectMain,selectSide,longSession,first,errors,external,screenshots});
+          await test('图表页面无脚本异常、外部请求与业务写入 '+suffix,async()=>{assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.deepEqual(unexpected,[]);});
+          continue;
+        }
         await test('合成页面初始化与主题 '+suffix,async()=>{assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),theme);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);});
         await test('解析边界、流式刷新与填入长度 '+suffix,()=>checkParserAndFill(page));
         await test('主聊天历史正文与角色隔离 '+suffix,()=>checkRendering(page,'main'));

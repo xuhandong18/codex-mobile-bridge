@@ -2,8 +2,8 @@
 (() => {
   const t = text => typeof BridgeI18n === 'undefined' ? text : BridgeI18n.t(text);
   const registered = new WeakMap(), pointers = new Map();
-  let dialog, title, content, status, close, zoomIn, zoomOut, fit, percentage, opener, image, observer;
-  let zoom = 1, x = 0, y = 0, width = 0, height = 0, frame = 0, gesture, lastTap;
+  let dialog, title, content, status, close, zoomIn, zoomOut, fit, actual, percentage, opener, image, observer;
+  let zoom = 1, x = 0, y = 0, width = 0, height = 0, frame = 0, gesture, lastTap, diagram = false, maxZoom = 8;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const ready = () => dialog?.open && image?.naturalWidth > 0 && !image.hidden && width > 0;
   function paint() {
@@ -15,7 +15,7 @@
     image.style.width = width + 'px'; image.style.height = height + 'px';
     image.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(${zoom})`;
     percentage.textContent = Math.round(zoom * 100) + '%';
-    zoomOut.disabled = zoom <= 1; zoomIn.disabled = zoom >= 8; fit.disabled = zoom === 1;
+    zoomOut.disabled = zoom <= 1; zoomIn.disabled = zoom >= maxZoom; fit.disabled = zoom === 1 && x === 0 && y === 0;
     content.classList.toggle('is-zoomed', zoom > 1);
   }
   function schedule() { if (!frame) frame = requestAnimationFrame(paint); }
@@ -36,6 +36,7 @@
     const nextWidth = image.naturalWidth * ratio, nextHeight = image.naturalHeight * ratio;
     if (width) { x *= nextWidth / width; y *= nextHeight / height; }
     width = nextWidth; height = nextHeight; clearPointers(); schedule();
+    maxZoom = diagram ? Math.max(8,1 / ratio) : 8;
   }
   function point(event) {
     const bounds = content.getBoundingClientRect();
@@ -43,7 +44,7 @@
   }
   function changeZoom(value, from = {x:0,y:0}, to = from) {
     if (!ready()) return;
-    const next = clamp(value, 1, 8), ratio = next / zoom;
+    const next = clamp(value, 1, maxZoom), ratio = next / zoom;
     x = to.x - (from.x - x) * ratio; y = to.y - (from.y - y) * ratio; zoom = next;
     // Clamp immediately so the next pointer event starts from the visible position.
     if (frame) cancelAnimationFrame(frame); paint();
@@ -93,8 +94,9 @@
     content = document.createElement('div'); content.className = 'image-preview-content';
     const controls = document.createElement('div'); controls.className = 'image-preview-controls';
     zoomOut = button('zoom-out', '−', () => changeZoom(zoom / 1.25)); zoomIn = button('zoom-in', '+', () => changeZoom(zoom * 1.25)); fit = button('fit', '', reset);
+    actual = button('reset', '', () => { clearPointers(); x = y = 0; changeZoom(image.naturalWidth / width); });
     percentage = document.createElement('output'); percentage.id = 'image-preview-scale';
-    controls.append(zoomOut, percentage, zoomIn, fit);
+    controls.append(zoomOut, percentage, zoomIn, fit, actual);
     status = document.createElement('p'); status.id = 'image-preview-status'; status.setAttribute('role', 'status');
     dialog.append(toolbar, content, controls, status); document.body.append(dialog);
     observer = new ResizeObserver(measure);
@@ -128,11 +130,13 @@
     const desktop = /^\/api\/desktop-sessions\/(?:claude|deepseek)\/uploads\/[0-9a-f-]{36}\/preview$/.test(pathname) && !!url.searchParams.get('sessionId');
     return url.origin === location.origin && (codex || desktop) ? {url:url.href,name:target.dataset.imageName} : null;
   }
-  function open(target, event) {
+  function open(target, event, focusTarget = target) {
     const value = source(target); if (!value) return;
-    event.preventDefault(); if (!dialog) create(); cleanup(); opener = target;
-    close.textContent = '× ' + t('关闭'); close.setAttribute('aria-label', t('关闭图片预览'));
-    zoomIn.setAttribute('aria-label', t('放大图片')); zoomOut.setAttribute('aria-label', t('缩小图片')); fit.textContent = t('适应屏幕');
+    event.preventDefault(); if (!dialog) create(); cleanup(); opener = focusTarget;
+    diagram = !!value.diagram;
+    close.textContent = '× ' + t('关闭'); close.setAttribute('aria-label', t(diagram ? '关闭图表预览' : '关闭图片预览'));
+    zoomIn.setAttribute('aria-label', t(diagram ? '放大图表' : '放大图片')); zoomOut.setAttribute('aria-label', t(diagram ? '缩小图表' : '缩小图片')); fit.textContent = t('适应屏幕');
+    actual.hidden = !diagram; actual.textContent = t('重置'); actual.title = t('重置为实际大小');
     percentage.setAttribute('aria-label', t('图片缩放比例')); percentage.textContent = '100%'; zoomIn.disabled = zoomOut.disabled = fit.disabled = true;
     title.textContent = value.name || target.querySelector('img')?.alt || target.alt || t('图片附件');
     status.textContent = t('正在加载图片…'); content.classList.remove('is-zoomed');
@@ -142,6 +146,17 @@
     content.replaceChildren(current); if (!dialog.open) dialog.showModal(); observer.observe(content); current.src = value.url;
   }
   window.BridgeImageViewer = {
+    openDiagram(target, button) {
+      if (registered.get(target)?.diagram) open(target,{preventDefault(){}},button);
+    },
+    registerDiagram(target, result) {
+      // Only the sandbox renderer calls this explicit registration. DOM
+      // attributes alone cannot opt arbitrary SVG data into the viewer.
+      if(target.localName !== 'img' || !/^[A-Za-z0-9+/]+={0,2}$/.test(result.data) || target.src !== 'data:image/svg+xml;base64,' + result.data) return false;
+      registered.set(target,{url:target.src,name:result.name,diagram:true});
+      target.classList.add('image-preview-source'); target.tabIndex=0; target.setAttribute('role','button');
+      target.setAttribute('aria-label',t('查看图表')); return true;
+    },
     registerWorkspaceImage(target, result) {
       if (target.localName !== 'img' || result.kind !== 'image' || !/^image\/(?:png|jpeg|gif|webp)$/.test(result.mime) || !/^[A-Za-z0-9+/]+={0,2}$/.test(result.data)) return false;
       const url = 'data:' + result.mime + ';base64,' + result.data; if (target.src !== url) return false;

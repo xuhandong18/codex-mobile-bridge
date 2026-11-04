@@ -174,6 +174,8 @@ Codex 跨设备已读另覆盖独立手机/平板存储、主聊天与侧边隔�
 
 [浏览器夹具](browser/README.md) 位于 `tests/browser/*.browser.js`，依赖真实 DOM 或隔离服务，应由相应驱动调用。其中有些文件只定义测试函数，单独加载不会执行断言。本轮将它们与 Node 分开，避免虚增通过计数。
 
+Mermaid 图表运行 `node --test tests/markdown-diagrams.test.cjs` 和 `node scripts/test-chat-followups-browser.cjs --diagrams`。前者覆盖明确语言标记、嵌套和流式围栏、文稿内代码顺序、完整源码读取及依赖摘要；后者实际执行 `browser/diagrams.browser.cjs`，在 390／820／1280px 的深浅主题中验证截图流程图、主／侧聊天、Claude／DeepSeek、长消息补全、真实剪贴板、放大与触屏双指缩放、拖动、焦点和阅读位置、主题切换、语法／依赖失败重试及恶意配置／HTML／外部请求隔离。可加 `--first-size` 定向验证首个尺寸，`--screenshots` 仅将截图保存在 `.tmp/chat-followups/`。使用已有 Playwright／Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`；只使用合成聊天，不连接真实客户端或模型。
+
 `scripts/smoke-*` 中部分入口启动真实应用或依赖打包产物；运行前先看其头部与 fixture，不把它们作为无副作用的常规单元测试。
 
 ## 手机与打包

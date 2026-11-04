@@ -27,7 +27,7 @@ PUBLIC_URLS = set('''
 /git-panel.js /file-actions.js /workbench.js /source-view.js /pdf-preview.js /html-preview.js /vendor/pdfjs/pdf.min.mjs /vendor/pdfjs/pdf.worker.min.mjs /vendor/prism/source-view.min.js /image-viewer.js /workbench.css /i18n.js /app.js
 /modes.js /attachments.js /activity.js /fast-mode.js /accounts.js /account.js /answer-drafts.js
 /account.css /presentation.js /presentation.css /markdown.js /message-actions.js
-/timeline.js /vendor/markdown-it.min.js /vendor/texmath.js
+/timeline.js /vendor/mermaid/mermaid.min.js /vendor/markdown-it.min.js /vendor/texmath.js
 /vendor/katex/katex.min.js /vendor/katex/katex.min.css /style.css
 /manifest.webmanifest /icon.png
 '''.split())

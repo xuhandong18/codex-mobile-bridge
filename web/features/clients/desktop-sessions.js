@@ -232,7 +232,7 @@ class DesktopSessionsView {
     this.timeline=new ChatTimeline({url:action=>this.path(action,sid,provider),request,elements:{viewport:this.messages,container,older,newer},providerLabel:'DeepSeek',boundedHistory:true,
       active:()=>current()&&this.isChatOpen&&!document.hidden,canEdit:()=>current()&&this.canMutate()&&this.state?.capabilities.messageActions===true,
       renderMeta:value=>{if(current())this.applyDetail(value,false,true);},status:message=>{if(current())this.error.textContent=message;},
-      renderText:(node,text,files,full,row,complete)=>renderMarkdown(node,text,files,file=>this.workbench.url(this.workbench.current,'download',file.path),{complete,writingBlocks:row.role==='assistant',onFollowup:row.role==='assistant'?prompt=>this.fillFollowup(provider,sid,this.workbench.current,prompt):undefined}),
+      renderText:(node,text,files,full,row,complete)=>renderMarkdown(node,text,files,file=>this.workbench.url(this.workbench.current,'download',file.path),{fullText:full,complete,truncated:row.truncated===true&&!complete&&text===row.text,writingBlocks:row.role==='assistant',onFollowup:row.role==='assistant'?prompt=>this.fillFollowup(provider,sid,this.workbench.current,prompt):undefined}),
       onAction:(action,row,timeline)=>this.harnessMessageAction(action,row,timeline)});this.timeline.start();
   }
   async harnessMessageAction(action,row,timeline){

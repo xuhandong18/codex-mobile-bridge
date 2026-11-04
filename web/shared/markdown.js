@@ -3,6 +3,14 @@
   const markdown = window.markdownit({html:false, linkify:true, breaks:true});
   // Math delimiters must be consumed before Markdown removes backslash escapes.
   markdown.use(texmath, {engine:window.katex, delimiters:['brackets','dollars']});
+  markdown.core.ruler.after('block', 'diagram_fences', state => {
+    for (const token of state.tokens) if (token.type === 'fence') {
+      // A closed fence has an opening and closing line, and every nonempty
+      // content line ends in LF. At an unfinished EOF, the last LF may be absent.
+      token.meta = {...token.meta, diagramClosed:(!token.content || token.content.endsWith('\n')) &&
+        token.map[1] - token.map[0] === (token.content.match(/\n/g) || []).length + 2};
+    }
+  });
   const tags = new Set(['p','h1','h2','h3','h4','h5','h6','ul','ol','li','strong','em','s','blockquote','hr','br','table','thead','tbody','tr','th','td']);
 
   // Writing containers are chat presentation, not Markdown source rewriting.
@@ -183,13 +191,20 @@
             const wrapper=document.createElement('div');wrapper.className='code-block';
             const button=document.createElement('button');button.className='plain code-copy';button.type='button';button.textContent=typeof BridgeI18n==='undefined'?'复制代码':BridgeI18n.t('复制代码');
             const index=codeIndex++;
-            button.onclick=()=>window.BridgeClipboard?.copy(async()=>{
-              if(!options.fullText)return token.content;
+            const readCode=async()=>{
+              if(!options.fullText)return token;
               const complete=await options.fullText();
               const blocks=parse(complete).flatMap(t=>t.type==='writing_block'?t.children:[t]).filter(t=>t.type==='fence'||t.type==='code_block');
               if(!blocks[index])throw Error('读取完整正文失败，请重试');
-              return blocks[index].content;
-            },button);
+              return blocks[index];
+            };
+            if(token.type==='fence'&&/^mermaid(?:\s|$)/i.test(token.info.trim())&&window.BridgeDiagrams){
+              parent.append(window.BridgeDiagrams.create({source:token.content,closed:token.meta.diagramClosed,
+                truncated:options.truncated===true,streaming:options.complete===false,canLoad:typeof options.fullText==='function',
+                getSource:async()=>{const value=await readCode();return {source:value.content,closed:!!value.meta?.diagramClosed};}}));
+              continue;
+            }
+            button.onclick=()=>window.BridgeClipboard?.copy(async()=>(await readCode()).content,button);
             wrapper.append(button,pre);parent.append(wrapper);
           }
         } else if (token.type === 'image') {

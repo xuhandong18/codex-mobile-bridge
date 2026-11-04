@@ -1,0 +1,15 @@
+.diagram-card{border:1px solid var(--line);border-radius:14px;margin:16px 0;overflow:hidden;background:var(--surface);min-width:0}
+.diagram-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:4px;padding:8px;border-bottom:1px solid var(--line)}
+.diagram-toolbar strong{margin-right:auto;padding:0 6px;font-size:13px;color:var(--muted)}
+.diagram-toolbar button,.diagram-expand,.diagram-retry{width:auto;min-height:40px;padding:8px 10px;margin:0;font-size:13px;border-radius:8px;white-space:nowrap}
+.diagram-toolbar [aria-pressed=true]{background:var(--soft);color:var(--green)}
+.diagram-toolbar button:focus-visible,.diagram-expand:focus-visible,.diagram-retry:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
+.diagram-status{padding:12px;margin:0;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.diagram-status:empty{display:none}
+.diagram-viewport{overflow:auto;max-height:360px;overscroll-behavior-x:contain;min-height:80px;background:#fff}
+[data-theme=dark] .diagram-viewport{background:#1f2020}
+.diagram-viewport img{display:block;max-width:none!important;max-height:none!important;margin:0 auto;cursor:zoom-in}
+.diagram-card pre{margin:0;border:0;border-radius:0;max-height:360px;overflow:auto;padding:12px;font-size:var(--code-size,13px)}
+.diagram-card .diagram-expand,.diagram-card .diagram-retry{display:block;margin:4px auto}
+.diagram-card [hidden]{display:none!important}
+.diagram-renderer-frame{position:fixed;left:-20000px;top:0;width:1200px;height:800px;visibility:hidden;pointer-events:none;border:0}

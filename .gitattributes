@@ -1,0 +1,2 @@
+# 保留第三方发行文件的原始字节；模板字符串含尾空格，跨平台摘要必须一致。
+web/vendor/mermaid/mermaid.min.js text eol=lf whitespace=-blank-at-eol

@@ -71,12 +71,14 @@
   "/vendor/prism/source-view.min.js": "vendor/prism/source-view.min.js",
   "/presentation.js": ["features/settings/chat-display.js", "features/settings/presentation.js"],
   "/i18n.js": "shared/i18n.js",
-  "/markdown.js": "shared/markdown.js",
+  "/markdown.js": ["shared/diagrams.js", "shared/markdown.js"],
+  "/vendor/mermaid/mermaid.min.js": "vendor/mermaid/mermaid.min.js",
   "/image-viewer.js": "shared/image-viewer.js",
   "/presentation.css": [
     "shared/presentation.css",
     "hosts/mobile-header.css",
     "shared/presentation-content.css",
+    "shared/diagrams.css",
     "layouts/compact/presentation.css",
     "shared/presentation-controls.css",
     "hosts/mobile-footer.css"

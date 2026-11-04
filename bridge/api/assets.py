@@ -60,6 +60,7 @@ STATIC = {"/file-actions.js": ("file-actions.js", "text/javascript; charset=utf-
           "/message-actions.js": ("message-actions.js", "text/javascript; charset=utf-8"),
           "/timeline.js": ("timeline.js", "text/javascript; charset=utf-8"),
           "/vendor/markdown-it.min.js": ("vendor/markdown-it.min.js", "text/javascript; charset=utf-8"),
+          "/vendor/mermaid/mermaid.min.js": ("vendor/mermaid/mermaid.min.js", "text/javascript; charset=utf-8"),
           "/vendor/texmath.js": ("vendor/texmath.js", "text/javascript; charset=utf-8"),
           "/vendor/katex/katex.min.js": ("vendor/katex/katex.min.js", "text/javascript; charset=utf-8"),
           "/vendor/katex/katex.min.css": ("vendor/katex/katex.min.css", "text/css; charset=utf-8"),
