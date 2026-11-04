@@ -105,6 +105,16 @@ class SessionActivity {
     const indicators=[key,...(this.rows[key]?.sideKeys||[])].map(id=>this.ownIndicator(id)).filter(Boolean);
     return ['completed','awaiting','ended','running','unknown'].map(kind=>indicators.find(row=>row.kind===kind&&!row.stale)||indicators.find(row=>row.kind===kind)).find(Boolean)||null;
   }
+  recentStatusKeys(keys,scope){
+    // Keep the current browsing order stable when a badge is read/cleared.
+    // This is display-only, never persisted or used by the read-state protocol.
+    if(!scope||scope!==this.recentScope)this.recentStatuses=new Set();
+    this.recentScope=scope;
+    const present=new Set(keys);
+    for(const key of this.recentStatuses)if(!present.has(key))this.recentStatuses.delete(key);
+    if(scope)for(const key of keys){const badge=this.indicator(key);if(badge&&badge.kind!=='unknown')this.recentStatuses.add(key);}
+    return this.recentStatuses;
+  }
   ownIndicator(key){
     const row=this.rows[key];if(!row)return null;
     if(row.manualUnread)return {kind:'completed',label:'未读'};
@@ -120,8 +130,8 @@ class SessionActivity {
     if(row.status==='active')return {kind:'running',label:row.runningSubagents?'子代理运行中':'运行中'};
     return null;
   }
-  forget(key){delete this.rows[key];this.readTokens.delete(key);this.refreshes.delete(key);this.observations.set(key,++this.observationVersion);this.sideObservations.delete(key);}
-  clear(){this.rows={};this.readTokens.clear();this.refreshes.clear();this.observations.clear();this.sideObservations.clear();this.observationEpoch++;this.storage.removeItem(this.key);}
+  forget(key){delete this.rows[key];this.recentStatuses?.delete(key);this.readTokens.delete(key);this.refreshes.delete(key);this.observations.set(key,++this.observationVersion);this.sideObservations.delete(key);}
+  clear(){this.rows={};this.recentScope=null;this.recentStatuses=new Set();this.readTokens.clear();this.refreshes.clear();this.observations.clear();this.sideObservations.clear();this.observationEpoch++;this.storage.removeItem(this.key);}
 }
 
 class ActivityChanges {

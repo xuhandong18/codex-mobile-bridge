@@ -93,6 +93,7 @@ function clearListSnapshot(){
   sidebarPreferences.reset();
   for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(/^codex-list-v[12]:/.test(key||''))sessionStorage.removeItem(key);}
   createdChats.clear();createdChatVisibility.clear();projectChatPages.clear();
+  sessionActivity.recentStatusKeys([],null);
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
@@ -497,7 +498,8 @@ function collapseSidebarGroups(){
 function renderList(){
   if(typeof syncListModeTabs==='function')syncListModeTabs();
   const pageStamp=['codex','project'].includes($('list-mode').value)?[listHasMore,[...projectChatPages].filter(([,page])=>page.limit!==5||page.statusLimit||page.expanded||page.loading).map(([key,page])=>[key,page.limit,page.statusLimit,page.expanded,page.loading,page.loadingControl])]:null;
-  const statusChats=new Set(['codex','recent'].includes($('list-mode').value)?listRows.filter(row=>hasProjectStatus(row.id,row.host)).map(row=>chatKey(row.id,row.host)):[]);
+  const recentStatuses=sessionActivity.recentStatusKeys(listRows.map(row=>chatKey(row.id,row.host)),$('list-mode').value==='recent'?JSON.stringify([listFilterKey,$('search').value,$('archived').checked,listSource]):null);
+  const statusChats=$('list-mode').value==='recent'?recentStatuses:new Set($('list-mode').value==='codex'?listRows.filter(row=>hasProjectStatus(row.id,row.host)).map(row=>chatKey(row.id,row.host)):[]);
   const stamp=JSON.stringify([$('list-mode').value,$('search').value,currentId,currentHost,BridgeI18n.locale(),availableSources,sidebarData,pageStamp,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access,row.is_pinned,row.thread_section_id,row.section_position,statusChats.has(chatKey(row.id,row.host))])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){for(const button of $('sessions').querySelectorAll('.project-load-more, .project-chat-toggle')){const key=button.closest('.project-group')?.dataset.projectKey;if(key)button.disabled=!(button.className.includes('project-chat-toggle')&&projectPage(key).expanded)&&(!!listLoading||!!projectPage(key).loading);}renderActivity(false);return;}
   listRenderStamp=stamp;
@@ -884,6 +886,7 @@ $('new-chat-type').onchange=preferred=>{
 };
 $('new-chat-project').onchange=()=>{newChatProjectPicker?.sync();$('new-chat-path').textContent=$('new-chat-project').value==='local|independent'?t('在此电脑创建独立聊天'):newChatProjects.find(p=>p.key===$('new-chat-project').value)?.cwd||'';newChatSettings.load($('new-chat-project').value,$('new-chat-type').value);};
 $('new-chat-dialog').addEventListener('cancel',event=>{if(creatingChat)event.preventDefault();});
+$('new-chat-dialog').addEventListener('close',()=>newChatSettings.cancel?.());
 $('new-chat-form').onsubmit=async event=>{
   event.preventDefault();if(creatingChat)return;
   const project=$('new-chat-project').value,title=$('new-chat-title').value.trim()||t('新聊天'),kind=$('new-chat-type').value;

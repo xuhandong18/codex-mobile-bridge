@@ -8,7 +8,7 @@ const created='33333333-3333-4333-8333-333333333333';
 const access={source:'cli',canSend:true,canConfigure:false,canReconnect:false};
 const rows=[first,second].map((id,i)=>({id,host:'local',title:'测试会话 '+(i+1),cwd:'/fixture',projectKey:'local|independent',projectName:'独立聊天',recency:100-i,status:'idle',updatedAt:100-i,access}));
 let pendingDiscovery=false,acceptSend=true,writes=0,holdDiscovery=false,releaseDiscovery;
-let holdModels=false,releaseModels;const newChatAttempts=[];
+let holdModels=false,releaseModels,modelFailures=0,modelReads=0;const newChatAttempts=[];
 let creationFixture=null;
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://127.0.0.1'),p=url.pathname;
@@ -23,8 +23,10 @@ const server=http.createServer(async(req,res)=>{
   else if(p==='/api/accounts')value={accounts:[],current:{kind:'api'}};
   else if(p==='/api/projects')value={projects:[]};
   else if(p==='/api/new-chat-models'){
+   modelReads++;
+   if(modelFailures>0){modelFailures--;res.writeHead(409);return res.end(JSON.stringify({error:'workspace routing discovery failed',code:'desktop_unavailable'}));}
    if(holdModels)await new Promise(resolve=>releaseModels=resolve);
-   value={models:[{id:'fixture-model',name:'Fixture',efforts:['low','high'],defaultEffort:'low'}]};
+   value={models:Array.from({length:8},(_,index)=>({id:index?'fixture-model-'+index:'fixture-model',name:'Fixture '+index,efforts:['low','high'],defaultEffort:'low'}))};
   }
   else if(p==='/api/sessions'&&req.method==='POST'){
    let raw='';for await(const chunk of req)raw+=chunk;newChatAttempts.push(JSON.parse(raw));
@@ -101,6 +103,16 @@ const server=http.createServer(async(req,res)=>{
    check(newChatAttempts.length===attempts+1,'模型目录仍在加载时可以提交创建且只提交一次 '+width);
    assert.ok(releaseModels);holdModels=false;releaseModels();await page.waitForFunction(()=>!newChatSettings.loading);
    check(await page.evaluate(()=>JSON.stringify(newChatSettings.value()))===JSON.stringify({model:'custom-model',effort:'high',permission:'ask'}),'晚到的模型列表保留用户选择 '+width);
+   check(await page.locator('#new-chat-model option').count()===10,'目录加载后显示全部八个模型、默认和自定义选项 '+width);
+   const beforeRetry=modelReads;modelFailures=1;
+   await page.evaluate(()=>newChatSettings.loadCatalog());
+   check(modelReads===beforeRetry+2,'临时失败只读重试一次并恢复目录 '+width);
+   check(await page.locator('#new-chat-model-status').textContent()==='','恢复成功清除错误提示 '+width);
+   modelFailures=2;await page.evaluate(()=>newChatSettings.loadCatalog());
+   check(await page.locator('#new-chat-model-status').textContent().then(text=>text.includes('模型列表加载失败')),'持续失败明确展示原因 '+width);
+   await page.getByRole('button',{name:'重试读取',exact:true}).click();await page.waitForFunction(()=>!newChatSettings.loading);
+   check(await page.locator('#new-chat-model option').count()===10,'手动重试成功补齐八个模型 '+width);
+   check(await page.evaluate(()=>JSON.stringify(newChatSettings.value()))===JSON.stringify({model:'custom-model',effort:'high',permission:'ask'}),'失败与重试保留已选择的设置 '+width);
    await context.close();
   }
   for(const [width,outcome] of [[390,'confirmed'],[820,'confirmed'],[1280,'confirmed'],[390,'unconfirmed'],[390,'failed']]){

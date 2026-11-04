@@ -53,6 +53,10 @@ class NewChatSettings {
     const field=(label,node)=>{const row=document.createElement('label'),caption=document.createElement('span');caption.dataset.i18n=label;caption.textContent=BridgeI18n.t(label);row.append(caption,node);form.querySelector('#new-chat-error').before(row);return node;};
     this.model=field('模型',document.createElement('select'));this.model.id='new-chat-model';
     this.custom=field('自定义模型 ID',document.createElement('input'));this.custom.maxLength=200;this.custom.id='new-chat-custom-model';
+    const feedback=document.createElement('div');feedback.className='muted';
+    this.catalogStatus=document.createElement('span');this.catalogStatus.id='new-chat-model-status';this.catalogStatus.setAttribute('role','status');
+    this.retry=document.createElement('button');this.retry.type='button';this.retry.className='plain';this.retry.dataset.i18n='重试读取';this.retry.textContent=BridgeI18n.t('重试读取');this.retry.hidden=true;
+    this.retry.onclick=()=>this.loading?undefined:this.loadCatalog();feedback.append(this.catalogStatus,this.retry);form.querySelector('#new-chat-error').before(feedback);
     this.effort=field('推理强度',document.createElement('select'));this.effort.id='new-chat-effort';
     this.permission=field('权限',document.createElement('select'));this.permission.id='new-chat-permission';
     for(const [value,label] of [['','沿用 Codex 默认设置'],['ask','请求批准'],['auto-review','帮我批准'],['full-access','完全访问权限']])this.permission.append(this.option(label,value));
@@ -60,22 +64,42 @@ class NewChatSettings {
   }
   option(label,value){const option=new Option(BridgeI18n.t(label),value);option.dataset.i18n=label;return option;}
   async load(project,kind){
-    const revision=++this.revision;this.loading=true;this.key=this.scope(project,kind);const saved=this.defaults.read(this.key);
+    this.cancel();this.project=project;this.kind=kind;this.key=this.scope(project,kind);const saved=this.defaults.read(this.key);
     this.permission.value=saved.permission||'';this.custom.value=saved.model||'';this.rows=[];
     this.model.replaceChildren(this.option('沿用 Codex 默认设置',''),...(saved.model?[new Option(saved.model,saved.model)]:[]),this.option('自定义模型…','__custom__'));
     this.model.value=saved.model||'';this.fillEfforts(saved.effort);
     this.model.disabled=!project;this.permission.disabled=!project;
-    if(!project){this.loading=false;return;}
+    this.catalogStatus.textContent='';this.retry.hidden=true;
+    if(!project)return;
+    return this.loadCatalog();
+  }
+  cancel(){this.revision++;this.controller?.abort();this.loading=false;}
+  async loadCatalog(){
+    const revision=this.revision,project=this.project,kind=this.kind;this.loading=true;this.retry.hidden=true;
+    this.catalogStatus.textContent=BridgeI18n.t('正在加载模型列表…');
     try{
-      const catalog=await this.request('/api/new-chat-models?project='+encodeURIComponent(project)+'&kind='+encodeURIComponent(kind));
+      let catalog;
+      for(let attempt=0;attempt<2;attempt++){
+        const controller=this.controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+        try{catalog=await this.request('/api/new-chat-models?project='+encodeURIComponent(project)+'&kind='+encodeURIComponent(kind),undefined,controller.signal);break;}
+        catch(error){
+          if(revision!==this.revision)return;
+          if(attempt||![409,500,502,503,504].includes(error.status)&&error.name!=='TypeError'&&error.name!=='AbortError')throw error;
+          this.catalogStatus.textContent=BridgeI18n.t('模型列表暂时不可用，正在重试…');
+        }finally{clearTimeout(timer);}
+      }
       if(revision!==this.revision)return;
+      if(catalog.modelError)throw Error(catalog.modelError);
+      if(!Array.isArray(catalog.models)||!catalog.models.length)throw Error(BridgeI18n.t('未获取到可用模型，请重试。'));
       const selected=this.value(),custom=this.model.value==='__custom__';
       this.rows=Array.isArray(catalog.models)?catalog.models:[];
       this.model.replaceChildren(this.option('沿用 Codex 默认设置',''),...this.rows.map(row=>new Option(row.name||row.id,row.id)),this.option('自定义模型…','__custom__'));
       this.model.value=selected.model?(this.rows.some(row=>row.id===selected.model)?selected.model:'__custom__'):custom?'__custom__':'';
       this.custom.value=selected.model;this.fillEfforts(selected.effort);
-    }catch{
-      // Defaults and explicit model IDs remain usable while the catalog is offline.
+      this.catalogStatus.textContent='';
+    }catch(error){
+      if(revision!==this.revision)return;
+      this.catalogStatus.textContent=BridgeI18n.t('模型列表加载失败，仍可沿用默认设置或填写自定义模型。')+(error.name==='AbortError'?'':' '+BridgeI18n.t(error.message));this.retry.hidden=false;
     }finally{if(revision===this.revision)this.loading=false;}
   }
   fillEfforts(preferred=this.effort.value){

@@ -153,6 +153,16 @@ class ApiCatalogTests(unittest.TestCase):
         self.assertEqual(result['models'][0]['id'],'glm-5.3-flash')
         self.assertEqual(result['models'][0]['efforts'],['ultra'])
 
+    def test_failed_model_catalog_does_not_block_retry_for_five_minutes(self):
+        with patch.object(self.reader, '_fetch', side_effect=[
+            {'models': [], 'modelSource': 'api', 'modelError': 'temporary failure'},
+            {'models': [{'model': 'recovered'}], 'modelSource': 'api'},
+        ]) as fetch:
+            self.assertTrue(self.reader.get_kind('models', self.home)['modelError'])
+            self.assertEqual(self.reader.get_kind('models', self.home)['models'][0]['id'], 'recovered')
+            self.assertEqual(self.reader.get_kind('models', self.home)['models'][0]['id'], 'recovered')
+            self.assertEqual(fetch.call_count, 2, '成功目录仍复用缓存')
+
     def test_legacy_skill_cache_returns_immediately_and_refreshes_in_background(self):
         cached=[{'id':'fixture-skill','name':'fixture-skill','description':'fixture','path':'/tmp/fixture/SKILL.md','scope':'user','displayName':'Fixture'}]
         self.reader.skill_store.legacy=lambda: cached

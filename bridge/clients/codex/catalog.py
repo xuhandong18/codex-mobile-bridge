@@ -615,7 +615,10 @@ class Catalog:
                          'fastMode': raw.get('fastMode', {'allowed': False}),
                          'modelError': raw.get('modelError'), 'currentModel': raw.get('currentModel'),
                          'currentEffort': raw.get('currentEffort')}
-                self.kind_caches[kind][key] = (time.monotonic(), value)
+                if models and not value.get('modelError'):
+                    self.kind_caches[kind][key] = (time.monotonic(), value)
+                else:
+                    self.kind_caches[kind].pop(key, None)
                 return value
 
         bucket = self.skill_store.bucket(cwd)

@@ -133,7 +133,11 @@ const server=http.createServer(async(req,res)=>{
           renderActivity();
         },parent);
         check(await page.locator('#sessions .session[data-id="'+parent+'"] .session-indicator').count()===0,'主侧状态全部解除并已读后不再有状态提示');
-        check(await page.locator('#sessions .session').first().getAttribute('data-id')===other,'状态全部清除后恢复原最近交互顺序');
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'状态清除后保留本次浏览位置');
+        await refresh();
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===parent,'后续状态轮询不把已读聊天移走');
+        await page.evaluate(()=>{$('list-mode').value='project';renderList();$('list-mode').value='recent';renderList();});
+        check(await page.locator('#sessions .session').first().getAttribute('data-id')===other,'重新进入最近交互恢复实时状态排序');
       }
       await context.close();
     }

@@ -33,7 +33,7 @@ function fixture(){
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
 
-for(const provider of ['claude','deepseek'])test(provider+'仅最近交互把有状态聊天排在前面，状态清除后恢复时间顺序',async()=>{
+for(const provider of ['claude','deepseek'])test(provider+'最近交互保留已读聊天位置，重新进入列表恢复实时排序',async()=>{
  const ui=fixture(),view=ui.view;await view.choose(provider);view.listMode.value='recent';
  view.rows=[
   {id:'idle',updatedAt:600,status:'idle'},
@@ -49,8 +49,11 @@ for(const provider of ['claude','deepseek'])test(provider+'仅最近交互把有
  const first=view.rowsRoot.querySelector('.session');view.renderIndicators();assert.equal(view.rowsRoot.querySelector('.session'),first,'相同状态保留已有节点');
  view.listMode.value='project';view.renderList();assert.deepEqual(ids(),['idle','unknown','unread','running','waiting','side']);
  view.listMode.value='recent';view.renderList();assert.deepEqual(ids(),['unread','running','waiting','side','idle','unknown']);
- view.activity.read(provider+'|unread',{explicit:true,sync:false});view.renderIndicators();assert.deepEqual(ids(),['running','waiting','side','idle','unknown','unread'],'已读立即回到无状态聊天的时间顺序');
- view.updateActivity([{id:'waiting',status:'idle',waitingForUser:false,waitingObservedAt:2}]);view.renderIndicators();assert.deepEqual(ids(),['running','side','idle','unknown','unread','waiting'],'等待解除也重新排序');
+ view.activity.read(provider+'|unread',{explicit:true,sync:false});view.renderIndicators();assert.deepEqual(ids(),['unread','running','waiting','side','idle','unknown'],'已读保留本次浏览的位置');
+ assert.equal(view.activity.indicator(provider+'|unread'),null);
+ view.updateActivity([{id:'waiting',status:'idle',waitingForUser:false,waitingObservedAt:2}]);view.renderIndicators();assert.deepEqual(ids(),['unread','running','waiting','side','idle','unknown'],'等待解除也保持位置');
+ view.listMode.value='project';view.renderList();view.listMode.value='recent';view.renderList();
+ assert.deepEqual(ids(),['running','side','idle','unknown','unread','waiting'],'重新进入列表重新按当前状态排序');
  assert.deepEqual(view.rows.map(row=>row.updatedAt),times,'排序不能改动交互时间或原始列表');
 });
 

@@ -469,11 +469,41 @@ for(const mode of ['codex','project','recent'])test('collapse all persists immed
   }
   assert.equal(JSON.stringify(context.listRows),row);assert.equal(context.projectChatPages,pages);
 });
+test('最近交互的蓝点已读后保留位置，轮询不会使聊天突然掉到列表后面',()=>{
+  const {context,nodes}=fixture('recent'),activity=context.sessionActivity;
+  context.listRows=[{id:'newer',recency:100},{id:'older',recency:1}].map(row=>({...row,host:'local',title:row.id,projectKey:'local|p',projectName:'Project'}));
+  activity.update(context.listRows.map(row=>({...row,connected:true,status:'idle'})));
+  activity.markUnread('local|older');context.renderList();
+  const ids=()=>nodes.sessions.children.map(node=>node.dataset.id);
+  assert.deepEqual(ids(),['older','newer']);
+  activity.read('local|older',{explicit:true,sync:false});context.renderList();
+  assert.equal(activity.indicator('local|older'),null,'已读仍正常清除蓝点');
+  assert.deepEqual(ids(),['older','newer'],'已读不能马上移动聊天');
+  activity.update(context.listRows.map(row=>({...row,connected:true,status:'idle'})));context.renderList();
+  assert.deepEqual(ids(),['older','newer'],'后续轮询仍保留位置');
+  nodes['list-mode'].value='project';context.renderList();nodes['list-mode'].value='recent';context.renderList();
+  assert.deepEqual(ids(),['newer','older'],'重新进入列表恢复实时状态排序');
+  assert.deepEqual(context.listRows.map(row=>row.recency),[100,1]);
+});
+
 test('recent mode preserves the flat list and project mode offers creation',()=>{
   const recent=fixture('recent');assert.equal(recent.nodes.sessions.children.length,2);
   assert.ok(recent.nodes.sessions.children.every(n=>n.className.startsWith('session')));
   const grouped=fixture('project');assert.equal(grouped.nodes.sessions.children.length,2);
   assert.equal(grouped.nodes.sessions.children[0].children[0].children[1].className,'plain project-create');
+});
+
+test('最近交互位置保留隔离主机，筛选、移除、清理身份和新页面均不复活旧位置',()=>{
+  const saved=new Map(),storage={getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)};
+  const activity=new SessionActivity({storage}),keys=['local|same','remote|same'];
+  activity.markUnread(keys[0]);assert.deepEqual([...activity.recentStatusKeys(keys,'all')],[keys[0]]);
+  activity.read(keys[0],{explicit:true,sync:false});assert.deepEqual([...activity.recentStatusKeys(keys,'all')],[keys[0]]);
+  assert.deepEqual([...new SessionActivity({storage}).recentStatusKeys(keys,'all')],[],'只保存真实已读记录，不保存位置保留');
+  assert.deepEqual([...activity.recentStatusKeys(keys,'filtered')],[]);
+  activity.markUnread(keys[0]);activity.recentStatusKeys(keys,'filtered');activity.forget(keys[0]);
+  assert.deepEqual([...activity.recentStatusKeys(keys,'filtered')],[]);
+  activity.markUnread(keys[1]);activity.recentStatusKeys(keys,'filtered');activity.clear();
+  assert.deepEqual([...activity.recentStatusKeys(keys,'filtered')],[]);
 });
 
 test('a native project with no chats remains visible in project mode and can be searched by name',()=>{

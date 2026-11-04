@@ -2,6 +2,10 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"正在加载模型列表…":"Loading models…",
+"模型列表暂时不可用，正在重试…":"Models are temporarily unavailable. Retrying…",
+"未获取到可用模型，请重试。":"No models were returned. Please retry.",
+"模型列表加载失败，仍可沿用默认设置或填写自定义模型。":"Could not load models. You can still use defaults or enter a custom model.",
 "登录状态已失效，请重新登录。":"Your session has expired. Please sign in again.",
 "连接异常，操作结果尚未确认，请先刷新查看状态，勿重复提交。":"The connection failed and the result is unconfirmed. Refresh to check the status before submitting again.",
 "网关返回了异常响应，请检查连接或稍后刷新。":"The gateway returned an unexpected response. Check the connection or refresh later.",

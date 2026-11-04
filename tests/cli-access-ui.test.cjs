@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const app=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');
 const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
+const {SessionActivity}=require('../web/features/chat/activity.js');
 const extract=(start,end)=>app.slice(app.indexOf(start),app.indexOf(end,app.indexOf(start)));
 const accessCode=extract('function sessionAccess(access){','function renderList(){');
 const sourceFilterCode=extract('function renderSourceFilter(){','function sessionAccess(access){');
@@ -32,6 +33,7 @@ function fixture(){
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
   const ctx={$ ,state:null,applyingNewChat:null,applyingNewChatPreferences:null,rememberNewChatSetting(){},reconnectFailure:null,listRows:[],availableSources:[],listRenderStamp:'',listComplete:false,listReadFinished:false,currentId:'a',currentHost:'local',sending:false,catalogStarted:false,catalogLoads:0,startCatalog(){ctx.catalogLoads++;},selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','继续会话':'Continue chat'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},scheduleActivityRefresh(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
   ctx.sidebarData={sections:[],projects:[]};ctx.sectionProjectOrder={sort:(key,ids)=>ids};ctx.sidebarPlacements={resolve:(_item,_sections,native)=>native};ctx.projectChatPages=new Map();ctx.listLoading=0;ctx.listHasMore=false;ctx.sessionActivity.indicator=()=>null;
+  ctx.listFilterKey='';ctx.listSource='all';ctx.sessionActivity=new SessionActivity({storage:{getItem:()=>null,setItem(){},removeItem(){}}});
   vm.createContext(ctx);vm.runInContext(accessCode+listCode+stateCode,ctx);
   return {ctx,$,nodes};
 }
