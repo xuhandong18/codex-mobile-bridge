@@ -271,7 +271,6 @@ export async function apply(ctx,config){
     if(op==='create'){
       if(entry)throw Error('此侧边聊天槽位已使用，请新建标签');
       if(typeof ctx.sessionController.fork!=='function')throw Error('当前 Harness 未提供会话分叉接口');
-      if(Object.values(personal.sides).filter(e=>!sideEnded(e)).length>=8)throw Error('侧边聊天数量已达上限，请结束不用的聊天');
       const name=body.title===undefined?'':title(body.title),parent=normalize(await find(sid));
       // The gateway persists an unknown receipt before this non-replayable fork.
       const child=await ctx.sessionController.fork({sessionId:sid,allowMigration:false});

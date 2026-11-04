@@ -53,6 +53,10 @@ PREVIOUS_WAITING_SOURCES = ('e96301e720ab5022372c3b3938233d5023de7f219277c6c74ba
 PREVIOUS_HISTORY_SOURCES = ('1b006bc65e0ff45c13c5eaccdf0eb08c384c1c03f8fefffc0af4c6079e92df48',
                             '29b359c39255cbf92ff4105457e6e4eeb17e426924e945a86b2e5721de4933c2')
 
+# Revision 10 before side-chat count limits were removed, LF and CRLF.
+PREVIOUS_SIDE_LIMIT_SOURCES = ('2ce70e31d739b6d4d18dccb4edad915de729bc72eacc17ce086922d206e167cb',
+                               '30f81a5075dd9bd4dbcc44faf6c912f80efcb06bb777c7d1b25b7e892422a685')
+
 def client_assets():
     base = Path(__file__).parent
     return {'package.json': (base/'client-package.json').read_bytes(), 'client.js': (base/'client.js').read_bytes(),
@@ -178,7 +182,7 @@ def verified_directory(entry, home):
                            (current_lf, current_lf.replace(b'\n', b'\r\n'))}
         if digest not in current_sources and digest not in (
                 LEGACY_SOURCE, PREVIOUS_SOURCE, PREVIOUS_CLEANUP_SOURCE, PREVIOUS_CATALOG_SOURCE,
-                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES, *PREVIOUS_WAITING_SOURCES, *PREVIOUS_HISTORY_SOURCES):
+                *PREVIOUS_QUIT_SOURCES, *PREVIOUS_CONTEXT_SOURCES, *PREVIOUS_PERSONAL_SOURCES, *PREVIOUS_MODE_SOURCES, *PREVIOUS_READ_STATE_SOURCES, *PREVIOUS_AI_RENAME_SOURCES, *PREVIOUS_WAITING_SOURCES, *PREVIOUS_HISTORY_SOURCES, *PREVIOUS_SIDE_LIMIT_SOURCES):
             return None
         if digest in current_sources:
             for name, content in client_assets().items():

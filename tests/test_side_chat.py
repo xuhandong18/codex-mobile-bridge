@@ -197,6 +197,73 @@ class SideChatTests(unittest.TestCase):
             manager.close()
 
 
+class SideChatCapacityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=support.ROOT/'.tmp')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.manager = SideChats('runtime', self.root/'home', self.root/'data', 'local',
+            factory=lambda *args: SideChat(*args, runtime_factory=RuntimeFixture))
+        self.manager.checked = True
+        self.addCleanup(self.manager.close)
+        self.parent = str(uuid.uuid4())
+        self.args = ({'cwd': str(self.root)}, {'model': 'fixture', 'modelProvider': 'custom'})
+
+    def create(self, parent):
+        body = {'creationId': str(uuid.uuid4()), 'slot': str(uuid.uuid4())}
+        return body, self.manager.operate(parent, 'create', body, *self.args)
+
+    def test_more_than_eight_chats_preserve_discovery_identity_and_history(self):
+        for shared_parent in (True, False):
+            with self.subTest(shared_parent=shared_parent):
+                other_parent = self.parent if shared_parent else str(uuid.uuid4())
+                parents = [self.parent, other_parent]
+                created = [(parent, *self.create(parent)) for parent in parents for _ in range(5)]
+                for parent in set(parents):
+                    expected = {view['id'] for owner, _, view in created if owner == parent}
+                    actual = self.manager.operate(parent, 'read', {})['slots']
+                    self.assertEqual({row['id'] for row in actual}, expected)
+                parent, body, view = created[-1]
+                chat = self.manager.chats[(parent, body['slot'])]
+                calls = copy.deepcopy(chat.runtime.calls)
+                self.assertEqual(self.manager.operate(parent, 'create', body, *self.args)['id'], view['id'])
+                self.assertEqual(chat.runtime.calls, calls)
+                for owner, retry in ((str(uuid.uuid4()), body), (parent, {**body, 'slot': str(uuid.uuid4())})):
+                    with self.assertRaises(ValueError):
+                        self.manager.operate(owner, 'create', retry, *self.args)
+                sent = self.manager.operate(parent, 'send', {'slot': body['slot'], 'id': view['id'],
+                    'text': '超过原数量限制后仍可发送', 'submissionId': str(uuid.uuid4())})
+                self.assertEqual(sent['status'], 'accepted')
+                closed = self.manager.operate(parent, 'close', {'slot': body['slot'], 'id': view['id']})
+                self.assertTrue(closed['closed'])
+                self.assertTrue(chat.runtime.closed)
+                saved = self.manager.operate(parent, 'read', {'archiveId': view['id']})
+                self.assertTrue(saved['readOnly'])
+                self.assertEqual(saved['turns'][0]['messages'][0]['text'], '超过原数量限制后仍可发送')
+                self.assertIn(view['id'], {row['id'] for row in self.manager.operate(parent, 'history', {})['items']})
+                with self.assertRaises(ValueError):
+                    self.manager.operate(parent, 'create', body, *self.args)
+                for owner, created_body, child in created[:-1]:
+                    self.assertTrue(self.manager.operate(owner, 'read', {'slot': created_body['slot']})['connected'])
+                    self.manager.operate(owner, 'close', {'slot': created_body['slot'], 'id': child['id']})
+                self.assertEqual(self.manager.chats, {})
+
+    def test_creation_receipts_beyond_one_thousand_do_not_block_or_replay(self):
+        body, old = self.create(self.parent)
+        self.manager.operate(self.parent, 'close', {'slot': body['slot'], 'id': old['id']})
+        # Model a long-lived gateway's ended creation receipts without starting 1000 executors.
+        self.manager.creations.update({str(uuid.uuid4()): ((self.parent, str(uuid.uuid4())), str(uuid.uuid4()))
+                                      for _ in range(1000)})
+        self.assertGreater(len(self.manager.creations), 1000)
+        fresh_body, fresh = self.create(self.parent)
+        self.assertTrue(fresh['connected'])
+        self.assertEqual(self.manager.operate(self.parent, 'create', fresh_body, *self.args)['id'], fresh['id'])
+        with self.assertRaises(ValueError):
+            self.manager.operate(self.parent, 'create', body, *self.args)
+        self.assertEqual(len(self.manager.chats), 1)
+        self.assertEqual(len(self.manager.creations), 1002)
+
+
 class SideChatServiceTests(unittest.TestCase):
     setUp = support.IntegrationTests.setUp
     tearDown = support.IntegrationTests.tearDown

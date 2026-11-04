@@ -177,6 +177,34 @@ class DeepSeekMigrationTests(unittest.TestCase):
                                           for path in before})
                 self.assertFalse(self.new_path.exists())
 
+    def test_side_limit_predecessors_are_discovered_read_only_and_upgrade_without_identity_changes(self):
+        from bridge.clients.deepseek import setup
+        original_sha = hashlib.sha256
+        source = self.old.directory/'mobile-host.mjs'
+        current = Path(__file__).resolve().parents[1]/'bridge/clients/deepseek/host.mjs'
+        for line_ending, predecessor in zip((b'\n', b'\r\n'), setup.PREVIOUS_SIDE_LIMIT_SOURCES):
+            with self.subTest(line_ending=line_ending):
+                content = b'// verified revision 10 fixture before removing side-chat limits'+line_ending
+                source.write_bytes(content)
+                before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in (*self.old.directory.iterdir(), self.profile)}
+                def digest(value):
+                    return Mock(hexdigest=lambda: predecessor) if value == content else original_sha(value)
+                adapter = DeepSeek(self.new_path, self.home)
+                with patch.object(setup.hashlib, 'sha256', side_effect=digest):
+                    discovered = adapter.discover_existing()
+                    self.assertTrue(discovered['reused'])
+                    self.assertTrue(discovered['updateRequired'])
+                    self.assertTrue(discovered['restartRequired'])
+                    self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before})
+                    self.assertTrue(adapter.update_existing()['changed'])
+                self.assertEqual(source.read_bytes(), current.read_bytes())
+                for path, expected in before.items():
+                    if path != source:
+                        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), expected)
+                self.assertEqual(adapter.directory, self.old.directory)
+                self.assertFalse(self.new_path.exists())
+
     def test_revision_six_read_state_upgrade_preserves_connection_and_adds_native_client_assets(self):
         from bridge.clients.deepseek import setup
         source = self.old.directory/'mobile-host.mjs'

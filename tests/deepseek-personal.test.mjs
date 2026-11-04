@@ -55,6 +55,42 @@ test('side history is native, closed slots remain readable and discovery never f
   assert.equal((await f.request('side-write','parent',{operation:'send',slot:slots[1],childId:children[1].id,text:'forbidden',submissionId:randomUUID()})).code,400);
 });
 
+test('more than eight side chats work within and across parents without losing history or isolation',async t=>{
+  const f=await fixture(t);f.add('parent');f.add('other');
+  const children=[];
+  for(const parent of ['parent','other'])for(let i=0;i<10;i++){
+    const slot=randomUUID(),body={operation:'create',slot,id:randomUUID()};
+    const child=await f.request('side-write',parent,body);
+    assert.equal(child.code,200);assert.ok(child.id);children.push({parent,slot,body,child});
+  }
+  assert.equal(f.calls.filter(call=>call[0]==='fork').length,20);
+  for(const parent of ['parent','other']){
+    const expected=children.filter(entry=>entry.parent===parent).map(entry=>entry.child.id);
+    const discovered=await f.request('side-read',parent);
+    assert.deepEqual(new Set(discovered.slots.map(entry=>entry.id)),new Set(expected));
+  }
+  const {parent,slot,body,child}=children.at(-1);
+  assert.equal((await f.request('side-write',parent,body)).code,400,'an occupied slot cannot create another fork');
+  assert.equal(f.calls.filter(call=>call[0]==='fork').length,20);
+  assert.equal((await f.request('side-write','parent',{operation:'send',slot,childId:child.id,text:'wrong parent',submissionId:randomUUID()})).code,400);
+  assert.equal((await f.request('side-write',parent,{operation:'send',slot:children[0].slot,childId:child.id,text:'wrong slot',submissionId:randomUUID()})).code,400);
+  assert.equal((await f.request('side-write',parent,{operation:'send',slot,childId:child.id,text:'超过原数量限制后仍可发送',submissionId:randomUUID()})).status,'accepted');
+  assert.equal(f.calls.filter(call=>call[0]==='prompt').at(-1)[1].sessionId,child.id);
+  assert.equal((await f.request('side-write',parent,{operation:'close',slot,childId:child.id})).code,200);
+  assert.ok(f.calls.some(call=>call[0]==='archive'&&call[1]===child.id));
+  const saved=await f.request('side-read',parent,{archiveId:child.id});
+  assert.equal(saved.readOnly,true);assert.equal(saved.id,child.id);
+  assert.equal((await f.request('side-read',parent,{history:'1'})).items.length,10);
+  assert.equal((await f.request('side-write',parent,body)).code,400,'an ended slot cannot recreate its fork');
+  assert.equal(f.calls.filter(call=>call[0]==='fork').length,20);
+  assert.equal((await f.request('side-read','parent')).slots.length,10);
+  assert.equal((await f.request('side-read','other')).slots.length,9);
+  await f.restart();
+  assert.equal((await f.request('side-read','parent')).slots.length,10);
+  assert.equal((await f.request('side-read','other')).slots.length,9);
+  assert.equal((await f.request('side-read',parent,{archiveId:child.id})).readOnly,true);
+});
+
 test('side native turn identifiers and actual prose advance parent recency while tools and reasoning do not',async t=>{
   const f=await fixture(t);f.add('parent');const child=await f.request('side-write','parent',{operation:'create',id:randomUUID()}),row=f.rows.find(r=>r.sessionId===child.id),stamp=2100000000000;
   const emit=(type,data,time)=>{f.append(child.id,type,data);const event=f.events.get(child.id).at(-1).event;event.time=time;f.handlers.get('session/event')({id:child.id},event);};

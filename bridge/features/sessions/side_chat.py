@@ -804,7 +804,6 @@ class SideChats:
 
     def recencies(self):
         # Copy-on-write publication: readers never wait behind runtime actions.
-        # The existing 1000-creation limit also bounds retained parent entries.
         return dict(self.parent_recencies)
 
     def _remember_interaction(self, parent, at):
@@ -841,8 +840,6 @@ class SideChats:
                     return chat.view()
                 if self.host != 'local':
                     raise ValueError('此预览暂支持网关电脑上的聊天，SSH 远程工作区尚未接入侧边聊天')
-                if sum(not child.closed and not child.error for child in self.chats.values()) >= 8 or len(self.creations) >= 1000:
-                    raise ValueError('临时侧边聊天数量已达上限，请关闭不用的聊天；必要时重启网关')
                 title = side_chat_title(body['title']) if 'title' in body else ''
                 executable = self.executable_getter() if self.executable_getter else self.executable
                 if not executable:
