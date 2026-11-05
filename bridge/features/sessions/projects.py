@@ -299,7 +299,7 @@ class Projects:
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 120:
             raise ValueError('请输入 1–120 字的项目名称')
         section = value['sectionId']
-        if section is not None and (not isinstance(section, str) or section not in {s['id'] for s in sections}):
+        if section is not None and (not isinstance(section, str) or section not in {'pinned', *(s['id'] for s in sections)}):
             raise ValueError('所选分区已不存在，请刷新后重试')
         cwd = str(self.directory(value['cwd']))
         context = value.get('contextId')

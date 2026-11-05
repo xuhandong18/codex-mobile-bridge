@@ -59,7 +59,7 @@ Codex 聊天删除、归档和取消归档运行 `python -B scripts/test-backend
 
 测试名仍保持在 `tests/` 顶层，方便按前缀发现并复用既有夹具。平台测试的模拟结果不能替代对应操作系统的实机结果。
 
-新建 Codex 项目运行 `python -B scripts/test-backend.py --source-only -p test_native_projects.py`，并联动 `test_projects.py`、`test_projects_http.py`、`test_project_directories.py` 和 `test_windows_project_ui.py`。覆盖桌面 `schemaVersion: 2` 同时返回本地、远程和无磁盘路径的 ChatGPT 项目时，两种原生创建通路均能完成本地项目与分区的核验；远程、云端项目不能充当本地创建回执，损坏的本地记录、未知项目类型和重复身份仍拒绝操作，写入结果未知不重放。夹具使用合成数据，不创建真实项目或执行真实桌面窗口操作。
+新建 Codex 项目运行 `python -B scripts/test-backend.py --source-only -p test_native_projects.py`，并联动 `test_projects.py`、`test_projects_http.py`、`test_project_directories.py` 和 `test_windows_project_ui.py`。覆盖桌面 `schemaVersion: 2` 同时返回本地、远程和无磁盘路径的 ChatGPT 项目时，两种原生创建通路均能完成本地项目与分区的核验；远程、云端项目不能充当本地创建回执，损坏的本地记录、未知项目类型和重复身份仍拒绝操作，写入结果未知不重放。新建时选择内置置顶不依赖自定义分区列表，两条创建通路均核验原生归属与持久化置顶状态，缺少保存回执时保留已创建项目且不重放；`node --test tests/project-creation.test.cjs` 检查初始与刷新元数据后的置顶选项及提交值。夹具使用合成数据，不创建真实项目或执行真实桌面窗口操作。
 
 需要真实符号链接的夹具通过 `symlink_support.require_symlink_support()` 检查能力。Windows 账户缺少该权限（WinError 1314）时，仅跳过对应检查并显示原因；不修改系统安全策略，也不把这些检查算作通过。
 

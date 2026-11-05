@@ -63,6 +63,15 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(result['parent'], str(self.root))
         self.assertNotIn('private', json.dumps(result))
 
+    def test_builtin_pinned_can_be_selected_without_being_a_custom_section(self):
+        self.projects.native_creator = Mock(return_value={'key':'local|native'})
+        self.projects.create({**self.value, 'sectionId':'pinned'}, [], [])
+        self.assertEqual(self.projects.native_creator.call_args.args[0]['sectionId'], 'pinned')
+        for section in ('threads', 'projects', 'agents', 'builtin:pinned', True, []):
+            with self.subTest(section=section), self.assertRaises(ValueError):
+                self.projects.create({**self.value, 'sectionId':section}, [], [])
+        self.assertEqual(self.projects.native_creator.call_count, 1)
+
     def test_corrupted_store_is_not_silently_overwritten(self):
         self.projects.path.parent.mkdir();self.projects.path.write_text('broken')
         with self.assertRaises(ValueError):

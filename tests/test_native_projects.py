@@ -363,6 +363,50 @@ class NativeProjectDelegationTests(unittest.TestCase):
         self.assertEqual(len(writes),1)
         self.assertEqual(writes[0].args[1],{'name':'Native','sources':[str(self.folder)],'host':{'type':'local'}})
 
+    def test_pinned_creation_waits_for_native_and_persisted_pin_on_both_creation_paths(self):
+        for scoped in (False, True):
+            with self.subTest(scoped=scoped):
+                request = {**self.request, 'sectionId':'pinned'}
+                native, ui = Mock(), Mock(return_value={'submitted':True})
+                native.call.side_effect = [
+                    {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)] if scoped else []}]},
+                    *([{'projectId':self.identifier, 'rootPaths':[str(self.folder)]}] if scoped else [
+                        {'projects':[]}, {'projects':[self.row]}]),
+                    {'projects':[self.row]}, {},
+                    {'sections':[{'sectionId':'pinned', 'itemKeys':['codex:project:'+self.identifier]}]},
+                ]
+                snapshots = [
+                    {'sections':[], 'projects':[]},
+                    {'sections':[], 'projects':[self.project]},
+                    {'sections':[], 'projects':[self.project], 'pinnedProjectIds':[self.identifier]},
+                ]
+                self.bridge.hosts.sidebar = Mock(side_effect=snapshots)
+                with patch.object(DesktopTools, 'connect', return_value=native), \
+                        patch('bridge.clients.codex.projects.time.sleep') as sleep:
+                    result = NativeProjects(self.bridge, project_creator=ui)(request, Mock())
+                self.assertEqual(result, self.project)
+                sleep.assert_called_once_with(.2)
+                native.call.assert_any_call('move_project_to_sidebar_section',
+                    {'projectId':self.identifier, 'sectionId':'pinned'})
+                self.assertEqual(ui.call_count, 0 if scoped else 1)
+                native.close.assert_called_once()
+
+    def test_pinned_creation_does_not_report_completion_when_saved_pin_is_missing(self):
+        native = Mock()
+        native.call.side_effect = [
+            {'hosts':[{'hostId':'local', 'workspaceRoots':[str(self.root)]}]},
+            {'projectId':self.identifier, 'rootPaths':[str(self.folder)]}, {'projects':[self.row]}, {},
+            {'sections':[{'sectionId':'pinned', 'itemKeys':['codex:project:'+self.identifier]}]},
+        ]
+        # Advance the final readback deadline deterministically, without waiting.
+        with patch.object(DesktopTools, 'connect', return_value=native), \
+                patch('bridge.clients.codex.projects.time.monotonic', side_effect=[0, 1, 11]), \
+                patch('bridge.clients.codex.projects.time.sleep'), self.assertRaises(ToolError) as caught:
+            NativeProjects(self.bridge)({**self.request, 'sectionId':'pinned'}, Mock())
+        self.assertEqual(caught.exception.project['key'], self.project['key'])
+        self.assertEqual(sum(call.args[0] == 'move_project_to_sidebar_section'
+                             for call in native.call.call_args_list), 1)
+
     def test_native_dialog_allows_time_for_manual_trust_without_resubmitting_creation(self):
         clock = [0.0]
         def call(method, arguments):

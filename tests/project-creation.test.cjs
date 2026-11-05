@@ -48,6 +48,19 @@ test('a gateway that advertises folder creation enables the action without a res
   assert.equal(f.nodes.find(node=>node.textContent.includes('新建文件夹需要新版手机网关')).hidden,true);
 });
 
+test('新建项目的初始分区和刷新后分区均保留一个置顶选项，提交原生置顶归属',async()=>{
+  const f=fixture([{status:'completed',project:{key:'local|native'}}],
+    {canCreateProject:true,canCreateDirectory:true,sections:[{id:'work',name:'工作'},{id:'pinned',name:'置顶'}]});
+  const section=f.nodes.find(node=>node.tagName==='SELECT'&&node.children.length);
+  assert.deepEqual(section.children.map(option=>[option.text,option.value]),[['不属于分区',''],['置顶','pinned']]);
+  await f.flush();
+  assert.deepEqual(section.children.map(option=>[option.text,option.value]),[['不属于分区',''],['置顶','pinned'],['工作','work']]);
+  section.value='pinned';
+  const {pending}=await f.submitForm();await pending;
+  assert.equal(f.requests.find(request=>request.body).body.sectionId,'pinned');
+  assert.equal(f.dialog.open,false);
+});
+
 test('native creation keeps the dialog pending and only reports success after verified completion',async()=>{
   const f=fixture([{id:'request-uuid',status:'creating',message:'Confirm on desktop'},
     {id:'request-uuid',status:'completed',project:{key:'local|native'}}]);

@@ -118,7 +118,7 @@ class NativeProjects:
             roots = local_roots(native.call('list_hosts', {}))
             scoped = any(within(value['cwd'], root) for root in roots)
             # Recheck the section immediately before the first native write.
-            if value['sectionId'] is not None and value['sectionId'] not in {s['id'] for s in bridge.hosts.sidebar()['sections']}:
+            if value['sectionId'] is not None and value['sectionId'] not in {'pinned', *(s['id'] for s in bridge.hosts.sidebar()['sections'])}:
                 raise ToolError('所选分区已不存在，请刷新后重试')
             if scoped:
                 progress('creating', '请在 Codex 桌面确认文件夹信任提示；已有权限时会直接创建')
@@ -173,7 +173,9 @@ class NativeProjects:
                 sidebar = bridge.hosts.sidebar()
                 saved = next((p for p in sidebar['projects'] if p['key'] == project['key']), None)
                 saved_sections = [s['id'] for s in sidebar['sections'] if 'codex:project:'+identifier in s['itemKeys']]
-                if saved and saved_sections == ([] if value['sectionId'] is None else [value['sectionId']]):
+                expected_sections = [] if value['sectionId'] in (None, 'pinned') else [value['sectionId']]
+                pinned = identifier in sidebar.get('pinnedProjectIds', [])
+                if saved and saved_sections == expected_sections and pinned == (value['sectionId'] == 'pinned'):
                     return saved
                 time.sleep(.2)
             raise ToolError('项目已创建，桌面保存状态尚未同步，请刷新列表或在 Codex 桌面检查')
