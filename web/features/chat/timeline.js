@@ -324,6 +324,7 @@ class ChatTimeline {
   rowHeading(row){
     if(row.role==='activity')return (row.title||row.kind)+(row.status==='inProgress'?timelineText(' · 进行中'):'');
     if(row.kind==='threadMessage')return timelineText('其他主聊天');
+    if(row.kind==='goalHistory')return timelineText('目标内容');
     return row.role==='user'?timelineText('你'):row.role==='error'?timelineText('执行错误'):[this.providerLabel,row.model&&[row.model,row.effort].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
   }
   groupRows(ordered=[...this.rows.values()].map(value=>value.row).sort((a,b)=>a.order-b.order)){

@@ -7,6 +7,7 @@ import hashlib
 import json
 import uuid
 from collections import OrderedDict
+from bridge.features.sessions.goal import goal_history_match
 
 PAGE_BYTES = 192 * 1024
 TEXT_PREVIEW = 8000
@@ -27,23 +28,30 @@ class Timeline:
         self.positions = {}
         self.versions = OrderedDict()
         self.meta = {}
+        self.goal_history = None
 
     def update(self, view):
-        if self.sequence == view['sequence']:
+        if self.sequence == view['sequence'] and self.goal_history == view.get('goalHistory'):
             return
         activation_ids = set(view.get('goalActivationIds') or ())
+        history = view.get('goalHistory') or []
         rows, details = [], {}
         for turn in view['turns']:
             occurrences = {}
-            first_user = next((m for m in turn['messages'] if m['role'] == 'user'
+            messages = []
+            for message in turn['messages']:
+                match = goal_history_match(message, history)
+                messages.append({**message, 'text': match['objective'], 'kind': 'goalHistory'} if match else message)
+            first_user = next((m for m in messages if m['role'] == 'user'
+                               and m.get('kind') != 'goalHistory'
                                and m.get('kind') != 'threadMessage'
                                and not m.get('isUserContext')
                                and ('firstUserMessageId' not in turn or m.get('id') == turn['firstUserMessageId'])
                                and (not m.get('requestId') or m['requestId'] not in activation_ids)), None)
-            for message in turn['messages']:
-                if message.get('requestId') and message['requestId'] in activation_ids:
+            for original, message in zip(turn['messages'], messages):
+                if message.get('kind') != 'goalHistory' and message.get('requestId') and message['requestId'] in activation_ids:
                     continue
-                identity = [turn['id'], message.get('id'), message.get('kind')]
+                identity = [turn['id'], original.get('id'), original.get('kind')]
                 base = hashlib.sha256(encoded(identity)).hexdigest()[:24]
                 ordinal = occurrences.get(base, 0)
                 occurrences[base] = ordinal + 1
@@ -85,16 +93,15 @@ class Timeline:
         for index, row in enumerate(rows):
             row['order'] = self.order_origin + index
         self.sequence = view['sequence']
+        self.goal_history = view.get('goalHistory')
         self.rows, self.details = rows, details
         self.positions = {row['key']: i for i, row in enumerate(rows)}
-        self.meta = {k: v for k, v in view.items() if k != 'turns'}
+        self.meta = {k: v for k, v in view.items() if k not in ('turns', 'goalHistory')}
         last = view['turns'][-1] if view['turns'] else {}
         self.meta.update(turnId=last.get('id'), turnStatus=last.get('status'))
-        self.meta['latestUserTurnId'] = next((t['id'] for t in reversed(view['turns'])
-                                              if any(m['role'] == 'user'
-                                                     and not m.get('isUserContext')
-                                                     and (not m.get('requestId') or m['requestId'] not in activation_ids)
-                                                     for m in t['messages'])), None)
+        self.meta['latestUserTurnId'] = next((r['turnId'] for r in reversed(rows)
+                                              if r['role'] == 'user' and r.get('kind') != 'goalHistory'
+                                              and not r.get('isUserContext')), None)
         self.versions[self.sequence] = {row['key']: hashlib.sha256(encoded(row)).digest() for row in rows}
         while len(self.versions) > 16:
             self.versions.popitem(last=False)

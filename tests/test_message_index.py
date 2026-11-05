@@ -242,6 +242,39 @@ class NavigationBridgeTests(unittest.TestCase):
         self.assertTrue(page['meta']['goalArchived'])
         self.assertTrue(page['meta']['canEditCompletedGoal'])
 
+    def test_goal_original_and_revised_objectives_are_readable_after_restart(self):
+        from bridge.features.sessions.goal import GOAL_ACTIVATION_TEXTS
+        import uuid
+        original = 'Original objective: all market conditions'
+        revised = 'Revised objective: at least eighteen profitable months'
+        records = []
+        for i, (action, objective) in enumerate((('create', original), ('resume', revised))):
+            request_id = str(uuid.uuid4())
+            self.bridge.submissions[self.support.THREAD+':'+request_id] = {
+                'text':GOAL_ACTIVATION_TEXTS['zh-CN'][action], 'status':'accepted', 'at':100+i*100,
+                'goalActivation':{'action':action,'objective':objective},
+            }
+            records.extend([
+                {'type':'event_msg','payload':{'type':'task_started','turn_id':'goal-'+str(i)}},
+                {'timestamp':101+i*100,'type':'response_item','payload':{'type':'message','role':'user',
+                    'content':[{'type':'input_text','text':GOAL_ACTIVATION_TEXTS['zh-CN'][action]}]}},
+                {'type':'event_msg','payload':{'type':'task_complete'}},
+            ])
+        self.bridge._save_ledger()
+        # Simulate the durable inputs on a fresh gateway, without an owner goal.
+        self.bridge.submissions = json.loads(self.bridge.ledger_path.read_text(encoding='utf-8'))
+        self.path.write_text(''.join(json.dumps(record)+'\n' for record in records), encoding='utf-8')
+        directory = self.bridge.message_index(self.support.THREAD)
+        self.assertEqual([item['summary'] for item in directory['items']], [original, revised])
+        for entry, objective in zip(directory['items'], (original, revised)):
+            page = self.bridge.timeline_read(self.support.THREAD, around=entry['id'])
+            target = next(row for row in page['rows'] if row.get('navigationId') == entry['id'])
+            self.assertEqual(target['text'], objective)
+            self.assertEqual(target['kind'], 'goalHistory')
+            self.assertFalse(target['editable'])
+            self.assertEqual(target['key'], entry['rowKey'])
+        self.assertFalse(any(call['method']=='thread-follower-start-turn' for call in self.fixture.requests))
+
 
     def test_navigation_embedded_image_has_a_scoped_preview(self):
         import base64

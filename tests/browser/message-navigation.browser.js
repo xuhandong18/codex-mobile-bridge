@@ -1,5 +1,5 @@
 // Synthetic API, production ChatTimeline and real browser layout. No native client.
-function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix='',image=false,mainChats=false}={}) {
+function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix='',image=false,mainChats=false,goalHistory=false}={}) {
   window.navigationFixture?.timeline.dispose();
   document.getElementById('messages').replaceChildren();
   const contextTexts=[
@@ -10,7 +10,8 @@ function setupCompactMessageNavigationFixture({count=1,contexts=false,userSuffix
   ],requests=[],rendered=[];
   const rows=[...(contexts?contextTexts.map((text,i)=>({key:'context'+i,role:'user',kind:'userMessage',isUserContext:true,
     text:text.slice(0,8000),truncated:text.length>8000})):[]),
-    ...Array.from({length:count},(_,i)=>({key:'q'+i,role:'user',kind:'userMessage',text:'Question '+i+userSuffix,editable:true,
+    ...Array.from({length:count},(_,i)=>({key:'q'+i,role:'user',kind:goalHistory?'goalHistory':'userMessage',
+      text:goalHistory?'最初目标：研究不同市场行情的策略。\n2024—2025 年，每笔一万美元，有止损，无固定止盈。':'Question '+i+userSuffix,editable:!goalHistory,
       ...(image?{attachments:[{type:'image',name:'screen.jpg',desktopId:'a'.repeat(64)}]}:{})})),
     ...(mainChats?[{key:'main-chat',role:'user',kind:'threadMessage',text:'请核对主聊天发来的验收要求。',editable:false,
       sourceThreadId:'22222222-2222-4222-8222-222222222222'}]:[]),

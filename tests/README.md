@@ -12,6 +12,8 @@ DeepSeek 第 10 版主聊天和侧边聊天分别验收：运行 `node --test te
 
 ## Python 后端
 
+目标历史正文恢复运行 `python -B scripts/test-backend.py --source-only -p test_modes.py`、`-p test_message_index.py`、`-p test_goal_controls.py` 及 `node scripts/test-message-navigation-browser.cjs`。覆盖原生目标已消失、旧消息缺请求 ID、网关重载发送记录、创建与恢复时的不同正文、消息目录定位、只读展示和普通同文消息保留；浏览器在手机、平板和电脑宽度核验目标原文实际可见，合成夹具不执行真实任务。
+
 等待用户处理的红色提示运行 `python -B scripts/test-backend.py --source-only -p '*activity*.py'`、`node --test tests/waiting-activity.test.cjs` 和 `npm run test:desktop`。覆盖正式请求与异步问题、原生等待输入/批准标记、未打开的聊天、主侧及派生任务独立汇总、红蓝绿优先级、阅读不解除、未知状态和旧回包不清除等待，以及请求到达不推动排序。DeepSeek 第 9 版接入的只读摘要和第 8 版兼容由 `test_deepseek_migration.py`、`deepseek-personal.test.mjs` 验证。真实 DOM 回归运行 `node scripts/test-side-chat-activity-browser.cjs` 与 `node scripts/test-deepseek-browser.cjs`，检查手机、平板、电脑尺寸下各列表的红色、无障碍说明和恢复绿点；均使用隔离合成运行时，不执行真实审批或发送模型任务。
 
 `test_shared_waiting_activity.py` 通过真实 HTTP 入口验证手机详情中确认的等待能同步给新打开的电脑，并覆盖网关重启、主侧与不同主机隔离、派生等待独立观察时间、旧回包和断线不能解除等待。配合 `test_chat_read_state.py` 检查已有未读同步。上述侧边活动浏览器驱动还使用独立的手机与电脑存储，在原聊天未加载时检查共享红色、电脑重载保留，以及明确回答后两端解除；不把原生空闲状态视为异步问题已回答。

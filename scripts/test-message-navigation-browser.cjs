@@ -30,6 +30,13 @@ const server=http.createServer((req,res)=>{
       page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));
       await page.goto('http://127.0.0.1:'+server.address().port);
       const activate=async selector=>touch?page.locator(selector).tap():page.locator(selector).click();
+      await page.evaluate(()=>setupCompactMessageNavigationFixture({goalHistory:true}));
+      const goalRow=page.locator('[data-key="q0"]');
+      check(await goalRow.isVisible()&&(await goalRow.textContent()).includes('最初目标：研究不同市场行情的策略。'),'目标卡片消失后历史目标正文仍展开可读 '+width);
+      check((await goalRow.locator('.who').textContent())==='目标内容','历史目标有明确标题 '+width);
+      check(await page.evaluate(()=>navigationFixture.timeline.rows.get('q0').row.editable===false),'历史目标不提供编辑并重新发送 '+width);
+      check(await goalRow.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'目标原文在当前宽度自动换行 '+width);
+      check(await page.evaluate(()=>navigationFixture.requests.length===0),'查看历史目标不会发起执行请求 '+width);
       for(const count of [1,2,5]){
         await page.evaluate(count=>setupCompactMessageNavigationFixture({count}),count);
         await activate('.chat-message-map-rail button:first-child');

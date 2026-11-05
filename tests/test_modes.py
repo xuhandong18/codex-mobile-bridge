@@ -67,6 +67,19 @@ class GoalStub:
         return {'ok':True}
 
 class NativeGoalStateTests(unittest.TestCase):
+    def test_historical_goal_matching_requires_identity_or_unique_send_evidence(self):
+        from bridge.features.sessions.goal import goal_history_match
+        history = [{'requestId':'sent','text':'Start','objective':'Original','at':1793388658}]
+        self.assertEqual(goal_history_match({'text':'Start','requestId':'sent'}, history), history[0])
+        for timestamp in ('2026-10-30T19:30:59.700Z', 1793388659.7, 1793388659700):
+            self.assertEqual(goal_history_match({'text':'Start','timestamp':timestamp}, history), history[0])
+        for message in ({'text':'Start'}, {'text':'Start','requestId':'other','timestamp':1793388659},
+                        {'text':'Different','requestId':'sent'}, {'text':'Start','timestamp':'invalid'},
+                        {'text':'Start','timestamp':1793388670},
+                        {'text':'Start','timestamp':1793388659,'isUserContext':True}):
+            self.assertIsNone(goal_history_match(message, history))
+        self.assertIsNone(goal_history_match({'text':'Start','timestamp':1793388659}, history*2))
+
     def test_desktop_image_wrapper_is_hidden_from_mobile_request_text(self):
         text = '''
 # Files mentioned by the user:
@@ -350,6 +363,46 @@ class ModeTests(unittest.TestCase):
                          'turns':[{'id':'turn','messages':[row]}]})
         self.assertEqual(len(timeline.rows),1)
         self.assertEqual(timeline.rows[0]['text'],text)
+
+    def test_goal_objective_survives_missing_native_goal_and_request_id(self):
+        activation_id = str(uuid.uuid4())
+        original = 'Find strategies for every market condition'
+        self.bridge.submissions[THREAD+':'+activation_id] = {
+            'text': GOAL_ACTIVATION_TEXTS['zh-CN']['create'], 'status': 'accepted', 'at': 1793388658,
+            'goalActivation': {'action': 'create', 'objective': original},
+        }
+        self.bridge._save_ledger()
+        session = self.live(threadGoal=None, turns=[{'turnId':'goal-turn','status':'completed',
+            'turnStartedAtMs':1793388659700,'items':[{'type':'userMessage','id':'goal-message',
+            'content':[{'type':'text','text':GOAL_ACTIVATION_TEXTS['zh-CN']['create']}]}]}])
+        before = copy.deepcopy(session.state)
+        for request_id in (None, activation_id):
+            with session.condition:
+                item = session.state['turns'][0]['items'][0]
+                if request_id:
+                    item['clientUserMessageId'] = request_id
+                session.changed()
+            page = self.bridge.timeline_read(THREAD)
+            self.assertEqual(page['rows'][0]['text'], original)
+            self.assertEqual(page['rows'][0]['kind'], 'goalHistory')
+            self.assertFalse(page['rows'][0]['editable'])
+            self.assertIsNone(page['meta']['goal'])
+            self.assertIsNone(page['meta']['latestUserTurnId'])
+        self.assertEqual(session.state['turns'][0]['items'][0]['content'], before['turns'][0]['items'][0]['content'])
+        self.assertNotIn('goalHistory', page['meta'])
+        self.assertEqual(self.calls(), [])
+
+    def test_goal_history_does_not_rewrite_a_manual_message_with_same_text(self):
+        self.bridge.submissions[THREAD+':'+str(uuid.uuid4())] = {
+            'text': GOAL_ACTIVATION_TEXTS['zh-CN']['create'], 'status': 'accepted', 'at': 1793388658,
+            'goalActivation': {'action': 'create', 'objective': 'Original goal'},
+        }
+        self.live(turns=[{'turnId':'manual-turn','status':'completed','turnStartedAtMs':1793388858000,
+            'items':[{'type':'userMessage','id':'manual','content':[
+                {'type':'text','text':GOAL_ACTIVATION_TEXTS['zh-CN']['create']}]}]}])
+        page = self.bridge.timeline_read(THREAD)
+        self.assertEqual(page['rows'][0]['text'], GOAL_ACTIVATION_TEXTS['zh-CN']['create'])
+        self.assertTrue(page['rows'][0]['editable'])
 
     def test_cancel_goal_cancels_queued_activation_before_dispatch(self):
         stub=GoalStub(self.bridge);self.bridge.goal=stub

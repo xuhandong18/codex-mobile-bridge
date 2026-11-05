@@ -288,6 +288,7 @@ def scan_rollout(path, thread_id, previous=None, summarize=None):
                     base = _digest(json.dumps([context['turnId'], item['id'], kind], ensure_ascii=False, separators=(',', ':')).encode())[:24]
                     entries.append({'id': _anchor(thread_id, revision, begin, raw), 'turnId': context['turnId'],
                                     'rowKey': base+'-0', 'summary': summary, 'requestId': row.get('requestId'),
+                                    'timestamp': row.get('timestamp'),
                                     'messageId': item['id'], 'kind': kind, 'isUserContext': row.get('isUserContext', False),
                                     'offset': begin, 'digest': _digest(raw), 'item': count})
                     context['user'] += 1
@@ -376,7 +377,7 @@ class MessageNavigation:
         except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError('消息目录已变化，请重新读取') from exc
 
-    def page(self, identifier, cursor=None, limit=200, excluded=(), since=None):
+    def page(self, identifier, cursor=None, limit=200, excluded=(), since=None, project=None):
         with self.lock:
             value = self._refresh(identifier) if since or not cursor or identifier not in self.cache else self.cache[identifier]
             revision = value['checkpoint']['revision']
@@ -387,7 +388,9 @@ class MessageNavigation:
                 if not since:
                     raise
                 position, reset = 0, True
-            entries = [entry for entry in value['entries'] if not entry.get('isUserContext') and entry.get('requestId') not in excluded]
+            entries = [project(entry) if project else entry for entry in value['entries']]
+            entries = [entry for entry in entries if not entry.get('isUserContext')
+                       and (entry.get('goalHistory') or entry.get('requestId') not in excluded)]
             if position > len(entries):
                 position, reset = 0, True
             end = min(len(entries), position+max(1, min(200, limit)))
@@ -397,7 +400,7 @@ class MessageNavigation:
                     'nextCursor': self._token(identifier, revision, end, 'index') if end < len(entries) else None,
                     'tailCursor': self._token(identifier, revision, end, 'index')}
 
-    def window(self, identifier, around=None, before=None, after=None, limit=100, excluded=()):
+    def window(self, identifier, around=None, before=None, after=None, limit=100, excluded=(), project=None):
         with self.lock:
             if sum(bool(v) for v in (around, before, after)) != 1:
                 raise ValueError('请选择有效的消息位置')
@@ -428,7 +431,9 @@ class MessageNavigation:
                 # match. Force the next directory read to verify it all again.
                 self.cache.pop(identifier, None)
                 raise
-            users = [entry for entry in value['entries'] if not entry.get('isUserContext') and entry.get('requestId') not in excluded]
+            users = [project(entry) if project else entry for entry in value['entries']]
+            users = [entry for entry in users if not entry.get('isUserContext')
+                     and not entry.get('goalHistory') and entry.get('requestId') not in excluded]
             first_users = {}
             for entry in users:
                 if entry['kind'] == 'userMessage':

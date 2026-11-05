@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -166,6 +167,44 @@ GOAL_ACTIVATION_TEXTS = {
     },
 }
 DEFAULT_UI_LOCALE = "zh-CN"
+
+
+def goal_history_match(message, history):
+    """Recover display text only from an identified, actually sent activation.
+
+    Desktop rollouts can omit clientUserMessageId. In that case require both
+    the exact activation text and a nearby recorded send time, never text alone.
+    This is a read-only projection, not evidence of the current goal status.
+    """
+    if message.get('role', 'user') != 'user' or message.get('kind') == 'threadMessage' or message.get('isUserContext'):
+        return None
+    text = message.get('text', message.get('summary', ''))
+    candidates = [entry for entry in history if entry['text'] == text]
+    request_id = message.get('requestId')
+    if request_id:
+        return next((entry for entry in candidates if entry['requestId'] == request_id), None)
+    timestamp = message.get('timestamp')
+    try:
+        if isinstance(timestamp, str) and not timestamp.replace('.', '', 1).isdigit():
+            stamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            timestamp = (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).timestamp()
+        else:
+            timestamp = float(timestamp)
+            if timestamp >= 1e11:
+                timestamp /= 1000
+        candidates = [entry for entry in candidates if abs(timestamp-entry['at']) <= 5]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def goal_history_entry(entry, history):
+    """Project navigation summaries without changing the saved anchor or body."""
+    match = goal_history_match(entry, history)
+    return {**entry, 'summary': ' '.join(match['objective'].split())[:100],
+            'goalHistory': True} if match else entry
+
+
 def normalize_ui_locale(value):
     """Map web UI locales and legacy clients to an activation language."""
     if value in GOAL_ACTIVATION_TEXTS:

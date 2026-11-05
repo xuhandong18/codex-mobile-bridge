@@ -44,7 +44,7 @@ from bridge.features.sessions.message_index import MessageNavigation, conversati
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
 from bridge.features.accounts.cli_access import CliAccess
-from bridge.features.sessions.goal import GoalRPC, GoalError, GoalUnavailable, GoalUnsupported, goal_activation, goal_identity, normalize_goal_result, normalize_ui_locale, goal_command_fingerprint, goal_state_confirms_command, native_goal_absent, normalize_goal, plan_goal_command, read_native_goal
+from bridge.features.sessions.goal import GoalRPC, GoalError, GoalUnavailable, GoalUnsupported, goal_activation, goal_identity, normalize_goal_result, normalize_ui_locale, goal_command_fingerprint, goal_state_confirms_command, native_goal_absent, normalize_goal, plan_goal_command, read_native_goal, goal_history_entry
 from bridge.features.workspace.uploads import Uploads, image_type, MAX_FILE
 from bridge.clients.codex.remote import upload_file
 
@@ -702,18 +702,21 @@ class Bridge:
 
     def _message_action_row(self, session, body, action):
         # Called under the session condition, again after any native history load.
-        session.timeline.update(session.view())
+        session.timeline.update({**session.view(), 'goalHistory': self._goal_history(session.id)})
         projection = session.timeline
         epoch = str(body.get('key', '')).partition('.')[0]
         historical = session.navigation_windows.get(epoch)
         if historical is not None:
+            history = self._goal_history(session.id)
             result = self.message_navigation.window(session.id, **historical.navigation_options,
-                excluded=self._goal_activation_ids(session.id))
+                excluded=self._goal_activation_ids(session.id),
+                project=lambda entry: goal_history_entry(entry, history))
             if result['revision'] != historical.navigation_revision:
                 raise ValueError('消息位置已变化，请刷新后重试')
             projection = Timeline()
             projection.update({**session.view(), 'turns': normalize_state(result['state'], False)['turns'],
-                'sequence': session.sequence, 'goalActivationIds': sorted(self._goal_activation_ids(session.id))})
+                'sequence': session.sequence, 'goalActivationIds': sorted(self._goal_activation_ids(session.id)),
+                'goalHistory': history})
             projection.meta['latestUserTurnId'] = result['latestUserTurnId']
             projection.epoch = historical.epoch
         position = projection.position(body.get('key', ''))
@@ -2419,17 +2422,21 @@ class Bridge:
 
     def message_index(self, thread_id, cursor=None, limit=200, since=None):
         self.store.get(thread_id)
-        return self.message_navigation.page(thread_id, cursor, limit, self._goal_activation_ids(thread_id), since)
+        history = self._goal_history(thread_id)
+        return self.message_navigation.page(thread_id, cursor, limit, self._goal_activation_ids(thread_id), since,
+            project=lambda entry: goal_history_entry(entry, history))
 
     def _navigation_page(self, session, thread_id, **options):
         from bridge.features.sessions.timeline import PAGE_BYTES, encoded
         goal_available = self._refresh_session_goal(session)
-        result = self.message_navigation.window(thread_id, **options, excluded=self._goal_activation_ids(thread_id))
+        history = self._goal_history(thread_id)
+        result = self.message_navigation.window(thread_id, **options, excluded=self._goal_activation_ids(thread_id),
+            project=lambda entry: goal_history_entry(entry, history))
         view = normalize_state(result['state'], False)
         projection = Timeline()
         with session.condition:
             projection.update({**session.view(), 'turns': view['turns'], 'sequence': session.sequence,
-                               'goalActivationIds': sorted(self._goal_activation_ids(thread_id))})
+                               'goalActivationIds': sorted(self._goal_activation_ids(thread_id)), 'goalHistory': history})
             projection.meta['latestUserTurnId'] = result['latestUserTurnId']
             projection.navigation_options = dict(options)
             projection.navigation_revision = result['revision']
@@ -2507,7 +2514,9 @@ class Bridge:
             session.access = self._access(session.origin, session)
             projection = session.timeline
             authoritative_view = self._overlay_native_goal(session, thread_id, session.view())
-            if projection.sequence != session.sequence or projection.meta.get("goal") != authoritative_view.get("goal"):
+            authoritative_view['goalHistory'] = self._goal_history(thread_id)
+            if (projection.sequence != session.sequence or projection.meta.get("goal") != authoritative_view.get("goal")
+                    or projection.goal_history != authoritative_view['goalHistory']):
                 projection.update(authoritative_view)
             # Annotate the full projection, not only the returned page. Otherwise
             # older pages briefly render raw localImage paths after an upgrade.
@@ -2962,6 +2971,20 @@ class Bridge:
         return {"applied": True, "confirmed": confirmed, "model": model, "effort": effort,
                 **({'serviceTier': settings['serviceTier']} if fast_mode is not None else {})}
 
+    def _goal_history(self, thread_id):
+        """Durable sent objectives, independent of the native goal lifecycle."""
+        with self.submit_lock:
+            history = []
+            for key, entry in self.submissions.items():
+                if not key.startswith(thread_id + ':') or entry.get('status') not in ('accepted', 'unknown'):
+                    continue
+                activation = entry.get('goalActivation') or {}
+                if activation.get('action') not in ('create', 'resume') or not activation.get('objective'):
+                    continue
+                history.append({'requestId': key.split(':', 1)[1], 'text': entry['text'],
+                    'objective': activation['objective'], 'at': entry.get('sentAt', entry['at'])})
+            return history
+
     def _goal_activation_ids(self, thread_id):
         """Stable request ids used by goal activation turns."""
         ids = set()
@@ -3295,6 +3318,10 @@ class Bridge:
 
     def _dispatch(self, session, key, entry):
         submission_id = key.split(":")[1]
+        if entry.get('goalActivation'):
+            with self.submit_lock:
+                self.submissions[key]['sentAt'] = time.time()
+                self._save_ledger()
         text = entry["text"]
         title_candidate = self._title_candidate(session, text, key) if entry['mode'] != 'steer' and not entry.get('recovery') else None
         files = self.uploads.resolve(session.id, entry.get('attachments', []))
