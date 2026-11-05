@@ -63,6 +63,8 @@ Codex 聊天删除、归档和取消归档运行 `python -B scripts/test-backend
 
 需要真实符号链接的夹具通过 `symlink_support.require_symlink_support()` 检查能力。Windows 账户缺少该权限（WinError 1314）时，仅跳过对应检查并显示原因；不修改系统安全策略，也不把这些检查算作通过。
 
+新建项目默认自动信任运行 `python -B scripts/test-backend.py --source-only -p test_windows_project_ui.py` 和 `-p test_native_projects.py`，检查监听就绪后才提交、两条原有创建通路、已有提示拒绝、回执身份不符、人工处理和未知结果不重放、创建异常与监听卡住时的清理。`python -B scripts/test-project-trust-native.py` 单独编译临时 C# 组件，只执行生产匹配与单次调用函数，不操作真实窗口；覆盖完整路径、大小写、UNC/扩展路径、相同末级目录但路径不同、缺失或多个目录、多个弹窗、禁用/不可调用及重复按钮、调用成功或结果未知后均不重放。源码测试不包含此编译步骤。真实创建使用专用空目录另行授权；本轮 Windows 客户端 26.1027.3384.0 中文界面已验证原生窗口创建并置顶、原生接口创建并保存普通归属、已可信目录无弹窗时正常创建，以及已有信任弹窗时不创建或点击。
+
 认证持久化保护运行 `python -B scripts/test-backend.py --source-only -p test_auth.py`，并联动 `test_login_security.py`、`test_pairing.py`。覆盖完整 JSON 强制落盘后才替换、首次保存与旧数据补建备份、落盘及替换失败时保留主文件和清理临时文件、全零/非法/缺失主文件不自动恢复旧权限，以及损坏主文件不覆盖有效备份。夹具使用合成数据和真实临时文件；故障注入不代表已完成真实断电或蓝屏测试。
 
 Harness 个人分支功能另有 `node scripts/test-deepseek-browser.cjs`：需要已有的 Playwright 与 Chromium（可通过 `NODE_PATH` 使用现有测试运行时），在四种屏幕尺寸执行实际 DOM 断言，仅使用隔离合成会话。详情见 [功能对应与验证](../docs/deepseek-personal-features.md)。

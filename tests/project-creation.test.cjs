@@ -48,6 +48,14 @@ test('a gateway that advertises folder creation enables the action without a res
   assert.equal(f.nodes.find(node=>node.textContent.includes('新建文件夹需要新版手机网关')).hidden,true);
 });
 
+test('新建项目默认自动信任，不增加勾选项或额外请求字段',async()=>{
+  const f=fixture([{status:'completed',project:{key:'local|native'}}]);await f.flush();
+  assert.ok(f.nodes.some(node=>node.textContent.includes('创建时会自动确认本次文件夹的信任提示')));
+  assert.equal(f.nodes.filter(node=>node.tagName==='INPUT'&&node.type==='checkbox').length,0);
+  const {pending}=await f.submitForm();await pending;
+  assert.deepEqual(Object.keys(f.requests.find(request=>request.body).body).sort(),['cwd','id','name','sectionId']);
+});
+
 test('新建项目的初始分区和刷新后分区均保留一个置顶选项，提交原生置顶归属',async()=>{
   const f=fixture([{status:'completed',project:{key:'local|native'}}],
     {canCreateProject:true,canCreateDirectory:true,sections:[{id:'work',name:'工作'},{id:'pinned',name:'置顶'}]});

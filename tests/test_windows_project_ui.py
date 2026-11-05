@@ -1,3 +1,5 @@
+import json
+import queue
 import subprocess
 import tempfile
 import unittest
@@ -5,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from bridge.platforms.windows.projects import create_project, edit_project, ProjectUIError
+from bridge.platforms.windows.projects import create_project, edit_project, watch_project_trust, ProjectUIError
 
 
 class WindowsProjectUITests(unittest.TestCase):
@@ -81,3 +83,133 @@ class WindowsProjectUITests(unittest.TestCase):
         with patch('bridge.platforms.windows.projects.subprocess.run') as run:
             with self.assertRaises(ProjectUIError):edit_project(self.root/'Codex.exe','delete-files',self.project)
         run.assert_not_called()
+
+
+class TrustListenerProcess:
+    """A line-protocol child; no real window or subprocess is used."""
+    def __init__(self, initial='ready', events=(), mismatch=False, hung=False):
+        self.lines = queue.Queue()
+        self.sent = []
+        self.payload = None
+        self.closed = False
+        self.killed = False
+        self.hung = hung
+        self.initial, self.events, self.mismatch = initial, events, mismatch
+        self.stdin = SimpleNamespace(write=self.write, flush=lambda:None, close=self.end)
+        self.stdout = self
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.lines.get(timeout=3)
+        if line is None:
+            raise StopIteration
+        return line
+
+    def receipt(self, phase):
+        value = {key:self.payload[key] for key in ('pid', 'created', 'path')}
+        value.update(phase=phase, message='请在电脑处理已有信任提示' if phase=='failed' else '需要人工确认')
+        if self.mismatch:
+            value['path'] += '-other'
+        self.lines.put(json.dumps(value)+'\n')
+
+    def write(self, line):
+        self.sent.append(line.strip())
+        if line.startswith('{'):
+            self.payload = json.loads(line)
+            self.receipt(self.initial)
+        elif line == 'arm\n':
+            self.receipt('armed')
+            for phase in self.events:
+                self.receipt(phase)
+        elif line == 'stop\n' and not self.hung:
+            self.receipt('stopped')
+            self.end()
+
+    def end(self):
+        if not self.hung and not self.closed:
+            self.closed = True
+            self.lines.put(None)
+
+    def close(self):
+        self.end()
+
+    def wait(self, timeout):
+        if self.hung and not self.killed:
+            raise subprocess.TimeoutExpired('fixture-listener', timeout)
+        return 0
+
+    def kill(self):
+        self.killed = True
+        self.hung = False
+        self.end()
+
+
+class WindowsProjectTrustTests(unittest.TestCase):
+    setUp = WindowsProjectUITests.setUp
+    def listen(self, child, callback=None):
+        watcher = watch_project_trust(self.root/'ChatGPT.exe', self.root, callback or (lambda *args:None))
+        patcher = patch('bridge.platforms.windows.projects.subprocess.Popen', return_value=child)
+        patcher.start(); self.addCleanup(patcher.stop)
+        return watcher
+
+    def test_listener_is_ready_and_armed_before_creation_and_stopped_after_scope(self):
+        child = TrustListenerProcess()
+        with self.listen(child) as watcher:
+            self.assertEqual(child.sent[1:], ['arm'])
+            self.assertFalse(child.closed)
+            self.assertEqual(child.payload['action'], 'watch-trust')
+            self.assertEqual(child.payload['path'], str(self.root.resolve()))
+        self.assertEqual(child.sent[1:], ['arm', 'stop'])
+        self.assertTrue(child.closed)
+        self.assertFalse(watcher.reader.is_alive())
+        watcher.close()  # Cleanup is idempotent.
+
+    def test_preexisting_prompt_refusal_and_mismatched_receipts_never_arm(self):
+        for child in (TrustListenerProcess(initial='failed'), TrustListenerProcess(mismatch=True)):
+            with self.subTest(child=child), self.assertRaises(ProjectUIError):
+                with self.listen(child):
+                    self.fail('Listener must not arm')
+            self.assertNotIn('arm', child.sent)
+            self.assertTrue(child.closed)
+
+    def test_listener_reports_manual_and_unknown_without_sending_another_arm(self):
+        for phase in ('manual', 'unknown', 'trusted'):
+            child = TrustListenerProcess(events=[phase])
+            messages = []
+            with self.subTest(phase=phase):
+                with self.listen(child, lambda *args:messages.append(args)) as watcher:
+                    self.assertEqual(watcher.receipts.get(timeout=1)['phase'], phase)
+                self.assertTrue(messages)
+                self.assertEqual(child.sent[1:], ['arm', 'stop'])
+
+    def test_creation_exception_stops_listener_and_does_not_replace_the_exception(self):
+        child = TrustListenerProcess()
+        with self.assertRaisesRegex(RuntimeError, 'creation failed'):
+            with self.listen(child):
+                raise RuntimeError('creation failed')
+        self.assertTrue(child.closed)
+
+    def test_unresponsive_listener_cleanup_kills_only_its_own_child(self):
+        child = TrustListenerProcess(hung=True)
+        with self.listen(child):
+            pass
+        self.assertTrue(child.killed)
+        self.assertTrue(child.closed)
+
+    def test_process_identity_change_prevents_starting_listener(self):
+        child = TrustListenerProcess()
+        watcher = self.listen(child)
+        with patch('bridge.platforms.windows.projects._snapshot', side_effect=[self.snapshot, {**self.snapshot,'created':1}]), \
+                patch('bridge.platforms.windows.projects.subprocess.Popen') as start, self.assertRaises(ValueError):
+            watcher.__enter__()
+        start.assert_not_called()
+
+    def test_readiness_timeout_closes_listener_without_arming_or_creating(self):
+        child = TrustListenerProcess()
+        watcher = self.listen(child)
+        with patch.object(watcher.receipts, 'get', side_effect=queue.Empty), self.assertRaisesRegex(ProjectUIError, '未就绪'):
+            watcher.__enter__()
+        self.assertNotIn('arm', child.sent)
+        self.assertTrue(child.closed)

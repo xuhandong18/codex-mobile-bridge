@@ -782,7 +782,7 @@ function openNewProject(){
   };
   fillSections(sidebarData.sections);
   const browse=el('button','project-browse-button',t('浏览文件夹'));browse.type='button';pathRow.append(path,browse);
-  form.append(el('p','muted',t('项目由 Codex 桌面保存。可以选择已有文件夹或新建文件夹，无需先为这个目录创建聊天；首次使用可能需要在电脑确认信任。')));
+  form.append(el('p','muted',t('项目由 Codex 桌面保存。创建时会自动确认本次文件夹的信任提示；无法识别时，请在电脑确认。')));
   const folderHint=el('p','muted',t('新建文件夹需要新版手机网关，请在电脑上重启手机网关后重新打开此窗口。'));folderHint.hidden=true;form.append(folderHint);
   let busy=false,attempt=null,metadataReady=false,directoryReady=false,uncertain=false;
   const folderBrowser=new ProjectFolderBrowser({button:browse,input:path,request:api,uuid,canCreate:()=>metadataReady&&directoryReady&&!busy&&!uncertain,
@@ -798,7 +798,7 @@ function openNewProject(){
     if(currentId&&currentHost==='local'&&state?.origin==='desktop')value.contextId=currentId;
     if(!value.name||!value.cwd){error.textContent=t('请填写项目名称并选择文件夹');return;}
     if(!attempt||JSON.stringify(attempt.value)!==JSON.stringify(value))attempt={id:uuid(),value};
-    busy=true;folderBrowser.setLocked(true);dialog.querySelectorAll('input,select,button').forEach(node=>node.disabled=true);error.textContent=t('正在等待 Codex 桌面创建项目，请留意电脑上的文件夹信任提示');
+    busy=true;folderBrowser.setLocked(true);dialog.querySelectorAll('input,select,button').forEach(node=>node.disabled=true);error.textContent=t('正在等待 Codex 桌面创建项目，将自动确认本次文件夹信任提示');
     try{
       let result=await api('/api/projects',{id:attempt.id,...value});
       while(['pending','creating','assigning','verifying'].includes(result.status)){

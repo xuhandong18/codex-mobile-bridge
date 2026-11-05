@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -95,6 +96,9 @@ class NativeProjectDelegationTests(unittest.TestCase):
         self.bridge.host = 'local'
         self.bridge.accounts.gate = threading.Lock()
         self.request = {'id':str(uuid.uuid4()),'name':'Native','cwd':str(self.folder),'sectionId':None}
+        watcher = patch('bridge.platforms.windows.projects.watch_project_trust', side_effect=lambda *args:nullcontext())
+        self.watcher = watcher.start()
+        self.addCleanup(watcher.stop)
 
     def test_directory_scope_only_reads_native_roots_and_holds_account_gate(self):
         native = Mock()
@@ -362,6 +366,44 @@ class NativeProjectDelegationTests(unittest.TestCase):
         writes=[c for c in native.call.call_args_list if c.args[0]=='create_project']
         self.assertEqual(len(writes),1)
         self.assertEqual(writes[0].args[1],{'name':'Native','sources':[str(self.folder)],'host':{'type':'local'}})
+
+    def test_both_creation_paths_wait_for_trust_listener_and_close_it_before_assignment(self):
+        for scoped in (True, False):
+            events = []
+            scope = Mock()
+            scope.__enter__ = Mock(side_effect=lambda *args:events.append('armed'))
+            scope.__exit__ = Mock(side_effect=lambda *args:events.append('stopped'))
+            self.watcher.side_effect = lambda *args:scope
+            def call(method, arguments, **kwargs):
+                events.append(method)
+                if method == 'list_hosts':
+                    return {'hosts':[{'hostId':'local','workspaceRoots':[str(self.root)] if scoped else []}]}
+                if method == 'create_project':
+                    return {'projectId':self.identifier,'rootPaths':[str(self.folder)]}
+                if method == 'list_projects':
+                    return {'projects':[self.row] if scoped or 'dialog-create' in events else []}
+                if method == 'list_threads':
+                    return {'sections':[{'sectionId':'threads','itemKeys':['codex:project:'+self.identifier]}]}
+                return {}
+            ui = Mock(side_effect=lambda *args:events.append('dialog-create') or {'submitted':True})
+            native = Mock(); native.call.side_effect = call
+            with self.subTest(scoped=scoped), patch.object(DesktopTools, 'connect', return_value=native):
+                self.assertEqual(NativeProjects(self.bridge, project_creator=ui)(self.request, Mock()), self.project)
+                self.assertLess(events.index('armed'), events.index('create_project' if scoped else 'dialog-create'))
+                self.assertLess(events.index('stopped'), events.index('move_project_to_sidebar_section'))
+                self.assertEqual(events.count('stopped'), 1)
+
+    def test_trust_listener_refusal_never_dispatches_or_retries_creation(self):
+        from bridge.platforms.windows.projects import ProjectUIError
+        self.watcher.side_effect = ProjectUIError('已有信任提示')
+        native, ui = Mock(), Mock()
+        native.call.return_value = {'hosts':[{'hostId':'local','workspaceRoots':[]}]}
+        with patch.object(DesktopTools, 'connect', return_value=native), self.assertRaisesRegex(ProjectUIError, '已有信任提示') as caught:
+            NativeProjects(self.bridge, project_creator=ui)(self.request, Mock())
+        self.assertFalse(caught.exception.unknown)
+        native.call.assert_called_once_with('list_hosts', {})
+        ui.assert_not_called()
+        native.close.assert_called_once()
 
     def test_pinned_creation_waits_for_native_and_persisted_pin_on_both_creation_paths(self):
         for scoped in (False, True):

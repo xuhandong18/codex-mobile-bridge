@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 
 from bridge.clients.codex.desktop_tools import DesktopTools, ToolError
 from bridge.clients.desktop_app import DesktopApp
@@ -114,14 +114,17 @@ class NativeProjects:
                                       {p['key'].split('|', 1)[1] for p in bridge.hosts.projects() if p['host'] == 'local'})
         project = None
         creation_sent = False
+        trust_scope = ExitStack()
         try:
             roots = local_roots(native.call('list_hosts', {}))
             scoped = any(within(value['cwd'], root) for root in roots)
             # Recheck the section immediately before the first native write.
             if value['sectionId'] is not None and value['sectionId'] not in {'pinned', *(s['id'] for s in bridge.hosts.sidebar()['sections'])}:
                 raise ToolError('所选分区已不存在，请刷新后重试')
+            from bridge.platforms.windows.projects import watch_project_trust
+            trust_scope.enter_context(watch_project_trust(executable, value['cwd'], progress))
             if scoped:
-                progress('creating', '请在 Codex 桌面确认文件夹信任提示；已有权限时会直接创建')
+                progress('creating', '正在由 Codex 创建项目，将自动确认本次文件夹信任提示')
                 creation_sent = True
                 result = native.call('create_project', {'name':value['name'], 'sources':[value['cwd']], 'host':{'type':'local'}}, timeout=300)
             else:
@@ -132,7 +135,7 @@ class NativeProjects:
                 if creator is None:
                     from bridge.platforms.windows.projects import create_project
                     creator = create_project
-                progress('creating', '正在由 Codex 原生窗口创建项目，请留意电脑上的确认提示')
+                progress('creating', '正在由 Codex 原生窗口创建项目，将自动确认本次文件夹信任提示')
                 creation_sent = True
                 try:
                     receipt = creator(executable, value['name'], value['cwd'])
@@ -140,7 +143,7 @@ class NativeProjects:
                     raise ToolError(str(exc), unknown=getattr(exc, 'unknown', True)) from exc
                 if not isinstance(receipt, dict) or receipt.get('submitted') is not True:
                     raise ToolError('原生创建回执无法核验，请检查 Codex 项目列表，不要重复创建', unknown=True)
-                progress('creating', '正在等待 Codex 保存项目，请在电脑上确认文件夹信任提示')
+                progress('creating', '正在等待 Codex 保存项目；无法自动识别的信任提示需要在电脑确认')
                 deadline = time.monotonic()+300
                 while True:
                     rows = project_rows(native, unknown=True)
@@ -151,6 +154,7 @@ class NativeProjects:
                     if len(matches) > 1 or time.monotonic() >= deadline:
                         raise ToolError('桌面创建结果无法核验，请检查 Codex 项目列表，不要重复创建', unknown=True)
                     time.sleep(.2)
+            trust_scope.close()
             identifier = result.get('projectId')
             roots = result.get('rootPaths')
             if not isinstance(identifier, str) or not isinstance(roots, list) or len(roots) != 1 or not isinstance(roots[0], str) or canonical(roots[0]) != canonical(value['cwd']):
@@ -189,4 +193,7 @@ class NativeProjects:
                 exc.project = project
             raise
         finally:
-            native.close()
+            try:
+                trust_scope.close()
+            finally:
+                native.close()
