@@ -464,7 +464,8 @@ class DesktopSessionsView {
     }
     if(project){const row=this.harnessProjects.find(p=>p.key===project.dataset.projectKey);if(!row)return [];
       const placement=this.harnessSidebar.placements['project:'+row.key]??null,peers=this.harnessProjects.filter(p=>(this.harnessSidebar.placements['project:'+p.key]??null)===placement),index=peers.indexOf(row);
-      return [{label:'新建聊天',run:()=>this.createHarness(row.key)},{label:'重命名项目',run:()=>this.editHarnessTitle('重命名项目',row.name,title=>this.manageHarness({operation:'project-rename',projectKey:row.key,title},null))},
+      return [{label:'复制项目路径',copy:true,disabled:!row.cwd,run:copy=>window.BridgeClipboard.copy(()=>row.cwd,copy)},
+        {label:'新建聊天',run:()=>this.createHarness(row.key)},{label:'重命名项目',run:()=>this.editHarnessTitle('重命名项目',row.name,title=>this.manageHarness({operation:'project-rename',projectKey:row.key,title},null))},
         {label:'移动到分区',run:()=>this.placeHarness(row,true)},
         {label:'向上移动',disabled:index<=0,run:()=>this.manageHarness({operation:'project-order',projectKey:row.key,beforeKey:peers[index-1].key},null)},
         {label:'向下移动',disabled:index>=peers.length-1,run:()=>this.manageHarness({operation:'project-order',projectKey:row.key,...peers[index+2]?{beforeKey:peers[index+2].key}:{}},null)},

@@ -266,6 +266,7 @@ const en={
 "收起导航栏":"Collapse sidebar",
 "聊天操作":"Chat actions",
 "复制会话路径":"Copy session path",
+"复制项目路径":"Copy project path",
 "归档聊天":"Archive chat",
 "取消归档":"Unarchive",
 "永久删除聊天":"Permanently delete chat",

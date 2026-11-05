@@ -33,6 +33,20 @@ function fixture(){
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
 
+test('DeepSeek 项目菜单复制项目主目录并禁用无目录入口',async()=>{
+ const ui=fixture(),view=ui.view;view.provider='deepseek';view.harnessCapabilities={sidebar:true};
+ const cwd='D:\\项目 文件夹\\主目录';
+ view.harnessProjects=[{key:'project',name:'项目',cwd},{key:'missing',name:'无目录'}];view.harnessSidebar={placements:{},sections:[]};
+ view.rows=[{id:'a',cwd:cwd+'\\子目录'}];
+ ui.run('globalThis.copiedProjectPaths=[];window.BridgeClipboard.copy=async(getText,button)=>copiedProjectPaths.push({text:await getText(),button})');
+ const target=key=>({closest:selector=>selector==='[data-project-key]'?{dataset:{projectKey:key}}:null});
+ const copy=view.harnessActions(target('project')).find(row=>row.label==='复制项目路径'),button={};
+ assert.equal(copy.copy,true);assert.equal(copy.disabled,false);await copy.run(button);
+ assert.equal(ui.run('copiedProjectPaths[0].text'),cwd);assert.equal(ui.run('copiedProjectPaths[0].button'),button);
+ assert.equal(view.harnessActions(target('missing')).find(row=>row.label==='复制项目路径').disabled,true);
+ assert.equal(ui.calls.length,0,'复制不调用客户端或模型');
+});
+
 for(const provider of ['claude','deepseek'])test(provider+'最近交互保留已读聊天位置，重新进入列表恢复实时排序',async()=>{
  const ui=fixture(),view=ui.view;await view.choose(provider);view.listMode.value='recent';
  view.rows=[

@@ -2,13 +2,13 @@
 // Independent browser contexts and the production UI, with synthetic clients.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require('playwright');
-const web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json'),project='local|a';
+const web=path.resolve(__dirname,'../web'),assets=require('../web/assets.json'),project='local|a',projectPath='D:\\项目 space\\主目录';
 const id=n=>'11111111-1111-4111-8111-'+String(n).padStart(12,'0');
 const rows=Array.from({length:8},(_,i)=>({id:id(i+1),host:'local',title:'跨设备聊天 '+(i+1),cwd:'/a',projectKey:project,projectName:'项目 A',recency:100-i,access:{source:'desktop'}}));
 let preferences,sidebar,dropSave=false;const errors=[],writes=[],checks=[];
 function reset(){
   preferences={revision:0,fields:{}};
-  sidebar={projects:[{key:project,host:'local',name:'项目 A',cwd:'/a'},{key:'local|b',host:'local',name:'项目 B',cwd:'/b'}],
+  sidebar={projects:[{key:project,host:'local',name:'项目 A',cwd:projectPath},{key:'local|b',host:'local',name:'项目 B',cwd:'/b'}],
     sections:[{id:'work',name:'工作',itemKeys:['codex:project:a','codex:project:b']},{id:'other',name:'其他',itemKeys:[]}],
     sectionOrder:['pinned','custom:work','custom:other','projects','threads']};
 }
@@ -74,7 +74,7 @@ async function ready(page){await page.waitForFunction(()=>listReadFinished&&list
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
     for(const width of [390,820,1280]){
       reset();const otherWidth=width===1280?390:1280,label=width+' ↔ '+otherWidth;
-      const a=await browser.newContext({viewport:{width,height:900},hasTouch:width<1000}),b=await browser.newContext({viewport:{width:otherWidth,height:900},hasTouch:otherWidth<1000});
+      const a=await browser.newContext({viewport:{width,height:900},hasTouch:width<1000,permissions:['clipboard-read','clipboard-write']}),b=await browser.newContext({viewport:{width:otherWidth,height:900},hasTouch:otherWidth<1000});
       const phone=await a.newPage(),computer=await b.newPage();
       for(const page of [phone,computer]){page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));}
       await a.addInitScript(({project,chat})=>{localStorage.setItem('navigation:sidebar','open');if(!localStorage.getItem('fixture-seeded')){localStorage.setItem(location.origin+'|project-pins',JSON.stringify([[project,chat]]));localStorage.setItem(location.origin+'|sidebar-placement:'+JSON.stringify(['project','local',project]),JSON.stringify({target:'section:work'}));localStorage.setItem('fixture-seeded','1');}},{project,chat:id(8)});
@@ -83,6 +83,22 @@ async function ready(page){await page.waitForFunction(()=>listReadFinished&&list
       await phone.goto(base);await ready(phone);await computer.goto(base);await ready(computer);
       const pinned=page=>page.locator(group+' > .session[data-project-pinned="true"]').evaluateAll(nodes=>nodes.map(node=>node.dataset.id));
       check(await pinned(computer),[id(8)],'旧设备置顶迁移到全新设备 '+label);
+
+      await phone.bringToFront();const copyWrites=writes.length;
+      for(const mode of ['codex','project']){
+        await phone.evaluate(mode=>{$('list-mode').value=mode;renderList();},mode);
+        await phone.evaluate(()=>navigator.clipboard.writeText(''));
+        await menu(phone,group+' > summary',width);
+        await phone.getByRole('button',{name:'复制项目路径',exact:true}).click();
+        await phone.waitForFunction(expected=>navigator.clipboard.readText().then(text=>text===expected),projectPath);
+        check(await phone.evaluate(()=>navigator.clipboard.readText()),projectPath,'项目菜单复制主文件夹而非聊天目录 '+width+' '+mode);
+      }
+      await menu(phone,'#sessions .project-group[data-project-key="local|b"] > summary',width);
+      await phone.getByRole('button',{name:'复制项目路径',exact:true}).click();
+      await phone.waitForFunction(()=>navigator.clipboard.readText().then(text=>text==='/b'));
+      check(await phone.evaluate(()=>navigator.clipboard.readText()),'/b','无聊天的空项目也可复制目录 '+width);
+      check(writes.length,copyWrites,'复制项目目录不提交写请求 '+width);
+      await phone.evaluate(()=>{$('list-mode').value='codex';renderList();});
 
       await menu(phone,group+' > summary',width);
       await phone.getByRole('button',{name:'置顶',exact:true}).click();

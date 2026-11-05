@@ -318,6 +318,31 @@ function bindSidebarMenu({context}){
   vm.runInContext(source.slice(source.indexOf("new ChatContextMenu($('sessions'),"),source.indexOf('\nasync function changeSidebarPlacement(')),context);
 }
 
+for(const mode of ['codex','project'])for(const native of [true,false])test('复制项目主目录，保留本机远程路径且不读取聊天，视图='+mode+'，原生菜单='+native,async()=>{
+  const f=fixture(mode),{context,nodes}=f;bindSidebarMenu(f);
+  if(!native)context.sidebarManagement=null;
+  const cwd='D:\\项目 文件夹\\主目录';
+  context.sidebarData.projects[0].cwd=cwd;
+  context.sidebarData.projects.push({key:'ssh|p',host:'ssh',name:'远程项目',cwd:'/home/user/项目 space'},
+    {key:'local|missing',host:'local',name:'无目录'});
+  context.listRows[0].cwd=cwd+'\\子目录';
+  context.listRows.push({id:'cli',host:'local',projectKey:'cli|local|fixture',projectName:'CLI 目录',cwd:'/cli/work',title:'CLI Chat',access:{source:'cli'}});
+  context.renderList();
+  const copies=[],copyButton={};
+  context.window={BridgeClipboard:{copy:async(getText,button)=>copies.push({text:await getText(),button})}};
+  context.api=()=>{throw Error('复制项目路径不应请求接口或打开聊天');};
+  const menu=key=>context.menuItems(nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey===key).children[0]);
+  for(const [key,path] of [['local|p',cwd],['local|empty','/empty'],['ssh|p','/home/user/项目 space'],['cli|local|fixture','/cli/work']]){
+    const items=menu(key),copy=items.find(row=>row.label==='复制项目路径');
+    assert.equal(items.filter(row=>row.label==='复制项目路径').length,1);
+    assert.equal(copy.copy,true);assert.equal(copy.disabled,false);
+    await copy.run(copyButton);assert.deepEqual(copies.at(-1),{text:path,button:copyButton});
+  }
+  assert.equal(menu('local|missing').find(row=>row.label==='复制项目路径').disabled,true);
+  const chat=nodes.sessions.querySelectorAll('.session').find(node=>node.dataset.id==='thread');
+  assert.ok(!context.menuItems(chat).some(row=>row.label==='复制项目路径'),'聊天菜单保留复制会话路径的独立含义');
+});
+
 for(const mode of ['codex','project'])for(const native of [true,false])test('项目右键菜单保留置顶和取消置顶，视图='+mode+'，原生菜单='+native,async()=>{
   const f=fixture(mode),{context,nodes}=f;bindSidebarMenu(f);
   if(!native)context.sidebarManagement=null;

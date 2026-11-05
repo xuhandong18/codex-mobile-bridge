@@ -535,7 +535,7 @@ function renderList(){
     create.title=t('新建')+' · '+project.name;create.setAttribute('aria-label',create.title);
     create.onclick=event=>{event.preventDefault();event.stopPropagation();openNewChat(project);};
     summary.append(create);details.append(summary);
-    summary.dataset.projectKey=project.key;summary.dataset.host=project.host;summary.dataset.projectName=project.name;
+    summary.dataset.projectKey=project.key;summary.dataset.host=project.host;summary.dataset.projectName=project.name;summary.dataset.projectCwd=project.cwd||'';
     details.dataset.itemKey='codex:project:'+project.key.slice(project.key.indexOf('|')+1);
     details.dataset.projectKey=project.key;details.dataset.host=project.host;
     groups.set(project.key,details);projectParent(project).append(details);return details;
@@ -956,15 +956,16 @@ new ChatContextMenu($('sessions'),target=>{
   const nativeActions=sidebarManagement?.items(target);
   if(nativeActions!==null&&nativeActions!==undefined){
     const summary=target.closest('summary[data-project-key]');
-    if(!nativeActions.length||!summary)return nativeActions;
+    if(!summary)return nativeActions;
     const project=sidebarEntry('project',{key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName});
-    return [sidebarPinAction(project),...nativeActions,...sidebarProjectDisplayActions(project),...sidebarProjectOrderActions(project)];
+    if(!nativeActions.length)return [sidebarProjectCopyAction(summary),...sidebarPlacementActions(project)];
+    return [sidebarProjectCopyAction(summary),sidebarPinAction(project),...nativeActions,...sidebarProjectDisplayActions(project),...sidebarProjectOrderActions(project)];
   }
   const button=target.closest('.session');
   if(!button){
     const summary=target.closest('summary[data-project-key]');
     if(!summary||target.closest('button'))return [];
-    return sidebarPlacementActions(sidebarEntry('project',{key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName}));
+    return [sidebarProjectCopyAction(summary),...sidebarPlacementActions(sidebarEntry('project',{key:summary.dataset.projectKey,host:summary.dataset.host,name:summary.dataset.projectName}))];
   }
   const row=listRows.find(row=>row.id===button.dataset.id&&row.host===button.dataset.host);if(!row)return [];
   const items=[{label:'复制会话路径',copy:true,run:copy=>window.BridgeClipboard.copy(()=>'codex://threads/'+encodeURIComponent(row.id),copy)}];
@@ -982,6 +983,10 @@ new ChatContextMenu($('sessions'),target=>{
   }
   return items;
 },{label:'侧栏操作'});
+function sidebarProjectCopyAction(summary){
+  const cwd=summary.dataset.projectCwd;
+  return {label:'复制项目路径',copy:true,disabled:!cwd,run:copy=>window.BridgeClipboard.copy(()=>cwd,copy)};
+}
 function sidebarPinAction(item){
   const pinTarget=sidebarPlacements.pinTarget(item,(sidebarData.sections||[]).map(section=>section.id),item.native);
   return {label:sidebarTarget(item)==='pinned'?'取消置顶':'置顶',run:()=>changeSidebarPlacement(item,pinTarget)};
