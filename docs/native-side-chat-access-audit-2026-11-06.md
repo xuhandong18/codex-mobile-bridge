@@ -2,6 +2,29 @@
 
 核查日期：2026-11-06（Asia/Hong_Kong）。用户目标：手机与 Codex 桌面操作同一条原生侧边聊天，网关只负责转发，不持有独立模型执行器。
 
+## 历史能力清单复核
+
+用户记得以前的桌面能力调查包含“建立侧边聊天”。本次已回查历史聊天及原始报告，确认旧记录确实列出过侧边创建函数；不能把这些条目省略后简单概括为“桌面没有创建能力”。同时，也没有在已找到的历史报告中发现“外部客户端经 `codex-ipc` 创建原生侧边已实测通过”的记录。
+
+| 历史记录 | 实际列出的能力 | 当时的验证范围 |
+| --- | --- | --- |
+| 2026-10-07，本项目原生侧边接入调研 | 桌面 manager 的 `forkConversationFromLatest`，以及随后调用的 `thread/fork` | 找到了桌面内部创建链路；同时明确记录 follower IPC 没有已找到的创建／销毁入口。后续验证的是连接已经在桌面建立的原生侧边 |
+| 2026-10-13，AIRunning 桌面来源报告 | renderer 导出 `openLocalConversationSideChat`，创建函数接收父会话、host 和独立 clientThreadId | 静态确认产品内有专用侧边 UI 和创建逻辑；明确写有“尚未证明这些 UI 关系是否全部通过外部 IPC 暴露” |
+| 2026-10-16，“测试 Codex IPC 采集与操作”及其原始实测报告 | `thread-follower-start-turn`、steer、interrupt、模型设置读取；另有 `create_thread` | 原生 `codex-ipc` 测通发送、引导和停止；新建普通聊天走独立桌面工具管道，报告明确未找到 follower 创建方法；未验收真实侧聊完整生命周期 |
+| 2026-10-29，保存的 58 项应用工具 schema | `create_thread`、`fork_thread`、`open_in_codex` 等 | 清单没有独立侧边创建项；普通 fork 不能据名称当作原生侧边 |
+
+旧资料在本机的来源为：AIRunning `.trellis/tasks/10-13-ainotification/research/desktop-source.md`（第 50–56 行）、`.scratch/ipc-comparison-20261016/report.md`（第 64、103 行）及 `static-capabilities.json`；本项目 `.local/research/desktop-app-tools-2026-10-29.{md,json}`。这些原始材料保持原位置，不复制聊天正文或本机快照进提交。本项目最早的侧边调研也可由 Git 提交 `c5b75be` 复核。
+
+因此需要分别检查四层：renderer／manager 内部函数、Electron 内部消息、外部命名管道 owner/follower、独立桌面应用工具。`DesktopIPC.VERSIONS` 是本项目的允许列表，**单靠它不能证明桌面不存在其他 IPC 入口**；当前结论必须以安装包实际注册的 handler、transport、调用者与来源校验为依据，并限定排查范围。
+
+当前版本的补充只读检查也发现：
+
+- `early-bootstrap-339-096ec1020e8592e0.js` 注册了应用命令 `openSideChat`，作用域为 app、适用 Electron，并绑定 `CmdOrCtrl+Alt+S`。它是桌面命令／快捷键入口，不能仅凭命令名当作 `codex-ipc` 可接收的 request 方法。
+- 当前 owner/follower 版本表和实际注册 handler 仍包含 17 种 follower 操作；没有在该集合中找到侧边创建、fork 或关闭项。`thread-follower-start-turn` 的“start”指在已有会话开始一轮，不是创建会话。
+- 当前 Electron 主进程确有另外的 `ipcMain.handle`／`ipcMain.on` 消息通路，相关处理使用 `isTrustedIpcSender`／`isTrustedIpcEvent`，worker 连接还核对 sender 的 main frame。renderer 内部能调用不等于外部程序可以连接同一入口；本次未通过伪造来源或注入来尝试调用。
+
+以上结论是“已识别创建函数和命令，但尚未找到并实测可由外部程序调用的等价创建入口”，不是对所有桌面内部 IPC 子系统作不存在证明。先前对独立 app-server 的 active-writer 失败，也只能证明该分叉路径受阻，不能证明经原桌面管理器创建的其他入口一概不可行。
+
 ## 第二轮：真实桌面与转发验证
 
 用户随后明确要求由代理操作新建，并先验证整个流程再决定是否开发。本轮已自动操作桌面测试界面，不再将新建步骤交给用户。以下结果更新第一轮的“未实测”项；后面的第一轮记录保留其当时的证据范围。
@@ -70,7 +93,7 @@
 
 其中 `thread-follower-start-turn` 的分派直接调用原 manager 的 `startTurn(conversationId, turnStart)`；侧边会话不需要因此创建新的执行器。handler 的前置条件是请求目标仍由该 owner 持有。这支持“原生侧边存在时网关只转发”的技术判断，不能代替真实双端收发验收。
 
-**当前方法表不包含侧边聊天创建、侧边聊天列表、销毁侧边聊天请求。** app-tools 的公开 `fork_thread` 也没有附属侧边或 `ephemeral` 参数；普通 fork 不等于原生侧边标签。不能绕过方法限制，将一个仅存在于 app-server 的方法名直接发给桌面 follower。
+**已检查的 `codex-ipc` owner/follower 方法表和 handler 不包含侧边聊天创建、侧边聊天列表、销毁侧边聊天请求。** 这不等于整个桌面应用没有内部创建函数或其他 IPC 子系统。app-tools 的公开 `fork_thread` 也没有附属侧边或 `ephemeral` 参数；普通 fork 不等于原生侧边标签。不能绕过方法限制，将一个仅存在于 app-server 的方法名直接发给桌面 follower。
 
 仓库依据：[IPC 白名单和帧协议](../bridge/clients/codex/ipc.py)、[主聊天通过 owner 发送](../bridge/app/service.py)、[桌面工具限制](../bridge/clients/codex/desktop_tools.py)。
 
