@@ -2,6 +2,8 @@
 
 测试应匹配改动的功能和平台。源码测试不等于已经编译、安装或在三个系统上完成真实客户端联调。
 
+文件标签页的大文件下载运行 `node scripts/test-file-download-browser.cjs`、`node --test tests/downloads.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p test_download_ranges.py`。浏览器驱动使用正式文件预览、点击处理与合成 HTTP 文件，在 Android/iOS 宿主 UA 和普通浏览器中覆盖 Codex、Claude、DeepSeek 的约 220 MB APK 元信息及小文件，实际点击下载并核对保存字节；宿主 UA 场景只验证导航路径，不代表已安装 App 的原生下载器实测。后端使用约 220 MB 的合成文件验证普通请求被大小阈值拒绝、明确下载支持 Range、登录和目录边界不变。浏览器驱动需要已有 Playwright/Chromium，支持 `NODE_PATH` 和 `BROWSER_EXECUTABLE`，不读取用户安装包或操作真实客户端。
+
 最近交互的状态优先排序运行 `node --test tests/sidebar-sync.test.cjs tests/desktop-sessions-ui.test.cjs tests/recency-policy.test.cjs` 和 `node scripts/test-side-chat-activity-browser.cjs`。覆盖有状态与无状态分别按时间排序、主侧状态汇总、已读和等待解除后保留本次浏览位置、切换视图恢复实时状态排序、未知状态不提前，以及项目排序和交互时间不变；浏览器在手机、平板和电脑尺寸使用正式页面与隔离接口验证。
 
 新建聊天模型列表恢复运行 `node --test tests/new-chat-settings.test.cjs`、`python -B scripts/test-backend.py --source-only -p test_api_catalog.py` 和 `node scripts/test-composer-drafts-browser.cjs`。覆盖完整目录后台补齐、目录服务临时失败只读重试一次、失败与空目录提示、手动重试保留设置、切换项目和关闭窗口丢弃旧响应，以及失败目录不阻塞后续读取。浏览器只使用合成接口，不创建真实聊天或调用模型。

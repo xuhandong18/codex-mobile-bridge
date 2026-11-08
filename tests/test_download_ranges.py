@@ -301,6 +301,25 @@ class TransferPolicyHttpTests(unittest.TestCase):
     tearDown = DownloadHttpTests.tearDown
     get = DownloadHttpTests.get
 
+    def test_explicit_preview_download_of_large_apk_preserves_range_and_auth(self):
+        self.server.transfer_directory = self.root / 'policy'
+        size = round(219.9 * 1024 * 1024)
+        marker = b'PK\x03\x04synthetic APK'
+        with (self.root / 'app.apk').open('wb') as stream:
+            stream.write(marker)
+            stream.truncate(size)
+        url = self.url.replace('example.bin', 'app.apk')
+        auth = self.login()
+        self.assertEqual(self.get(auth, url)[0], 400)
+        explicit = url + '&explicit=1'
+        self.assertEqual(self.get({}, explicit)[0], 401)
+        status, headers, data = self.get({**auth, 'Range': f'bytes=0-{len(marker)-1}'}, explicit)
+        self.assertEqual(status, 206)
+        self.assertEqual(headers['Content-Range'], f'bytes 0-{len(marker)-1}/{size}')
+        self.assertEqual(data, marker)
+        self.assertIn('app.apk', headers['Content-Disposition'])
+        self.assertEqual(self.get(auth, explicit.replace('app.apk', '../escape.apk'))[0], 403)
+
     def test_live_policy_requires_auth_csrf_and_applies_without_restart(self):
         import json
         self.server.transfer_directory = self.root / 'policy'
