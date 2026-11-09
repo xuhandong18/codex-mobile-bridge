@@ -457,7 +457,7 @@ async function loadProjectChats(key){
   const page=projectPage(key);
   if(page.loading||listLoading)return;
   const native=$('list-mode').value==='codex',limitKey=native?'statusLimit':'limit';
-  const target=page[limitKey]+(native&&page.statusLimit===0?5:10),filter=listFilterKey;
+  const target=page[limitKey]+(native&&page.statusLimit===0?3:10),filter=listFilterKey;
   page.loadingControl=native&&!page.expanded?'toggle':'more';
   if(native)page.expanded=true;
   page.loading=true;listRenderStamp='';renderList();

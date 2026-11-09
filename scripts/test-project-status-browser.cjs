@@ -80,8 +80,8 @@ const server=http.createServer(async(req,res)=>{
       check((await ids()).includes(rows[27].id),true,'蓝点已读且没有其他状态时聊天仍留在原处 '+width);
       check(await group.locator('.session[data-id="'+rows[27].id+'"] .session-indicator').count(),0,'保留聊天但不保留已经读完的蓝点 '+width);
       await toggle.click();
-      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===11);
-      check(await ids(),[...rows.slice(0,6),...rows.slice(25,29),rows[30]].map(row=>row.id),'首次点击另增五条普通聊天，保留聊天不占名额 '+width);
+      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===9);
+      check(await ids(),[...rows.slice(0,3),rows[4],...rows.slice(25,29),rows[30]].map(row=>row.id),'首次点击另增三条普通聊天，保留聊天不占名额 '+width);
       check(await other.locator(':scope > .session').count(),0,'项目加载进度独立 '+width);
       check(await toggle.getAttribute('aria-expanded'),'true','展开后标题箭头变为收起 '+width);
       check(await toggle.getAttribute('title'),'收起其他聊天','标题箭头有动态悬停说明 '+width);
@@ -91,10 +91,10 @@ const server=http.createServer(async(req,res)=>{
       await page.waitForFunction(()=>!document.querySelector('.project-group[data-project-key="local|fixture"]').open);
       await group.locator(':scope > summary .project-name').click();
       await page.waitForFunction(()=>document.querySelector('.project-group[data-project-key="local|fixture"]').open);
-      check(await group.locator(':scope > .session').count(),11,'折叠再展开保留已读聊天和已加载条数 '+width);
+      check(await group.locator(':scope > .session').count(),9,'折叠再展开保留已读聊天和已加载条数 '+width);
       await page.evaluate(()=>loadList(true));
-      check(await group.locator(':scope > .session').count(),11,'自动列表刷新保留已读聊天和已加载条数 '+width);
-      for(const count of [21,31,40]){
+      check(await group.locator(':scope > .session').count(),9,'自动列表刷新保留已读聊天和已加载条数 '+width);
+      for(const count of [19,29,39,40]){
         await group.locator('.project-load-more').click();
         await page.waitForFunction(count=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===count,count);
       }
@@ -105,7 +105,7 @@ const server=http.createServer(async(req,res)=>{
       await page.locator('#list-mode').evaluate(node=>{node.value='codex';node.dispatchEvent(new Event('change'));});
       check(await group.locator(':scope > .session').count(),40,'切回分区保留该视图加载进度 '+width);
       await otherToggle.click();
-      check(await other.locator(':scope > .session').count(),5,'其他项目可独立展开五条普通聊天 '+width);
+      check(await other.locator(':scope > .session').count(),3,'其他项目可独立展开三条普通聊天 '+width);
       await otherToggle.click();
       check(await other.locator(':scope > .session').count(),0,'再次点击标题箭头恢复默认展示 '+width);
       check(await group.locator(':scope > .session').count(),40,'标题收起不影响其他项目 '+width);
@@ -113,7 +113,7 @@ const server=http.createServer(async(req,res)=>{
       check(await other.evaluate(node=>node.open),false,'项目名称仍能折叠整个项目 '+width);
       await otherToggle.click();
       check(await other.evaluate(node=>node.open),true,'折叠项目的向下箭头同时打开项目 '+width);
-      check(await other.locator(':scope > .session').count(),5,'打开项目时同时展开五条其他聊天 '+width);
+      check(await other.locator(':scope > .session').count(),3,'打开项目时同时展开三条其他聊天 '+width);
       const projectName=group.locator(':scope > summary .project-name');await projectName.scrollIntoViewIfNeeded();
       await page.evaluate(async()=>{await refreshActivity();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));});
       if(width===1280)await projectName.click({button:'right'});
@@ -125,14 +125,14 @@ const server=http.createServer(async(req,res)=>{
       }
       await page.getByRole('dialog',{name:'侧栏操作',exact:true}).getByRole('button',{name:'隐藏无状态聊天',exact:true}).click();
       check(await ids(),[rows[25],rows[26],rows[28],rows[30]].map(row=>row.id),'项目右键或长按隐藏加载出的普通聊天和已读保留聊天 '+width);
-      check(await other.locator(':scope > .session').count(),5,'隐藏操作不影响其他项目 '+width);
+      check(await other.locator(':scope > .session').count(),3,'隐藏操作不影响其他项目 '+width);
       await page.evaluate(()=>loadList(true));
       check(await group.locator(':scope > .session').count(),4,'刷新不会重新展开刚隐藏的聊天 '+width);
       // 等待触屏长按后的防穿透保护结束，再进行下一次独立点击。
       if(width!==1280)await page.waitForTimeout(950);
       await toggle.click();
-      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===9);
-      check(await group.locator(':scope > .session').count(),9,'隐藏后仍可重新加载五条普通聊天 '+width);
+      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===7);
+      check(await group.locator(':scope > .session').count(),7,'隐藏后仍可重新加载三条普通聊天 '+width);
       const createdId='33333333-3333-4333-8333-333333333333';
       await page.evaluate(id=>{newChatProjects=sidebarData.projects;rememberCreatedChat({id,host:'local'},{project:'local|fixture',kind:'desktop',title:'新建保留聊天',autoTitle:false});},createdId);
       const created=group.locator('.session[data-id="'+createdId+'"]');
@@ -150,8 +150,8 @@ const server=http.createServer(async(req,res)=>{
       await page.evaluate(()=>loadList(true));
       check(await created.isVisible(),true,'列表接管和重复刷新不会移除新聊天 '+width);
       await toggle.click();
-      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===10);
-      check(await group.locator(':scope > .session').count(),10,'新聊天不占首次展开的五条名额 '+width);
+      await page.waitForFunction(()=>document.querySelectorAll('[data-project-key="local|fixture"] > .session').length===8);
+      check(await group.locator(':scope > .session').count(),8,'新聊天不占首次展开的三条名额 '+width);
       activityGate=new Promise(resolve=>releaseActivity=resolve);
       await page.reload();await page.waitForFunction(()=>listReadFinished&&activityBusy);
       check(await ids(),[rows[25],rows[26],rows[28],rows[30]].map(row=>row.id),'刷新页面后只恢复明确状态，灰点和已读保留均不展开 '+width);
@@ -180,7 +180,7 @@ const server=http.createServer(async(req,res)=>{
       check(await other.locator(':scope > .session').count(),0,'旧请求返回不会重新展开 '+width);
       check(listReads-requestCount,1,'慢请求期间没有重复提交加载 '+width);
       await otherToggle.click();
-      check(await other.locator(':scope > .session').count(),5,'慢请求结束后可以重新展开五条聊天 '+width);
+      check(await other.locator(':scope > .session').count(),3,'慢请求结束后可以重新展开三条聊天 '+width);
       // 强制保留全局下一页，验证底部分页失败及显式重试。
       await page.evaluate(()=>{listHasMore=true;listRenderStamp='';renderList();});
       listGate=new Promise(resolve=>releaseList=resolve);
@@ -192,7 +192,7 @@ const server=http.createServer(async(req,res)=>{
       listFailure=true;releaseList();listGate=null;
       await page.waitForFunction(()=>!listLoading&&!projectPage('local|other').loading);
       listFailure=false;
-      check(await other.locator(':scope > .session').count(),5,'分页失败保留已经显示的聊天 '+width);
+      check(await other.locator(':scope > .session').count(),3,'分页失败保留已经显示的聊天 '+width);
       check(await more.isEnabled(),true,'分页失败后可主动重试 '+width);
       await more.click();await page.waitForFunction(()=>!listLoading&&!projectPage('local|other').loading);
       check(await more.count(),0,'重试成功确认到底后移除底部箭头 '+width);
