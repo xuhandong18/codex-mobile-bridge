@@ -733,6 +733,7 @@ class SideChats:
         self.archive.import_titles(parent_lookup)
         self.saved_uploads = Uploads(self.archive.files)
         self.native_sync = None
+        self.native_history = None
         if factory is SideChat:
             from bridge.features.sessions.linux_permissions import enabled
             if enabled(host):
@@ -751,7 +752,7 @@ class SideChats:
         self._checked_executable = executable
         self.closed = False
 
-    def native_snapshot(self, parent, child, state, revision):
+    def native_snapshot(self, parent, child, state, revision, *, offline=False):
         from bridge.features.workspace.workspace import Workspace
         view = normalize_state(state, False)
         view.update(id=child, parentId=parent, title=state.get('name') or state.get('title') or '原生侧边聊天',
@@ -785,7 +786,7 @@ class SideChats:
                     files.append(item)
                 if files:
                     message['attachments'] = files
-        return self.archive.save(parent, child, view, source='desktop')
+        return self.archive.save(parent, child, view, source='desktop', sync_state='offline' if offline else 'live')
 
     def _save_activity(self, parent, slot, view):
         saved = self.archive.save(parent, slot, view, sync_state=view['syncState'])
@@ -813,6 +814,8 @@ class SideChats:
     def operate(self, parent, action, body, snapshot=None, settings=None, catalog_reader=None):
         slot = str(uuid.UUID(body['slot'])) if 'slot' in body else ''
         key = (parent, slot)
+        if action in ('read', 'history') and self.native_history:
+            self.native_history.refresh(parent)
         with self.lock:
             chat = self.chats.get(key)
             if action == 'read':

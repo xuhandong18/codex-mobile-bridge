@@ -5,12 +5,62 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections import OrderedDict
+from pathlib import Path
 
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.features.sessions.model import apply_patches
 from bridge.features.sessions.store import StoreUnavailable
 from bridge.features.workspace.files import path_identity
 from bridge.platforms.desktop_logs import codex_log_files
+
+
+class NativeAttachedHistory:
+    """Import saved attached chats for display without finding/resuming owners."""
+    def __init__(self, store, save):
+        self.store, self.save = store, save
+        self.lock = threading.Lock()
+        self.fingerprints = OrderedDict()
+
+    def refresh(self, parent):
+        with self.lock:
+            try:
+                metadata = self.store.get(parent)
+            except KeyError:
+                return
+            if metadata.get('origin') != 'desktop' or not metadata.get('model_provider') or not metadata.get('cwd'):
+                return
+            for row in self.store.attached_threads(parent):
+                try:
+                    child = str(uuid.UUID(row['id']))
+                    if (child == parent or row.get('attached_thread_parent_id') != parent
+                            or row.get('model_provider') != metadata['model_provider'] or not row.get('cwd')
+                            or path_identity(row['cwd']) != path_identity(metadata['cwd'])):
+                        continue
+                    path = Path(self.store.record_path(child))
+                    stat = path.stat()
+                    fingerprint = (parent, str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns,
+                                   row.get('name'), row.get('title'), row['model_provider'], row['cwd'])
+                    if self.fingerprints.get(child) == fingerprint:
+                        self.fingerprints.move_to_end(child)
+                        continue
+                    state = self.store.history(child)
+                    # Readback must still describe the same verified child.
+                    current = self.store.get(child)
+                    if (current.get('attached_thread_parent_id') != parent or current.get('origin') != 'desktop'
+                            or state.get('id') != child or state.get('modelProvider') != metadata['model_provider']
+                            or current.get('model_provider') != metadata['model_provider']
+                            or path_identity(current.get('cwd') or '') != path_identity(metadata['cwd'])
+                            or path_identity(state.get('cwd') or '') != path_identity(metadata['cwd'])):
+                        continue
+                    self.save(parent, child, state, None, offline=True)
+                    self.fingerprints[child] = fingerprint
+                    self.fingerprints.move_to_end(child)
+                    while len(self.fingerprints) > 128:
+                        self.fingerprints.popitem(last=False)
+                except (OSError, ValueError, KeyError, StoreUnavailable):
+                    # A missing/invalid record must not hide other saved sides.
+                    continue
 
 
 class NativeSideChatSync:

@@ -50,6 +50,29 @@ class StoreTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_attached_side_chats_are_not_independent_navigation_rows(self):
+        import uuid
+        parent, child, fork = [str(uuid.uuid4()) for _ in range(3)]
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute('ALTER TABLE threads ADD COLUMN attached_thread_parent_id TEXT')
+            db.execute('UPDATE threads SET id=?', (parent,))
+            db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?)', [
+                (child, 'Side', '/project', 100, 0, 'Codex Desktop', 'vscode', parent),
+                (fork, 'Independent fork', '/project', 2, 0, 'Codex Desktop', 'vscode', None),
+            ])
+            db.execute('ALTER TABLE threads ADD COLUMN created_at INT')
+            db.execute('UPDATE threads SET created_at=updated_at')
+        self.assertEqual([row['id'] for row in self.store.list(limit=1)], [fork])
+        self.assertEqual([row['id'] for row in self.store.list(offset=1)], [parent])
+        self.assertEqual(self.store.list(ids=[child]), [])
+        self.assertEqual(self.store.list(query='Side'), [])
+        self.assertEqual(self.store.get(child)['attached_thread_parent_id'], parent)
+        self.assertEqual([row['id'] for row in self.store.attached_threads(parent)], [child])
+        self.assertEqual(self.store.attached_threads(fork), [])
+
+    def test_attached_discovery_supports_old_schema(self):
+        self.assertEqual(self.store.attached_threads('test'), [])
+
     def test_snapshot_rejects_writer_starting_during_copy(self):
         import shutil
         from bridge.features.sessions.store import StoreUnavailable

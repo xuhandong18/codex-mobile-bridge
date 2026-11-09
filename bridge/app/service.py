@@ -210,7 +210,8 @@ class Bridge:
                                    on_activity=lambda parent, child, view: self.activity_events.publish(
                                        host, parent, activity_stamp(view, view.get('connected')), 'side:' + child))
         if host == 'local':
-            from bridge.clients.codex.native_side_chats import NativeSideChatSync
+            from bridge.clients.codex.native_side_chats import NativeSideChatSync, NativeAttachedHistory
+            self.side_chats.native_history = NativeAttachedHistory(self.store, self.side_chats.native_snapshot)
             self.side_chats.native_sync = NativeSideChatSync(self.ipc.path, host, self.store.get,
                 self.side_chats.native_snapshot, self.side_chats.native_disconnected)
         self.closed = threading.Event()

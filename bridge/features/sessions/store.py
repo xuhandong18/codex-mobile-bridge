@@ -180,6 +180,8 @@ class SessionStore:
             where = ["archived = ?"]
             params = [int(archived)]
             where.append(self._user_origin_filter(columns))
+            if 'attached_thread_parent_id' in columns:
+                where.append('attached_thread_parent_id IS NULL')
             if ids is not None:
                 where.append('id IN (' + ','.join('?' for _ in ids) + ')')
                 params.extend(ids)
@@ -204,6 +206,8 @@ class SessionStore:
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
             where = [self._user_origin_filter(columns)]
+            if 'attached_thread_parent_id' in columns:
+                where.append('attached_thread_parent_id IS NULL')
             if 'thread_source' in columns:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if 'source' in columns:
@@ -213,6 +217,16 @@ class SessionStore:
                 return []
             rows = conn.execute('SELECT DISTINCT ' + ','.join(fields) + ' FROM threads WHERE ' + ' AND '.join(where)).fetchall()
             return sorted({self._origin(dict(row)) for row in rows})
+
+    def attached_threads(self, parent):
+        """Saved native side chats, scoped to a parent; never opens an owner."""
+        with self._connect() as conn:
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
+            if 'attached_thread_parent_id' not in columns:
+                return []
+            rows = conn.execute('SELECT * FROM threads WHERE attached_thread_parent_id=? '
+                                'ORDER BY ' + self._recency_order(columns) + ' DESC, id DESC', (parent,))
+            return [dict(row, origin='desktop') for row in rows if self._origin(dict(row)) == 'desktop']
 
     @staticmethod
     def _source_filter(columns, source):
