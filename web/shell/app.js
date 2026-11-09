@@ -457,13 +457,13 @@ async function loadProjectChats(key){
   const page=projectPage(key);
   if(page.loading||listLoading)return;
   const native=$('list-mode').value==='codex',limitKey=native?'statusLimit':'limit';
-  const target=page[limitKey]+10,filter=listFilterKey;
+  const target=page[limitKey]+(native&&page.statusLimit===0?5:10),filter=listFilterKey;
   page.loadingControl=native&&!page.expanded?'toggle':'more';
   if(native)page.expanded=true;
   page.loading=true;listRenderStamp='';renderList();
   try{
     // The existing API reads cumulative global pages. Keep reading metadata until
-    // this project has its next ten rows, even if other projects fill a page.
+    // this project reaches its display target, even if other projects fill a page.
     while(projectRows(key).filter(row=>native?!page.statusChats.has(chatKey(row.id,row.host))&&!createdChatVisibility.has(chatKey(row.id,row.host))&&!hasProjectStatus(row.id,row.host):!isProjectPinned(row)).length<target&&listHasMore){
       if(await loadList()===false)return;
       if(projectChatPages.get(key)!==page||filter!==listFilterKey)return;

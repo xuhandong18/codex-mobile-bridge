@@ -151,7 +151,7 @@ test('分区项目默认显示明确状态，初始灰点和普通置顶聊天�
   assert.deepEqual(ids(),marked,'红绿蓝橙及侧边汇总标记默认显示，带标记的置顶优先');
   assert.equal(group('local|other').children.filter(node=>node.dataset.id).length,0);
   const ordinary=['chat-24',...Array.from({length:24},(_,i)=>'chat-'+i),'chat-27','chat-31'];
-  for(const count of [10,20,27]){
+  for(const count of [5,15,25,27]){
     await more().onclick({preventDefault(){},stopPropagation(){}});
     assert.deepEqual(new Set(ids()),new Set([...marked,...ordinary.slice(0,count)]));
     assert.equal(ids()[0],'chat-24','加载后仍保持项目置顶优先');
@@ -244,10 +244,10 @@ test('首次未知的灰点不批量展开聊天，读取为空闲后列表保�
   assert.equal(context.sessionActivity.indicator('local|gray-11').kind,'unknown','断线缓冲到期后确实显示灰点');
   assert.deepEqual(ids(),['gray-11'],'已显示的聊天遇到断线灰点仍保留');
   await context.loadProjectChats('local|p');
-  assert.equal(ids().length,11,'保留的聊天不占加载更多的十条名额');
+  assert.equal(ids().length,6,'保留的聊天不占首次展开的五条名额');
 });
 
-test('分区加载更多只计无标记聊天，并跨全局分页补足十条',async()=>{
+test('分区首次展开只计无标记聊天，并跨全局分页补足五条',async()=>{
   const {context,nodes}=fixture();context.listHasMore=true;
   let reads=0;
   context.loadList=async()=>{
@@ -258,8 +258,8 @@ test('分区加载更多只计无标记聊天，并跨全局分页补足十条',
   };
   await context.loadProjectChats('local|p');assert.equal(reads,2);
   const group=nodes.sessions.querySelectorAll('.project-group').find(node=>node.dataset.projectKey==='local|p');
-  assert.equal(group.children.filter(node=>node.dataset.id).length,12,'两条带标记聊天不占十条普通聊天名额');
-  assert.equal(context.projectPage('local|p').statusLimit,10);
+  assert.equal(group.children.filter(node=>node.dataset.id).length,7,'两条带标记聊天不占五条普通聊天名额');
+  assert.equal(context.projectPage('local|p').statusLimit,5);
 });
 
 test('project pagination continues past global pages containing only other projects and retries failures',async()=>{
@@ -391,7 +391,7 @@ for(const native of [true,false])test('项目菜单隐藏无状态聊天并保�
   assert.equal(JSON.stringify(context.listRows),beforeRows,'只修改本页面显示，不改聊天和归属');
   context.listRows[0].title='Updated';context.renderList();assert.deepEqual(ids('local|p'),['thread']);
   assert.ok(group('local|p').querySelectorAll('.project-chat-toggle').length);
-  await context.loadProjectChats('local|p');assert.equal(ids('local|p').length,11,'仍可再次加载十条普通聊天');
+  await context.loadProjectChats('local|p');assert.equal(ids('local|p').length,6,'隐藏后再次展开仍只加载五条普通聊天');
 });
 
 test('隐藏无状态聊天使在途加载更多失效，旧回包不会重新展开',async()=>{
@@ -429,7 +429,7 @@ test('新建聊天没有状态也立即显示，列表接管和隐藏普通聊�
   assert.ok(pending.some(row=>row.id==='created'),'后台列表暂未包含新聊天时仍保留');
   context.listRows=context.mergeCreatedChats(context.listRows.map(row=>row.id==='created'?{...row,title:'Native title'}:row),'local','',false,'all');context.renderList();
   assert.equal(context.createdChats.size,0,'权威列表接管后不继续使用临时元数据');
-  await context.loadProjectChats('local|p');assert.equal(ids().length,12,'新聊天不占普通聊天的十条分页名额');
+  await context.loadProjectChats('local|p');assert.equal(ids().length,7,'新聊天不占首次展开的五条分页名额');
   context.menuItems(group().children[0]).find(row=>row.label==='隐藏无状态聊天').run();
   assert.deepEqual(ids(),['created','thread'],'隐藏操作保留新聊天');
   context.sessionActivity.update([{id:'created',host:'local',connected:true,status:'idle'}]);

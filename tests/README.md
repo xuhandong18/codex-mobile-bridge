@@ -83,7 +83,7 @@ Windows Harness 正常退出另有 `python -B scripts/test-backend.py -p test_ds
 
 同一浏览器入口还在三种宽度下连续重开旧网关页面，检查能力声明缺失或为假时不发送未知活动通知 POST。`test_login_security.py` 使用同一 HTTP 连接复现未知 POST／组件不可用后残留正文将下一条 GET 变成 501 的故障，验证未读正文时关闭连接、正文已读完时仍可复用，以及异常 GET 正文的隔离。`test_activity_events.py` 核对已认证启动响应的活动通知能力声明；`node scripts/test-activity-changes-browser.cjs` 和 `node scripts/test-idle-refresh-browser.cjs` 继续验证新网关增量通知与旧网关五秒轮询。
 
-Codex 分区的项目标题使用灰色箭头展开／收起其他聊天，展开后的底部箭头每次补充十条。运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs tests/chat-creation-list.test.cjs` 和 `node scripts/test-project-status-browser.cjs`，覆盖零／一／两条状态聊天、空项目及未知分页探查、项目间隔离、刷新保留、读取期间收起与旧回包失效、分页转圈与失败重试、键盘和至少 40px 点击区域。浏览器使用正式页面与合成只读接口，在 390、820、1280 像素执行；加 `--screenshots` 将默认／展开截图写入 `.tmp/project-arrows/`，不操作真实客户端。
+Codex 分区的项目标题使用灰色箭头首次展开五条其他聊天或收起，展开后的底部箭头每次补充十条。运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs tests/chat-creation-list.test.cjs` 和 `node scripts/test-project-status-browser.cjs`，覆盖零／一／两条状态聊天、空项目及未知分页探查、项目间隔离、刷新保留、读取期间收起与旧回包失效、分页转圈与失败重试、键盘和至少 40px 点击区域。浏览器使用正式页面与合成只读接口，在 390、820、1280 像素执行；加 `--screenshots` 将默认／展开截图写入 `.tmp/project-arrows/`，不操作真实客户端。
 
 聊天末尾快捷按钮运行 `node --test tests/markdown-followups.test.cjs` 和 `node scripts/test-chat-followups-browser.cjs`。前者执行生产 Markdown 解析及输入填充逻辑，覆盖完整标记、转义、不完整输入、代码和引用排除、长度校验及草稿保留；后者使用生产页面和合成 API，在手机、平板和电脑尺寸实际点击主聊天与侧边聊天的按钮，检查展开、追加、焦点、草稿恢复、上下文隔离及零消息提交，并实际展开长消息的分段详情，核验截断末尾不误转、完整加载后恢复合法按钮，以及流式结束时正文未变也能正确重绘。需要已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`；不操作真实聊天，也不调用模型。
 
@@ -92,9 +92,9 @@ Codex 分区的项目标题使用灰色箭头展开／收起其他聊天，展�
 项目菜单的“复制项目路径”运行 `node --test tests/sidebar-sync.test.cjs tests/desktop-sessions-ui.test.cjs tests/navigation-preferences.test.cjs mobile/tests/clipboard.test.cjs`，检查项目主目录优先于聊天子目录、本机中文及空格路径、同名标识的远程项目、空项目、CLI 目录组、缺失目录禁用，以及共享剪贴板按钮标记和原生复制适配。
 `node scripts/test-sidebar-preferences-browser.cjs` 另在手机／平板长按与电脑右键中点击复制，读取真实浏览器剪贴板，核对分区及项目视图、空项目和不提交写请求；使用合成接口，不连接真实客户端。
 
-新聊天页面保留另由 `tests/chat-creation-list.test.cjs`、`tests/sidebar-sync.test.cjs` 和 `tests/notifications-ui.test.cjs` 验证：确认创建后即使没有状态也立即显示，临时元数据被权威列表接管、项目分页重建和隐藏无状态聊天后继续保留，不占普通分页名额，并按主机隔离、在身份清理时丢弃。上述浏览器驱动在三种尺寸注入合成创建回执，检查未进入列表和进入权威列表后的显示、隐藏入口例外、十条分页及页面重载恢复默认筛选，不创建真实聊天。
+新聊天页面保留另由 `tests/chat-creation-list.test.cjs`、`tests/sidebar-sync.test.cjs` 和 `tests/notifications-ui.test.cjs` 验证：确认创建后即使没有状态也立即显示，临时元数据被权威列表接管、项目分页重建和隐藏无状态聊天后继续保留，不占普通分页名额，并按主机隔离、在身份清理时丢弃。上述浏览器驱动在三种尺寸注入合成创建回执，检查未进入列表和进入权威列表后的显示、隐藏入口例外、首次五条、后续十条分页及页面重载恢复默认筛选，不创建真实聊天。
 
-分区项目的状态筛选运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs`，覆盖红绿蓝橙及主侧汇总标记、初始灰点不自动展开、已读和状态消失后本页面保留、新页面恢复默认筛选、无标记置顶聊天、十条普通聊天分页及保留聊天不占名额、跨全局页补查、按项目视图隔离，以及屏幕内已展开项目的隐藏状态发现、轮换批量、并发去重和折叠/屏外排除。真实页面验证为 `node scripts/test-project-status-browser.cjs`，在 390、820、1280 像素下阻塞首次状态读取并预置整页灰点缓存，检查读取前后不批量闪现；另验证已读只清除蓝点而保留聊天、刷新页面才移除保留、加载更多、折叠重开、隐藏聊天新标记发现、加载进度独立及不提交聊天写入。使用合成 API 和已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`。
+分区项目的状态筛选运行 `node --test tests/sidebar-sync.test.cjs tests/sidebar-activity.test.cjs tests/recency-policy.test.cjs`，覆盖红绿蓝橙及主侧汇总标记、初始灰点不自动展开、已读和状态消失后本页面保留、新页面恢复默认筛选、无标记置顶聊天、首次五条、后续十条普通聊天分页及保留聊天不占名额、跨全局页补查、按项目视图隔离，以及屏幕内已展开项目的隐藏状态发现、轮换批量、并发去重和折叠/屏外排除。真实页面验证为 `node scripts/test-project-status-browser.cjs`，在 390、820、1280 像素下阻塞首次状态读取并预置整页灰点缓存，检查读取前后不批量闪现；另验证已读只清除蓝点而保留聊天、刷新页面才移除保留、加载更多、折叠重开、隐藏聊天新标记发现、加载进度独立及不提交聊天写入。使用合成 API 和已有 Playwright/Chromium，支持 `NODE_PATH`、`BROWSER_EXECUTABLE`。
 
 项目选择器的主题回归也由 `node scripts/test-new-chat-projects-browser.cjs` 执行，在手机窄屏、横屏、平板和电脑等五种尺寸下切换深色、浅色和跟随系统，核对按钮、列表和吸顶分区标题与原生输入框使用相同的主题表面色，检查普通/选中条目的名称、主机和目录文字对比度，以及真实悬停、键盘焦点和切换时的选择保留。`--screenshots` 同时生成带 `-dark` 后缀的深色测试截图。
 
