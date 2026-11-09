@@ -7,6 +7,7 @@ const id='11111111-1111-4111-8111-111111111111';
 const row={id,host:'local',title:'侧边聊天创建测试',cwd:'/fixture',projectKey:'local|/fixture',projectName:'Fixture',recency:1,status:'idle',access:{source:'cli',canSend:true,canApprove:true,canUseSideChat:true}};
 const historyOnly=process.argv.includes('--history-only'),archives=new Map();
 const questionsOnly=process.argv.includes('--questions-only');
+const nativeOnly=process.argv.includes('--native-only');
 const states=new Map(),writes=[],errors=[];let mode='success',serial=0,createGate=null,questionFixture=false;
 const questions=[{id:'choice',question:'希望先解释哪个处理方案？[设计评审稿](D:/fixture/spec.md)',options:[{label:'先解释',description:'说明各个步骤'},{label:'直接处理',description:'执行已确认的方案'}]},{id:'free',question:'需要进一步说明的细节是什么？[交互原型](D:/fixture/prototype.html)'}];
 const questionFiles=['spec.md','prototype.html'].map((name,index)=>({id:String(index+1).repeat(64),name,path:name,reference:'D:/fixture/'+name,references:['D:/fixture/'+name],image:false}));
@@ -24,7 +25,7 @@ const server=http.createServer(async(req,res)=>{
           const offset=Number(url.searchParams.get('offset')||0),items=[...archives.values()];
           return json({items:items.slice(offset,offset+30).map(({turns,requests,historyRequests,submissions,...row})=>row),nextOffset:offset+30<items.length?offset+30:null,nativeSync:{state:'unavailable',message:'桌面原生侧边聊天未接入'}});
         }
-        if(url.searchParams.has('archiveId'))return json({...archives.get(url.searchParams.get('archiveId')),slots:[]});
+        if(url.searchParams.has('archiveId')&&!nativeOnly)return json({...archives.get(url.searchParams.get('archiveId')),slots:[]});
         if(body?.action==='create'){
           const resultMode=mode;await createGate;
           if(resultMode==='fail')return json({error:'创建失败，请重试'},503);
@@ -92,7 +93,7 @@ const server=http.createServer(async(req,res)=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;const results=[];
   try{
     browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});
-    for(const [width,height] of [[390,844],[820,1180],[844,390],[1440,1000]])for(const provider of historyOnly?['codex']:['codex','deepseek']){
+    for(const [width,height] of [[390,844],[820,1180],[844,390],[1440,1000]])for(const provider of historyOnly||nativeOnly?['codex']:['codex','deepseek']){
       if(!questionsOnly){
       states.clear();archives.clear();writes.length=0;mode='success';
       const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage();page.setDefaultTimeout(10000);
@@ -116,6 +117,39 @@ const server=http.createServer(async(req,res)=>{
         await page.locator('.wb-new-tab .wb-tab-choices button').filter({hasText:'继承当前上下文'}).click();
       };
       const ready=()=>page.waitForFunction(()=>creationPanel()?.state?.connected&&!creationPanel().busy);
+      if(nativeOnly){
+        const child='44444444-4444-4444-8444-444444444444';
+        const native={id:child,parentId:id,slot:child,archiveId:child,nativeAttached:true,source:'desktop',
+          title:'桌面原生侧边',connected:true,readOnly:false,expired:false,status:'idle',model:'fixture',
+          turns:[{id:'native-turn',messages:[{id:'old',role:'assistant',text:'原桌面已有回复'}]}],requests:[],submissions:[]};
+        states.set('codex|'+child,native);
+        archives.set(child,{...native,readOnly:true,connected:false,nativeAttached:true});
+        const before=writes.length;
+        await page.evaluate(()=>creationWorkbench.refreshSideChats());
+        await page.waitForFunction(child=>creationWorkbench.current.files.some(tab=>tab.slot===child),child);
+        await page.evaluate(child=>creationWorkbench.select('sidechat:'+child),child);await ready();
+        check(await page.evaluate(()=>creationPanel().state.nativeAttached&&!creationPanel().input.readOnly),'从父聊天自动发现原生侧边并解除输入锁定');
+        check(writes.length===before,'发现和连接原生侧边不创建聊天或发送消息');
+        await page.locator('.wb-side-composer:visible textarea').fill('继续同一原生侧边');
+        await page.locator('.wb-side-composer:visible button[type=submit]').click();
+        await page.waitForFunction(()=>creationPanel().messages.textContent.includes('可以直接聊天'));
+        const sent=writes.filter(write=>write.body.action==='send');
+        check(sent.length===1&&sent[0].body.id===child,'键盘发送沿用同一原生子聊天ID');
+        check(!writes.some(write=>write.body.action==='create'),'继续聊天全过程没有创建替代聊天');
+        native.connected=false;native.readOnly=true;
+        await page.evaluate(()=>creationPanel().load());
+        check(await page.evaluate(()=>creationPanel().input.readOnly&&creationPanel().sendButton.disabled&&!creationPanel().state.expired),'断线锁定输入但不将原生侧边判为永久失效');
+        native.connected=true;native.readOnly=false;await page.evaluate(()=>creationPanel().load());
+        check(await page.evaluate(()=>!creationPanel().input.readOnly),'同一原生连接恢复后可以继续输入');
+        const closeWrites=writes.length;
+        await page.locator('.wb-side-head:visible button').filter({hasText:'关闭标签'}).click();
+        check(writes.length===closeWrites&&states.has('codex|'+child),'关闭标签不结束桌面侧边聊天');
+        await page.evaluate(()=>creationWorkbench.sideChatHistory());
+        await page.locator('dialog[open] .picker-choices button').first().click();await ready();
+        check(await page.evaluate(()=>!creationPanel().tab.archiveId&&!creationPanel().input.readOnly),'从旧历史入口重新打开也能继续同一原生聊天');
+        results.push({width,height,provider,fixture:'native-side-chat-live',passed:checks.length});
+        await context.close();continue;
+      }
       if(historyOnly){
         await open();await ready();
         await page.locator('.wb-side-composer:visible textarea').fill('保存测试消息');

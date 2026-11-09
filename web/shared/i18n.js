@@ -2,6 +2,7 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"连接后可继续":"Continue after connecting",
 "图表":"Diagram",
 "流程图":"Flowchart",
 "Mermaid 图表":"Mermaid diagram",

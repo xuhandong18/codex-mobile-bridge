@@ -181,7 +181,9 @@ Codex 跨设备已读另覆盖独立手机/平板存储、主聊天与侧边隔�
 
 侧边持久历史运行 `python -B scripts/test-backend.py --source-only -p 'test_side_chat*.py'`，覆盖无页面保存、重启只读、配置/主机/父聊天隔离、附件保留、写盘错误、消息增量、旧修订拒绝、快照和标题导入及分页。原生同步使用合成 owner 快照、补丁与路由日志检查身份、断连、修订缺口及没有执行操作。`node scripts/test-side-chat-create-browser.cjs --history-only` 在四种尺寸及独立浏览器上下文验证真实分页、只读输入、图片、保存异常、阅读位置和关闭/结束区别；不启动真实模型或桌面客户端。支持 `NODE_PATH`、`BROWSER_EXECUTABLE` 使用已有运行时。
 
-原生持久附属聊天的归类另运行 `python -B scripts/test-backend.py --source-only -p test_store.py` 和 `-p test_native_attached_history.py`。前者检查附属聊天在分页、搜索及按 ID 补查前被排除，普通分叉和旧数据库仍兼容；后者通过真实服务入口与合成原生数据库验证从父聊天发现只读历史、标题/消息更新、重启恢复、来源/provider/cwd/文件边界及缺失记录隔离，并禁止激活或订阅 owner。上述浏览器历史驱动继续验证这些历史响应所用的既有展示入口；不代表持久原生侧边已支持手机发送。
+原生持久附属聊天的归类另运行 `python -B scripts/test-backend.py --source-only -p test_store.py` 和 `-p test_native_attached_history.py`。前者检查附属聊天在分页、搜索及按 ID 补查前被排除，普通分叉和旧数据库仍兼容；后者验证静态历史导入、标题/消息更新、重启恢复、来源/provider/cwd/文件边界及缺失记录隔离，服务入口在原 owner 不可用时返回只读历史且不激活会话。
+
+持久原生侧边继续聊天运行 `python -B scripts/test-backend.py --source-only -p test_native_side_chat_live.py`，使用合成原生数据库和 follower 快照/请求检查父标签发现、同 ID 发送、断线恢复、配置和 owner 变更拒绝、错误主机/owner 隔离、停止/审批、附件/队列及未知发送跨重启不重放。`node scripts/test-side-chat-create-browser.cjs --native-only` 在 390、820、844、1440 像素中实际输入并点击发送，验证原生标签自动出现、同 ID 发送、断线只读及恢复、关闭标签不结束桌面聊天、旧历史入口可继续；只使用合成 API。真实桌面另以只读 follower 核对指定原生侧边 ID 和可写状态，不将其称为真实模型发送验收。
 
 同一驱动还实际执行 `side-message-navigation.browser.js`，检查侧边聊天复用主聊天的缩略导航、摘要点击定位、单条与附件发言、重复发言和上下文过滤、160 条发言的虚拟列表、新回复下的阅读锚点、手动或按钮返回最新、分屏定位、标签隔离及关闭后的监听释放。主聊天导航原有回归仍为 `node scripts/test-message-navigation-browser.cjs`；所有夹具只使用合成数据。
 

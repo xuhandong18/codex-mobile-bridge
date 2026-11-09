@@ -21,7 +21,7 @@ class SideChatPanel {
     this.head=n('div','wb-side-head');
     this.createButton=b(BridgeI18n.t('创建侧边聊天'),()=>this.create());this.createButton.className='primary';
     this.stopButton=b(BridgeI18n.t('■ 停止'),()=>this.action('stop'));this.stopButton.hidden=true;
-    this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(this.state?.expired||this.state?.readOnly){await workbench.close(tab.id);return;}if(await this.end())this.load();});this.endButton.hidden=true;
+    this.endButton=b(BridgeI18n.t('结束聊天'),async()=>{if(this.state?.expired||this.state?.readOnly||this.state?.nativeAttached){await workbench.close(tab.id);return;}if(await this.end())this.load();});this.endButton.hidden=true;
     this.newButton=b(BridgeI18n.t('新建'),()=>workbench.sideChat('',true),'新建侧边聊天');
     this.renameButton=b(BridgeI18n.t('重命名'),()=>this.rename(),'重命名侧边聊天');
     this.modelButton=b(BridgeI18n.t('模型与思考程度'),()=>this.modelSettings());
@@ -225,8 +225,8 @@ class SideChatPanel {
     this.createButton.disabled=!!this.busy||created;
     this.stopButton.hidden=!created||!active;this.stopButton.disabled=!!this.busy;
     this.endButton.hidden=!created;this.endButton.disabled=!!this.busy;
-    const endLabel=this.state?.expired||this.state?.readOnly?'关闭标签':'结束聊天';this.endButton.dataset.i18n=endLabel;this.endButton.textContent=BridgeI18n.t(endLabel);
-    this.newButton.disabled=!!this.busy;this.renameButton.disabled=!!this.busy||!!this.state?.readOnly||!!this.state?.expired;
+    const endLabel=this.state?.expired||this.state?.readOnly||this.state?.nativeAttached?'关闭标签':'结束聊天';this.endButton.dataset.i18n=endLabel;this.endButton.textContent=BridgeI18n.t(endLabel);
+    this.newButton.disabled=!!this.busy;this.renameButton.disabled=!!this.busy||!!this.state?.readOnly||!!this.state?.expired||!!this.state?.nativeAttached;
     this.status.hidden=!this.status.textContent;
   }
   canReceiveQuote(){return !this.disposed&&!this.busy&&!this.pending&&!this.runningSendChoice&&!this.state?.expired&&!this.state?.readOnly&&!this.state?.saveError&&(!this.state?.id?!this.tab?.titleChild:this.state.connected===true);}

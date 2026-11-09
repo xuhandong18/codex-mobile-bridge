@@ -52,6 +52,7 @@ from bridge.clients.codex.remote import upload_file
 class LiveSession:
     def __init__(self, thread_id, on_activity=None):
         self.id = thread_id
+        self.native_parent_id = None
         self.on_activity = on_activity
         self.owner = None
         self.origin = "desktop"
@@ -209,6 +210,8 @@ class Bridge:
                                    parent_lookup=self.store.get,
                                    on_activity=lambda parent, child, view: self.activity_events.publish(
                                        host, parent, activity_stamp(view, view.get('connected')), 'side:' + child))
+        from bridge.features.sessions.native_side_chat import NativeSideChats
+        self.native_sides = NativeSideChats(self)
         if host == 'local':
             from bridge.clients.codex.native_side_chats import NativeSideChatSync, NativeAttachedHistory
             self.side_chats.native_history = NativeAttachedHistory(self.store, self.side_chats.native_snapshot)
@@ -1531,6 +1534,18 @@ class Bridge:
     def side_chat(self, thread_id, owner, action, body):
         self._require_desktop_feature(thread_id)
         self.store.get(thread_id)
+        child = body.get('id') or body.get('archiveId') or body.get('slot')
+        native = self.native_sides.matches(thread_id, child)
+        if native and body.get('slot') not in (None, '', child):
+            raise ValueError('原生侧边聊天标签与目标不一致，未执行操作')
+        if native and action == 'create':
+            raise ValueError('此标签已关联原生侧边聊天，请直接继续聊天')
+        if native and action == 'read':
+            if self.side_chats.native_history:
+                self.side_chats.native_history.refresh(thread_id)
+            return {**self.native_sides.read(thread_id, child), 'slots': self.native_sides.slots(thread_id)}
+        if native and action not in ('history', 'create'):
+            return self.native_sides.operate(thread_id, child, action, body)
         snapshot = settings = None
         if action == 'create':
             if self.host != 'local':
@@ -1549,10 +1564,29 @@ class Bridge:
                 if policy['type'] not in modes:
                     raise ValueError('当前权限配置暂不支持临时侧边聊天')
                 settings['sandbox'] = modes[policy['type']]
-        return self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        result = self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        if self.host == 'local' and action in ('read', 'history'):
+            slots = self.native_sides.slots(thread_id)
+            if action == 'read':
+                result['slots'] = [*result.get('slots', []), *slots]
+            else:
+                native_ids = {row['id'] for row in slots}
+                for row in result['items']:
+                    if row['id'] in native_ids:
+                        row.update(nativeAttached=True, slot=row['id'])
+        return result
 
     def side_attachment(self, thread_id, child, operation, *args):
         self.store.get(thread_id)
+        if self.native_sides.matches(thread_id, child):
+            if operation not in ('get', 'preview'):
+                session = self.session(child, attach=False)
+                self.native_sides.require_target(session)
+            try:
+                return getattr(self.uploads, operation)(child, *args)
+            except ValueError:
+                if operation not in ('get', 'preview'):
+                    raise
         return self.side_chats.attachment(thread_id, child, operation, *args)
 
     def upload_thumb(self, thread_id, identifier, data, width, height):
@@ -1597,6 +1631,7 @@ class Bridge:
             session.origin = metadata.get("origin", "desktop")
             session.saved_cwd = metadata.get('cwd')
             session.saved_provider = metadata.get('model_provider')
+            session.native_parent_id = metadata.get('attached_thread_parent_id') or None
             session.origin_verified = True
             session.access = self._access(session.origin, session)
 
@@ -1682,6 +1717,9 @@ class Bridge:
             if session.connected or self.closed.is_set():
                 return
             self._load_session_origin(session)
+            if session.native_parent_id:
+                self.native_sides.attach(session, timeout)
+                return
             if session.origin == "cli":
                 ipc_connected = False
                 try:
@@ -1897,6 +1935,8 @@ class Bridge:
                 if state.get('id') != session.id:
                     reason = 'thread_id_mismatch'
                     raise ValueError("Session mismatch")
+                if session.native_parent_id and not self.native_sides.valid_state(session, state):
+                    raise ValueError('Native side owner identity mismatch')
                 if session.origin == 'cli' and (state.get('hostId', self.host) != self.host or
                         not session.saved_cwd or not session.saved_provider or
                         state.get('cwd') != session.saved_cwd or
@@ -2024,6 +2064,11 @@ class Bridge:
                     pass
 
     def _target(self, thread_id):
+        with self.lock:
+            existing = self.live.get(thread_id)
+        if existing and existing.native_parent_id:
+            self.native_sides.require_target(existing)
+            return existing
         session = self.activate(thread_id)
         with session.condition:
             if not session.connected or not session.owner:
@@ -2034,6 +2079,8 @@ class Bridge:
     def _call(self, session, method, params, timeout=30):
         # The existing desktop owner retains this thread's provider and credentials.
         # A newly selected default account must not gate unrelated existing providers.
+        if session.native_parent_id:
+            self.native_sides.require_target(session)
         if session.runtime == "cli":
             try:
                 return self.cli_sessions.call(session.id, method, params, timeout=timeout)

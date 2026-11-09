@@ -76,19 +76,20 @@ class NativeAttachedHistoryTests(unittest.TestCase):
         self.assertTrue(view['readOnly'])
         restored.factory.assert_not_called()
 
-    def test_service_wires_native_history_without_loading_or_activating_owner(self):
+    def test_service_keeps_history_when_owner_unavailable_without_activation(self):
         from bridge.app.service import Bridge
+        from bridge.clients.codex.ipc import IPCError
         from unittest.mock import patch
         bridge = Bridge(self.home, self.root / 'gateway-data', codex_bin=self.root / 'not-installed')
         self.addCleanup(bridge.close)
         with patch.object(bridge, 'activate', side_effect=AssertionError('must not activate')), \
-                patch.object(bridge, 'session', side_effect=AssertionError('must not subscribe')):
+                patch.object(bridge.ipc, 'owner', side_effect=IPCError('no-client-found')):
             page = bridge.side_chat(self.parent, 'browser', 'history', {})
             self.assertEqual([item['id'] for item in page['items']], [self.child])
             view = bridge.side_chat(self.parent, 'browser', 'read', {'archiveId': self.child})
             self.assertEqual(view['parentId'], self.parent)
             self.assertTrue(view['readOnly'])
-        self.assertEqual(bridge.live, {})
+        self.assertFalse(bridge.live[self.child].connected)
         self.assertEqual(bridge.side_chats.chats, {})
 
     def test_parent_provider_cwd_source_and_file_boundary_are_verified(self):

@@ -450,11 +450,11 @@ class Workbench {
           const button=this.button('',()=>{
             if(this.current!==session)return;dialog.close();
             let tab=session.files.find(tab=>tab.sideChat?.state?.id===row.id);
-            if(!tab)tab=this.createSideChat(session,row.slot||'',row.live?null:row.archiveId);
+            if(!tab)tab=this.createSideChat(session,row.slot||'',row.live||row.nativeAttached?null:row.archiveId);
             if(tab){this.setSideChatTitle(session,tab,row);this.select(tab.id);}
           },row.title||'侧边聊天');
           button.append(this.raw(n('strong','',row.title||'侧边聊天')),n('span','muted',[
-            BridgeI18n.t(row.source==='desktop'?'桌面原生':'网关侧边聊天'),BridgeI18n.t(row.live?'可继续':row.hasBody===false?'无正文备份':row.syncState==='live'?'同步中':'已保存，仅供查看'),
+            BridgeI18n.t(row.source==='desktop'?'桌面原生':'网关侧边聊天'),BridgeI18n.t(row.live?'可继续':row.nativeAttached?'连接后可继续':row.hasBody===false?'无正文备份':row.syncState==='live'?'同步中':'已保存，仅供查看'),
             row.savedAt?new Date(row.savedAt).toLocaleString():''
           ].filter(Boolean).join(' · ')));list.append(button);
         }
