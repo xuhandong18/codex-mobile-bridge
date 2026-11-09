@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from bridge.features.sessions.sidebar_preferences import SidebarPreferences
+from bridge.clients.codex.remote import AppHosts
 from relay.protocol import validate
 import test_bridge
 
@@ -41,6 +42,100 @@ class SidebarPreferenceStoreTests(unittest.TestCase):
         self.store.save({'changes': [change()]})
         self.assertEqual(self.store.save({'changes': [change(value=False)]})[0], 409)
         self.assertTrue(self.store.read()['fields'][PIN]['value'])
+
+    def native_sidebar(self, target='home'):
+        return {'projects': [{'key': 'local|project', 'host': 'local'}],
+                'sections': [{'id': 'money', 'itemKeys': ['codex:project:project'] if target == 'section:money' else []}],
+                'pinnedProjectIds': ['project'] if target == 'pinned' else []}
+
+    def test_desktop_move_clears_legacy_pin_and_retains_a_deletion_version(self):
+        self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'home'})]})
+        self.store.close()
+        sidebar = self.native_sidebar()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        self.assertEqual(self.store.read()['fields'][PLACEMENT]['value']['target'], 'pinned')
+        sidebar.update(self.native_sidebar('section:money'))
+        snapshot = self.store.read()
+        self.assertIsNone(snapshot['fields'][PLACEMENT]['value'], '桌面移到赚钱分区后，旧网关置顶必须让位')
+        self.assertEqual(snapshot['fields'][PLACEMENT]['version'], 2)
+        self.assertEqual(snapshot['revision'], 2)
+        self.assertEqual(self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'home'})]})[0], 409)
+
+    def test_new_pin_survives_refresh_but_desktop_moves_clear_it_permanently(self):
+        sidebar = self.native_sidebar('section:money')
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'section:money'})]})
+        self.assertEqual(self.store.read()['fields'][PLACEMENT]['value']['target'], 'pinned')
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        self.assertEqual(self.store.read()['fields'][PLACEMENT]['value']['target'], 'pinned')
+        sidebar.update(self.native_sidebar('home'))
+        self.assertIsNone(self.store.read()['fields'][PLACEMENT]['value'])
+        sidebar.update(self.native_sidebar('section:money'))
+        self.assertIsNone(self.store.read()['fields'][PLACEMENT]['value'], '桌面移回来也不能恢复旧置顶')
+
+    def test_desktop_changes_only_reset_the_affected_project_placement(self):
+        sidebar = self.native_sidebar()
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        thread = json.dumps(['placement', 'thread', 'local', 'chat'], separators=(',', ':'))
+        self.store.save({'changes': [change(PLACEMENT, {'target': 'section:money'}),
+                                    change(thread, {'target': 'pinned'}), change(), change(ORDER, ['local|project'])]})
+        sidebar.update(self.native_sidebar('pinned'))
+        snapshot = self.store.read()['fields']
+        self.assertIsNone(snapshot[PLACEMENT]['value'])
+        self.assertEqual(snapshot[thread]['value'], {'target': 'pinned'})
+        self.assertTrue(snapshot[PIN]['value'])
+        self.assertEqual(snapshot[ORDER]['value'], ['local|project'])
+
+    def test_unavailable_native_project_does_not_clear_verified_preferences(self):
+        sidebar = self.native_sidebar()
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        _, saved = self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'home'})]})
+        for missing in ({}, {'projects': [], 'sections': [], 'pinnedProjectIds': []},
+                        {**self.native_sidebar('section:money'), 'sectionsAvailable': False}):
+            sidebar.clear()
+            sidebar.update(missing)
+            self.assertEqual(self.store.read(), saved)
+        sidebar.clear()
+        sidebar.update(self.native_sidebar('section:money'))
+        self.assertIsNone(self.store.read()['fields'][PLACEMENT]['value'])
+
+    def test_legacy_pin_from_a_display_override_is_not_mistaken_for_a_desktop_move(self):
+        self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'home'})]})
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: self.native_sidebar('section:money'))
+        self.assertEqual(self.store.read()['fields'][PLACEMENT]['value']['target'], 'pinned')
+
+    def test_two_listeners_reconcile_a_desktop_move_only_once(self):
+        sidebar = self.native_sidebar()
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned'})]})
+        other = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        try:
+            sidebar.update(self.native_sidebar('section:money'))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                snapshots = list(pool.map(lambda store: store.read(), (self.store, other)))
+            self.assertEqual(snapshots[0], snapshots[1])
+            self.assertEqual(snapshots[0]['fields'][PLACEMENT], {'value': None, 'version': 2})
+            self.assertEqual(snapshots[0]['revision'], 2)
+        finally:
+            other.close()
+
+    def test_a_new_explicit_choice_after_a_desktop_move_uses_the_new_baseline(self):
+        sidebar = self.native_sidebar()
+        self.store.close()
+        self.store = SidebarPreferences(self.temp.name, native_sidebar=lambda: sidebar)
+        self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'home'})]})
+        sidebar.update(self.native_sidebar('section:money'))
+        status, result = self.store.save({'changes': [change(PLACEMENT, {'target': 'home'}, 1)]})
+        self.assertEqual(status, 409)
+        self.assertIsNone(result['fields'][PLACEMENT]['value'])
+        self.assertEqual(self.store.save({'changes': [change(PLACEMENT, {'target': 'pinned', 'previous': 'section:money'}, 2)]})[0], 200)
+        self.assertEqual(self.store.read()['fields'][PLACEMENT]['value']['target'], 'pinned')
 
     def test_independent_devices_merge_different_pins_and_placements(self):
         keys = [json.dumps(['pin', 'ssh|project', str(i)], separators=(',', ':')) for i in range(8)]
@@ -109,6 +204,33 @@ class SidebarPreferenceHttpTests(unittest.TestCase):
     tearDown = test_bridge.HttpTests.tearDown
     request = test_bridge.HttpTests.request
     login = test_bridge.HttpTests.login
+
+    def test_a_desktop_move_reaches_both_devices_through_the_real_list_response(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as directory:
+            home = Path(directory)
+            state = {'local-projects': {'project': {'id': 'project', 'name': 'QuantDinger-board',
+                                                   'rootPaths': [r'D:\AI\QuantDinger-board']}},
+                     'electron-persisted-atom-state': {'sidebar-custom-sections-v3': {'account': {
+                         'sections': [{'id': 'money', 'name': '赚钱', 'itemKeys': []}]}}}}
+            path = home / '.codex-global-state.json'
+            path.write_text(json.dumps(state), encoding='utf-8')
+            self.server.bridge.hosts = AppHosts(home)
+            phone, computer = self.login(), self.login()
+            status, _, _ = self.request('POST', '/api/sidebar-preferences', {'changes': [
+                change(PLACEMENT, {'target': 'pinned', 'previous': 'home'})]}, phone)
+            self.assertEqual(status, 200)
+            route = '/api/sessions?scope=host&host=local&versioned=1'
+            status, _, before = self.request('GET', route, headers=phone)
+            self.assertEqual(status, 200)
+            state['electron-persisted-atom-state']['sidebar-custom-sections-v3']['account']['sections'][0]['itemKeys'] = ['codex:project:project']
+            path.write_text(json.dumps(state), encoding='utf-8')
+            for device in (phone, computer):
+                status, _, listing = self.request('GET', route + '&knownVersion=' + before['version'], headers=device)
+                self.assertEqual(status, 200)
+                self.assertFalse(listing.get('unchanged'))
+                self.assertEqual(listing['sidebar']['sections'][0]['name'], '赚钱')
+                self.assertIsNone(listing['sidebarPreferences']['fields'][PLACEMENT]['value'])
+                self.assertEqual(listing['sidebarPreferences']['fields'][PLACEMENT]['version'], 2)
 
     def test_two_authenticated_devices_share_settings_with_no_native_operations(self):
         phone, computer = self.login(), self.login()

@@ -29,6 +29,7 @@ class SidebarSyncTests(unittest.TestCase):
             'a': {'sections': [{'id': 'a', 'name': 'Private A'}]},
             'b': {'sections': [{'id': 'b', 'name': 'Private B'}]}}}})
         self.assertEqual(hosts.sidebar()['sections'], [])
+        self.assertFalse(hosts.sidebar()['sectionsAvailable'])
 
     def test_native_project_membership_wins_over_cwd_and_legacy_assignment(self):
         hosts = self.hosts({'local-projects': {

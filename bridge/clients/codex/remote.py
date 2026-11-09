@@ -302,7 +302,8 @@ class AppHosts:
             account_id = (auth.get('tokens') or {}).get('account_id')
         except (OSError, ValueError, AttributeError):
             account_id = None
-        config = scopes.get(account_id, {}) if account_id and isinstance(scopes, dict) else next(iter(scopes.values()), {}) if isinstance(scopes, dict) and len(scopes) == 1 else {}
+        config = scopes.get(account_id) if account_id and isinstance(scopes, dict) else next(iter(scopes.values()), None) if isinstance(scopes, dict) and len(scopes) == 1 else None
+        sections_available = isinstance(config, dict)
         if not isinstance(config, dict):
             config = {}
         sections = []
@@ -316,6 +317,7 @@ class AppHosts:
         order = config.get('sectionOrder', [])
         sections.sort(key=lambda section: order.index('custom:' + section['id']) if 'custom:' + section['id'] in order else len(order))
         return {'sections': sections, 'projects': self.projects(),
+                'sectionsAvailable': sections_available,
                 'sectionOrder': order,
                 'collapsedSections': atoms.get('sidebar-collapsed-sections-v1', {}),
                 'threadOrders': state.get('sidebar-project-thread-orders') or {},

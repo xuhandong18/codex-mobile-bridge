@@ -72,7 +72,7 @@ class GatewayServer(ThreadingHTTPServer):
             self.answer_drafts = AnswerDrafts(data_dir)
             self.chat_display = ChatDisplaySettings(data_dir)
             self.chat_read_state = SharedReadState(data_dir)
-            self.sidebar_preferences = SidebarPreferences(data_dir)
+            self.sidebar_preferences = SidebarPreferences(data_dir, native_sidebar=lambda: self.bridge.hosts.sidebar())
             self.notifications = None
             self.harness = Harness(data_dir) if data_dir else None
             self.desktop_sessions = DesktopSessions(data_dir, bridge, gateway_running=True, read_state=self.chat_read_state) if data_dir else None

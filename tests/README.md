@@ -129,6 +129,8 @@ npm run test:updater
 
 侧栏跨设备同步运行 `node --test tests/sidebar-preferences.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p 'test_sidebar*.py'`；真实页面验证为 `node scripts/test-sidebar-preferences-browser.cjs`。后者使用独立浏览器上下文，在手机、平板和电脑宽度实际操作长按/右键菜单，检查旧设置迁移、前台自动同步、项目上下顺序、原生项目跨分区移动、分区顺序、聊天归属、整页重载及丢失保存回包时不重复提交。后端另验证原生项目完成后无需浏览器轮询即可清除旧显示覆盖、未知原生结果不清除，以及操作期间另一设备的新选择优先。所有数据与原生客户端均为合成夹具，需要已有 Playwright/Chromium，不启动真实聊天或模型。
 
+`test_sidebar_preferences.py` 还通过实际桌面状态文件解析和 HTTP 列表入口复现“桌面移入赚钱分区，旧网关置顶仍覆盖”的问题，核验双设备收到清除后的版本记录、重启保留原生位置基线、移回原分区不恢复旧置顶、旧版本保存冲突及新的明确置顶可继续生效；同时覆盖项目不可用和账号分区不明确时保留设置，以及项目内置顶、聊天归属和项目顺序不受影响。
+
 导航栏自动状态同步可单独运行 `node --test tests/sidebar-activity.test.cjs tests/activity-observation.test.cjs tests/activity-refresh.test.cjs tests/chat-opening-ui.test.cjs`；真实 DOM 验证为 `node scripts/test-sidebar-activity-browser.cjs`，使用合成 API，在手机、平板和电脑尺寸检查首次显示、滚动、折叠与重新展开、收起与重新打开导航栏时的可见聊天订阅，以及短暂失败、持续失败三十秒和恢复成功后的显示。另在实际页面阻塞旧活动响应，先确认聊天完成，再释放旧响应，核验圆点不会重新变绿。Node 覆盖旧成功与旧失败、主机隔离、侧边集合、身份清理、长轮询响应版本、批量排序只绘制一次、前后台独立返回、64 条分批及四个并发满额后的有界补读。确认无需点击真实聊天，也没有打开桌面聊天或发送消息。浏览器驱动需要已有 Playwright/Chromium，可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
 侧栏增量通知运行 `node --test tests/activity-changes.test.cjs tests/sidebar-activity.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p test_activity_events.py`，联动 `test_subagent_activity.py`、`test_side_chat_activity.py` 与 `test_shared_relay.py`。覆盖游标、范围变更补取、环形缓冲溢出、跨主机共享、并发上限、关闭唤醒、原 owner 身份、主侧/子任务状态去重、文字更新不通知、通知与在途查询合并、登录/CSRF 和精确中继路径，以及旧网关降级和网络退避。`node scripts/test-activity-changes-browser.cjs` 在 390、820、1280 像素实际等待合成通知，核验完成/等待回答/解除等待在下一次五秒轮询前更新，补查只包含变化聊天，屏外事件不补读，滚动继续使用同一连接，隐藏导航取消监听；另实际等待旧网关五秒轮询恢复状态。使用已有 Playwright/Chromium 和隔离接口，不连接真实客户端或发送模型任务。
