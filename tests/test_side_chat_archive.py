@@ -220,7 +220,7 @@ class NativeSideChatSyncTests(unittest.TestCase):
             'sideConversation': True, 'cwd': str(self.root), 'modelProvider': 'custom', 'text': 'first'}
 
     def event(self, change, **overrides):
-        self.sync.event({'method': 'thread-stream-state-changed', 'version': 11,
+        self.sync.event({'method': 'thread-stream-state-changed', 'version': overrides.get('version', 11),
             'sourceClientId': overrides.get('owner', 'native-owner'), 'params': {
                 'hostId': overrides.get('host', 'local'), 'conversationId': self.child, 'change': change}})
 
@@ -240,6 +240,17 @@ class NativeSideChatSyncTests(unittest.TestCase):
         self.assertFalse(self.ipc.request.called)
         self.sync.disconnect()
         self.assertEqual(self.sync.status()['state'], 'unavailable')
+
+    def test_current_desktop_stream_persists_native_side_snapshot_and_patches(self):
+        self.event({'type': 'snapshot', 'revision': 1, 'conversationState': self.state}, version=13)
+        self.assertEqual(self.save.call_count, 1)
+        self.event({'type': 'patches', 'baseRevision': 1, 'revision': 2,
+            'patches': [{'op': 'replace', 'path': ['text'], 'value': 'current'}]}, version=13)
+        self.assertEqual(self.store.read(self.parent, self.child)['turns'][0]['messages'][0]['text'], 'current')
+        self.event({'type': 'snapshot', 'revision': 3,
+            'conversationState': {**self.state, 'text': 'unsupported'}}, version=99)
+        self.assertEqual(self.save.call_count, 2)
+        self.ipc.request.assert_not_called()
 
     def test_wrong_owner_host_parent_provider_or_non_side_is_rejected(self):
         self.event({'type': 'snapshot', 'revision': 1, 'conversationState': self.state}, owner='other')

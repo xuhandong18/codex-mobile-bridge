@@ -169,6 +169,8 @@ Codex 跨设备已读另覆盖独立手机/平板存储、主聊天与侧边隔�
 
 原桌面重建状态订阅后的完成同步由 `test_codex_ipc_following.py` 与 `test_bridge.py` 覆盖：经真实长度前缀帧恢复仍有效的订阅，检查聊天/主机/owner、取消与断连边界，并用隔离命名管道复现“桌面空闲、网关仍运行中”后确认状态变为空闲、下一条普通消息只发送一次且沿用原 owner。夹具不连接真实聊天。
 
+桌面第 13 版状态流兼容运行 `test_bridge.py`、`test_subagent_activity.py`、`test_desktop_idle.py`、`test_native_side_chat_live.py` 和 `test_side_chat_archive.py` 的后端源码回归。覆盖主聊天快照与补丁、派生任务运行结束、原生侧边聊天连接及只读归档同步、退出前的新鲜任务核验，保留第 11 版、未知版本拒绝和 host/owner/聊天身份边界。主聊天夹具使用隔离命名管道复现“桌面已返回快照但仍显示连接中”，不打开真实聊天或提交模型消息。
+
 历史聊天自动连接运行 `node --test tests/chat-opening-ui.test.cjs tests/cli-access-ui.test.cjs` 和 `python -B scripts/test-backend.py --source-only -p test_bridge.py`，覆盖历史与重连并行、CLI 被动阅读不激活、模型目录不重复等待 owner、正文未加载时沿用已核验的 cwd/provider，以及连接分阶段耗时日志。真实 DOM 驱动为 `node scripts/test-chat-opening-browser.cjs`，使用已有 Playwright/Chromium，在 390、820、1280 像素下实际阻塞合成重连接口，确认历史先显示、连接前不预读模型，以及连接后即使模型查询仍被阻塞也能继续输入且保留草稿；不操作真实客户端。可通过 `NODE_PATH`、`BROWSER_EXECUTABLE` 指定运行时。
 
 宿主与宽窄布局变更可先运行 `node --test tests/host-environment.test.cjs tests/layouts.test.cjs tests/frontend-assets.test.cjs mobile/tests/resources.test.cjs`。这些检查覆盖宿主识别与晚注入、容器分屏边界、样式顺序和原生资源清单，不启动或编译手机 App。布局的真实渲染和窗口变化后状态保留仍需浏览器夹具验证。

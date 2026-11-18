@@ -8,7 +8,7 @@ import uuid
 from collections import OrderedDict
 from pathlib import Path
 
-from bridge.clients.codex.ipc import DesktopIPC, IPCError
+from bridge.clients.codex.ipc import DesktopIPC, IPCError, supports_state_version
 from bridge.features.sessions.model import apply_patches
 from bridge.features.sessions.store import StoreUnavailable
 from bridge.features.workspace.files import path_identity
@@ -168,7 +168,7 @@ class NativeSideChatSync:
                             self.pending[child] = time.monotonic()+5
                             self.mark_disconnected(child)
             return
-        if self.closed.is_set() or message.get('method') != 'thread-stream-state-changed' or message.get('version') != 11:
+        if self.closed.is_set() or message.get('method') != 'thread-stream-state-changed' or not supports_state_version(message.get('version')):
             return
         params = message.get('params') or {}
         child = params.get('conversationId')

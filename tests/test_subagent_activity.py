@@ -34,8 +34,8 @@ class AgentIPC:
         if enabled:
             self.publish(identifier, host=host)
 
-    def publish(self, identifier, host='local', owner='original-owner', revision=1, **changes):
-        self.on_event({'method': 'thread-stream-state-changed', 'version': 11, 'sourceClientId': owner,
+    def publish(self, identifier, host='local', owner='original-owner', revision=1, version=11, **changes):
+        self.on_event({'method': 'thread-stream-state-changed', 'version': version, 'sourceClientId': owner,
                        'params': {'hostId': host, 'conversationId': identifier, 'change': {
                            'type': 'snapshot', 'revision': revision,
                            'conversationState': copy.deepcopy(self.states[identifier]), **changes}}})
@@ -81,6 +81,17 @@ class SubagentActivityTests(unittest.TestCase):
         self.assertTrue(all(call[0] in ('connect', 'owner', 'follow') for call in ipc.calls))
         AgentIPC.states['child'] = agent_state('child', 'idle', 'completed');ipc.publish('child', revision=2)
         self.assertEqual(self.refresh()['parent']['runningSubagents'], 0)
+
+    def test_current_desktop_snapshot_and_patches_keep_descendant_activity_current(self):
+        self.refresh();ipc = AgentIPC.instances[0]
+        ipc.publish('child', version=13, revision=2)
+        self.assertTrue(self.monitor.records['child']['connected'])
+        ipc.publish('child', version=13, revision=3, type='patches', baseRevision=2, patches=[
+            {'op': 'replace', 'path': '/threadRuntimeStatus/type', 'value': 'idle'},
+            {'op': 'replace', 'path': '/turns/0/status', 'value': 'completed'}])
+        self.assertEqual(self.refresh()['parent'], {'runningSubagents': 0, 'subagentsKnown': True, 'waitingSubagents': 0})
+        ipc.publish('child', version=99, revision=4)
+        self.assertFalse(self.monitor.records['child']['connected'])
 
     def test_child_stream_notifies_parent_without_rescanning_tree_or_text_events(self):
         events = ActivityEvents();self.addCleanup(events.close)

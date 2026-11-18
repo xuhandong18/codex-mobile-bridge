@@ -26,7 +26,7 @@ from bridge.features.sessions.activity import ActivityQueries, SubagentActivity,
 from bridge.features.sessions.recovery import capacity_error
 from bridge.features.sessions.recency import RecencyIndex
 from bridge.features.sessions import linux_permissions
-from bridge.clients.codex.ipc import DesktopIPC, IPCError
+from bridge.clients.codex.ipc import DesktopIPC, IPCError, supports_state_version
 from bridge.clients.codex.activity import DesktopActivity
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
@@ -952,7 +952,7 @@ class Bridge:
                 if record is None:
                     return
                 try:
-                    if message.get('version') != 11 or message.get('sourceClientId') != record['owner']:
+                    if not supports_state_version(message.get('version')) or message.get('sourceClientId') != record['owner']:
                         raise ValueError('Desktop owner changed')
                     change = params['change']
                     if type(change.get('revision')) is not int:
@@ -1899,7 +1899,7 @@ class Bridge:
             return
         if message.get("method") != "thread-stream-state-changed":
             return
-        if message.get("version") != 11:
+        if not supports_state_version(message.get("version")):
             self._disconnected()
             return
         params = message.get("params", {})

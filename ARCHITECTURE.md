@@ -134,6 +134,8 @@ Windows 使用 CPython 标准库 `_winapi` 的 overlapped I/O 读取原始字节
 
 本地和 SSH 均先广播带 `hostId` 的订阅，从匹配会话的快照识别 owner，后续只接受该 owner 的状态。首次短等待结束后保留订阅，以接收延迟到达的快照；不把尚未加载的聊天当作历史读取错误。远端 follower 操作携带外层 `hostId`，协议版本按当前 App 约定调整。
 
+状态流明确兼容第 11、13 版，由 `clients/codex/ipc.py` 的 `supports_state_version` 统一判断。第 13 版保留相同的 snapshot/patches、聊天身份与 revision 封装，新增状态字段沿用现有解析；主聊天、派生任务、原生侧边同步和退出前实时任务核验共用该兼容范围。未知版本仍拒绝接入，不放宽 host、owner、聊天身份及补丁基线核验。升级桌面后若快照被旧版本判断拒绝，聊天可能持续显示自动连接；仅反复打开桌面聊天不能修复协议不兼容。
+
 原桌面重建状态流时可能保留 IPC 连接，但重新询问 `thread-stream-following-status-requested`。IPC 客户端按当前连接中仍有效的 `(hostId, conversationId)` 订阅回复 `following: true`，请求原 owner 重发最新快照；否则已完成的聊天会滞留在旧的运行状态。已指定 owner 的订阅只回应该 owner，取消订阅和断开连接后清除记录；该恢复不打开、恢复或启动聊天，也不重放消息等写操作。
 
 这些方法来自当前安装版本的协议适配，不代表 OpenAI 对该接口稳定性的承诺。仓库仅分发网关实现，不分发 App 包或提取出的 App 源文件。

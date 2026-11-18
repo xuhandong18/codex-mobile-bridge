@@ -22,6 +22,7 @@ class NativeSideChatLiveTests(unittest.TestCase):
                        'latestModel': 'same-model', 'threadRuntimeStatus': {'type': 'idle'},
                        'turns': [], 'requests': []}
         self.revision = 1
+        self.stream_version = 11
         self.bridge.ipc.connect = Mock()
         self.bridge.ipc.owner = Mock(return_value='native-owner')
         self.bridge.ipc.follow = Mock(side_effect=self.follow)
@@ -32,7 +33,7 @@ class NativeSideChatLiveTests(unittest.TestCase):
 
     def follow(self, child, owner, enabled=True, host='local'):
         if enabled and child == self.child:
-            self.bridge._event({'method': 'thread-stream-state-changed', 'version': 11,
+            self.bridge._event({'method': 'thread-stream-state-changed', 'version': self.stream_version,
                 'sourceClientId': 'native-owner', 'params': {'hostId': host, 'conversationId': child,
                 'change': {'type': 'snapshot', 'revision': self.revision, 'conversationState': copy.deepcopy(self.native)}}})
 
@@ -54,6 +55,15 @@ class NativeSideChatLiveTests(unittest.TestCase):
         self.assertEqual(self.bridge.ipc.request.call_args.kwargs['target'], 'native-owner')
         self.bridge.activate.assert_not_called()
         self.bridge._open_desktop.assert_not_called()
+
+    def test_current_desktop_native_child_connects_to_original_owner(self):
+        self.stream_version = 13
+        view = self.read()
+        self.assertTrue(view['connected'])
+        self.assertFalse(view.get('readOnly', False))
+        self.assertEqual(self.bridge.live[self.child].owner, 'native-owner')
+        self.bridge.ipc.request.assert_not_called()
+        self.bridge.activate.assert_not_called()
 
     def test_parent_discovers_native_slot_without_owner_or_new_executor(self):
         view = self.bridge.side_chat(self.parent, 'browser', 'read', {})

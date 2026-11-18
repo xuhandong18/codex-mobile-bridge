@@ -214,6 +214,15 @@ class DesktopIdle(unittest.TestCase):
         self.bridge.activate.assert_not_called()
         self.assertTrue(all(instance.closed for instance in self.instances))
 
+    def test_current_desktop_stream_still_checks_fresh_task_state_before_shutdown(self):
+        self.transform_event = lambda message: {**message, 'version': 13}
+        self.bridge.assert_desktop_idle()
+        self.states[('local', 'desktop-only')] = {'id': 'desktop-only',
+            'threadRuntimeStatus': {'type': 'active'}, 'turns': [], 'requests': []}
+        with self.assertRaisesRegex(ValueError, '任务运行'):
+            self.bridge.assert_desktop_idle()
+        self.bridge.activate.assert_not_called()
+
     def test_task_becoming_active_while_other_sessions_are_audited_blocks_shutdown(self):
         self.bridge.store.lifecycle_threads.return_value = [{'id': 'a'}, {'id': 'b'}]
         def update(sid, follower):

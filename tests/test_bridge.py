@@ -49,6 +49,7 @@ class DesktopFixture:
             self.listener.settimeout(.2)
         self.state = state()
         self.revision = 1
+        self.stream_version = 11
         self.host = "local"
         self.requests = []
         self.client = None
@@ -64,7 +65,7 @@ class DesktopFixture:
             self.client.sendall(struct.pack('<I', len(data)) + data)
 
     def publish(self, change):
-        self.send({"type": "broadcast", "sourceClientId": "owner", "method": "thread-stream-state-changed", "version": 11,
+        self.send({"type": "broadcast", "sourceClientId": "owner", "method": "thread-stream-state-changed", "version": self.stream_version,
                    "params": {"hostId": self.host, "conversationId": THREAD, "change": change}})
 
     def snapshot(self):
@@ -198,6 +199,28 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(calls[0]['targetClientId'], 'owner')
         self.assertNotIn('modelProvider', calls[0]['params']['turnStart']['request'])
         self.assertEqual(self.bridge.view(THREAD)['provider'], 'custom-api')
+
+    def test_current_desktop_snapshot_connects_without_navigation(self):
+        from unittest.mock import patch
+        # The installed desktop publishes v13 snapshots with the same identity
+        # and revision envelope. A rejected snapshot leaves the UI connecting.
+        self.fixture.stream_version = 13
+        self.bridge.store.history = lambda tid, **kwargs: state()
+        with patch('bridge.app.service.open_in_desktop') as opened:
+            session = self.bridge.session(THREAD, background=True)
+            with session.condition:
+                self.assertTrue(session.condition.wait_for(lambda: session.connected, timeout=1),
+                                '当前桌面已返回快照，聊天仍卡在连接中')
+            self.assertFalse(session.view()['activating'])
+            self.assertEqual(session.owner, 'owner')
+            self.assertEqual(session.view()['provider'], 'custom-api')
+            self.fixture.publish({'type': 'patches', 'baseRevision': 1, 'revision': 2,
+                                  'patches': [{'op': 'replace', 'path': ['title'], 'value': 'Current desktop'}]})
+            with session.condition:
+                self.assertTrue(session.condition.wait_for(lambda: session.revision == 2, timeout=1))
+            self.assertEqual(session.view()['title'], 'Current desktop')
+            opened.assert_not_called()
+        self.assertFalse(any(r['method'].startswith('thread-follower-') for r in self.fixture.requests))
 
     def test_local_database_failure_keeps_other_hosts_in_list(self):
         from types import SimpleNamespace

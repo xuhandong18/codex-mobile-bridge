@@ -13,6 +13,12 @@ class IPCError(Exception):
     pass
 
 
+def supports_state_version(version):
+    # v13 adds desktop state fields while retaining the v11 snapshot/patch
+    # envelope. Keep an explicit allowlist; unknown protocols remain rejected.
+    return type(version) is int and version in (11, 13)
+
+
 class DesktopIPC:
     MAX_FRAME = 64 * 1024 * 1024
     VERSIONS = {

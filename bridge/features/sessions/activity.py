@@ -5,7 +5,7 @@ import uuid
 from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 
-from bridge.clients.codex.ipc import DesktopIPC, IPCError
+from bridge.clients.codex.ipc import DesktopIPC, IPCError, supports_state_version
 from bridge.clients.codex.remote import RemoteUnavailable
 from bridge.features.sessions.model import apply_patches, ordered_turns, pending_requests, waiting_for_user
 from bridge.features.sessions.store import StoreUnavailable
@@ -351,7 +351,7 @@ class SubagentActivity:
             try:
                 change = params['change']
                 revision = change.get('revision')
-                if message.get('version') != 11 or type(revision) is not int or revision < 0:
+                if not supports_state_version(message.get('version')) or type(revision) is not int or revision < 0:
                     raise ValueError('Invalid stream version')
                 if record.get('revision') is not None and revision < record['revision']:
                     raise ValueError('Stale revision')
