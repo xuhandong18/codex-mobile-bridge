@@ -18,8 +18,8 @@ class AccountInfo:
         self.current_usage = {}
         self.current_usage_stamp = None
 
-    def source_stamp(self):
-        home = self.manager.home
+    def source_stamp(self, home=None):
+        home = self.manager.home if home is None else home
         return tuple(hashlib.sha256((home/name).read_bytes()).hexdigest() if (home/name).is_file() else None
                      for name in ('config.toml', 'auth.json'))
 
@@ -135,29 +135,51 @@ class AccountInfo:
 
     def read_current_usage(self, stamp, refresh):
         manager = self.manager
+        pending = self.current_usage
+        value = {}
         try:
             if stamp != self.source_stamp():
-                return
+                raise ValueError('账号已变化')
             # Account.read owns its non-reentrant lock and verifies identity after querying.
-            value = manager.bridge.account.read(refresh=refresh)
+            value = manager.bridge.account.read(refresh=refresh, include_subscription=False)
             if not value.get('visible'):
                 raise ValueError('账号已变化')
             result = {k:value[k] for k in ('limits', 'resetCredits', 'updatedAt', 'subscription', 'planType') if k in value}
             result.update(status='error' if value.get('error') else 'ready', error=value.get('error'), checkedAt=time.time())
         except Exception:
             result = {'status':'error', 'checkedAt':time.time(), 'error':'额度暂不可用，请检查登录后重试'}
-        finally:
-            with manager.lock:
-                if stamp == self.current_usage_stamp:
-                    if stamp != self.source_stamp():
-                        self.current_usage = {}
-                    elif 'result' in locals():
-                        self.current_usage = {**self.current_usage, **result}
+        with manager.lock:
+            if stamp != self.current_usage_stamp or self.current_usage is not pending:
+                return
+            if stamp != self.source_stamp():
+                self.current_usage = {}
+                return
+            self.current_usage = published = {**pending, **result}
+        if value.get('accountKey'):
+            self.read_usage_subscription(manager.home, value, stamp, published, refresh, current=True)
+
+    def read_usage_subscription(self, home, context, stamp, published, refresh, *, current=False, row_id=None):
+        # Quota is already visible. Billing I/O must not hold either account/status lock.
+        manager = self.manager
+        try:
+            if stamp != self.source_stamp(home):
+                return
+            subscription = manager.bridge.account.subscription(home, context, refresh=refresh)
+        except Exception:
+            subscription = {'source':'online', 'periodEndsAt':None,
+                            'error':'订阅信息暂不可用，请稍后刷新'}
+        with manager.lock:
+            if stamp != self.source_stamp(home):
+                return
+            latest = self.current_usage if current else self.entries.get(row_id, {}).get('usage')
+            if latest is published:
+                published['subscription'] = subscription
 
     def read(self, row, section, refresh=False):
         from bridge.features.accounts.accounts import ManagedRPC, token_owner, private_bytes
         manager = self.manager
         result = {}
+        subscription_query = None
         try:
             with manager.bridge.account.lock:
                 with manager.lock:
@@ -179,8 +201,7 @@ class AccountInfo:
                             raise ValueError('账号身份不匹配')
                         if section == 'usage':
                             result = manager.bridge.account.limits(rpc, context, refresh=refresh)
-                            result.update(planType=context.get('planType'),
-                                          subscription=manager.bridge.account.subscription(home, context, refresh=refresh))
+                            result.update(planType=context.get('planType'))
                         else:
                             models, cursor, seen = [], None, set()
                             while True:
@@ -200,12 +221,16 @@ class AccountInfo:
                         raise ValueError('账号身份已变化')
                     if home == manager.home:
                         private_bytes(manager.directory(row['id'])/'auth.json', (home/'auth.json').read_bytes())
+                    if section == 'usage':
+                        subscription_query = (home, context, self.source_stamp(home))
             result.update(status='ready',checkedAt=time.time())
         except Exception:
             result = {'status':'error','checkedAt':time.time(),
                       'error':'额度暂不可用，请检查登录后重试' if section == 'usage' else '模型列表暂不可用，请检查接入后重试'}
         with manager.lock:
             if any(r['id'] == row['id'] for r in manager.index['accounts']):
-                if result['status'] == 'error':
+                if result['status'] == 'error' or section == 'usage':
                     result = {**self.entries.get(row['id'], {}).get(section, {}), **result}
                 self.entries.setdefault(row['id'], {})[section] = result
+        if subscription_query and result['status'] == 'ready':
+            self.read_usage_subscription(*subscription_query, result, refresh, row_id=row['id'])

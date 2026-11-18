@@ -1,5 +1,6 @@
 import base64
 import json
+import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -11,6 +12,102 @@ from bridge.features.accounts.accounts import private_json
 class InfoTests(unittest.TestCase):
     setUp = test_accounts.AccountsTests.setUp
     tearDown = test_accounts.AccountsTests.tearDown
+
+    def test_current_quota_is_published_before_slow_subscription_finishes(self):
+        info = self.manager.info
+        info.identity = {'kind':'chatgpt', 'name':'fixture@example.test', 'owner':None}
+        info.stamp = info.source_stamp(); info.checked_at = time.time()
+        from test_account import FakeRPC
+        self.bridge.account.rpc = lambda: FakeRPC()
+        entered, release = threading.Event(), threading.Event()
+        def slow_subscription(*args, **kwargs):
+            entered.set()
+            release.wait(3)
+            return {'source':'online', 'periodEndsAt':1893456000, 'observedAt':time.time()}
+        with patch.object(self.bridge.account, 'subscription', side_effect=slow_subscription):
+            info.current_usage_stamp = info.stamp
+            info.current_usage = {'status':'loading'}
+            worker = threading.Thread(target=info.read_current_usage, args=(info.stamp, False))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2), 'subscription query was not reached')
+                usage = self.manager.public()['current']['details']['usage']
+                self.assertEqual(usage['status'], 'ready', 'quota stays loading while subscription is blocked')
+                self.assertEqual(usage['limits'][0]['windows'][0]['remainingPercent'], 75)
+                acquired = self.bridge.account.lock.acquire(blocking=False)
+                if acquired:
+                    self.bridge.account.lock.release()
+                self.assertTrue(acquired, 'subscription query blocks other account operations')
+            finally:
+                release.set(); worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(info.current_usage['subscription']['periodEndsAt'], 1893456000)
+
+    def test_saved_quota_is_visible_and_other_quota_reads_continue_during_subscription(self):
+        row, _ = self.official(); info = self.manager.info
+        info.read_identity = Mock(return_value={'kind':'signedOut', 'name':''})
+        entered, release = threading.Event(), threading.Event()
+        def slow_subscription(*args, **kwargs):
+            entered.set(); release.wait(3)
+            return {'source':'online', 'periodEndsAt':1893456000}
+        with patch('bridge.features.accounts.accounts.ManagedRPC') as rpc, \
+                patch.object(self.bridge.account, 'subscription', side_effect=slow_subscription):
+            rpc.return_value.__enter__.return_value = self.rpc()
+            worker = threading.Thread(target=info.read, args=(row, 'usage'))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                usage = self.manager.public()['accounts'][0]['details']['usage']
+                self.assertEqual(usage['status'], 'ready')
+                self.assertEqual(usage['resetCredits']['availableCount'], 2)
+                acquired = self.bridge.account.lock.acquire(blocking=False)
+                if acquired:
+                    self.bridge.account.lock.release()
+                self.assertTrue(acquired, 'billing I/O must not block quota or identity reads')
+                with patch('bridge.features.accounts.info.threading.Thread') as new_worker:
+                    info.request({'id':row['id'], 'section':'usage'})
+                    new_worker.assert_not_called()
+            finally:
+                release.set(); worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(info.entries[row['id']]['usage']['subscription']['periodEndsAt'], 1893456000)
+
+    def test_late_subscription_cannot_overwrite_a_newer_query_or_changed_account(self):
+        info = self.manager.info
+        for current in (True, False):
+            for change in ('refresh', 'identity', 'delete'):
+                with self.subTest(current=current, change=change):
+                    row_id = 'a'*32
+                    published = {'status':'ready', 'limits':[]}
+                    info.current_usage = published
+                    info.entries[row_id] = {'usage':published}
+                    stamp = info.source_stamp()
+                    def changed(*args, **kwargs):
+                        if change == 'identity':
+                            (self.home/'auth.json').write_text(json.dumps({'changed':time.time_ns()}))
+                        elif change == 'delete':
+                            info.current_usage = {}; info.entries.pop(row_id, None)
+                        else:
+                            info.current_usage = {'status':'loading'}
+                            info.entries[row_id]['usage'] = {'status':'loading'}
+                        return {'source':'online', 'periodEndsAt':1893456000}
+                    with patch.object(self.bridge.account, 'subscription', side_effect=changed):
+                        info.read_usage_subscription(self.home, {'accountKey':'fixture'}, stamp,
+                                                     published, True, current=current, row_id=row_id)
+                    self.assertNotIn('subscription', published)
+
+    def test_subscription_failure_keeps_successful_quota_and_sanitizes_error(self):
+        row, _ = self.official(); info = self.manager.info
+        info.read_identity = Mock(return_value={'kind':'signedOut', 'name':''})
+        with patch('bridge.features.accounts.accounts.ManagedRPC') as rpc, \
+                patch.object(self.bridge.account, 'subscription', side_effect=OSError('secret upstream body')):
+            rpc.return_value.__enter__.return_value = self.rpc()
+            info.read(row, 'usage')
+        usage = self.manager.public()['accounts'][0]['details']['usage']
+        self.assertEqual(usage['status'], 'ready')
+        self.assertEqual(usage['limits'][0]['windows'][0]['remainingPercent'], 75)
+        self.assertIn('error', usage['subscription'])
+        self.assertNotIn('secret', json.dumps(usage))
 
     def test_unsaved_current_usage_is_read_only_and_invalidated_on_change(self):
         info = self.manager.info

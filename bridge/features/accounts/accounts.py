@@ -525,6 +525,7 @@ class Accounts:
             target = Account(home, self.bridge.data_dir, executable=self.runtime)
             target.usage_cache = self.bridge.account.usage_cache
             target.subscription_cache = self.bridge.account.subscription_cache
+            target.subscription_cache_lock = self.bridge.account.subscription_cache_lock
             def checked_context(rpc):
                 context = Account.context(rpc)
                 if (context.get('loginType') != 'chatgpt' or context.get('email') != row.get('email') or

@@ -159,6 +159,7 @@ class Account:
         self.lock = threading.Lock()
         self.usage_cache = {}
         self.subscription_cache = {}
+        self.subscription_cache_lock = threading.Lock()
 
     def rpc(self):
         executable = self.executable_getter() if self.executable_getter else self.executable
@@ -200,14 +201,18 @@ class Account:
 
     def subscription(self, home, context, refresh=False):
         key = context['accountKey']
-        cached = self.subscription_cache.get(key)
-        if not refresh and cached and time.time()-cached['observedAt'] < 300:
-            return copy.deepcopy(cached)
+        with self.subscription_cache_lock:
+            cached = self.subscription_cache.get(key)
+            if not refresh and cached and time.time()-cached['observedAt'] < 300:
+                return copy.deepcopy(cached)
         value = subscription_period(home, context.get('email'))
-        self.subscription_cache[key] = value
+        with self.subscription_cache_lock:
+            cached = self.subscription_cache.get(key)
+            if not cached or value['observedAt'] >= cached['observedAt']:
+                self.subscription_cache[key] = value
         return copy.deepcopy(value)
 
-    def _status(self, rpc, context, refresh=False):
+    def _status(self, rpc, context, refresh=False, *, include_subscription=True):
         if not context.get('accountKey'):
             return {'visible': False, 'loginType': context['loginType']}
         result = {'visible': True, **context, 'limits': [], 'resetCredits': None, 'error': None}
@@ -225,13 +230,14 @@ class Account:
                                       for key, row in ledger.items()
                                       if row['accountKey'] == context['accountKey'] and not row.get('outcome')), None)
         result.setdefault('updatedAt', None)
-        result['subscription'] = self.subscription(self.home, context, refresh=refresh)
+        if include_subscription:
+            result['subscription'] = self.subscription(self.home, context, refresh=refresh)
         return result
 
-    def read(self, refresh=True):
+    def read(self, refresh=True, *, include_subscription=True):
         with self.lock, self.rpc() as rpc:
             context = self.context(rpc)
-            return self._status(rpc, context, refresh=refresh)
+            return self._status(rpc, context, refresh=refresh, include_subscription=include_subscription)
 
     def consume(self, value):
         if value.get('confirmed') is not True:

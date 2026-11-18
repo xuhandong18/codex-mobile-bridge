@@ -1,6 +1,7 @@
 import base64
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -65,6 +66,25 @@ class SubscriptionTests(unittest.TestCase):
             for key,refresh in [('one',False),('one',False),('two',False),('one',True)]:
                 account.subscription(self.home,{'accountKey':key},refresh=refresh)
         self.assertEqual(read.call_count,3)
+    def test_late_subscription_response_cannot_replace_newer_cached_date(self):
+        account=Account(self.home,self.home,executable='unused')
+        entered,release=threading.Event(),threading.Event()
+        def read(*args):
+            if threading.current_thread() is worker:
+                entered.set();release.wait(3)
+                return {'observedAt':100,'periodEndsAt':1893456000}
+            return {'observedAt':200,'periodEndsAt':1896134400}
+        context={'accountKey':'one'}
+        worker=threading.Thread(target=account.subscription,args=(self.home,context,True))
+        with patch('bridge.features.accounts.account.subscription_period',side_effect=read):
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                newer=account.subscription(self.home,context,refresh=True)
+            finally:
+                release.set();worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(account.subscription_cache['one'],newer)
     def test_timestamp_seconds_milliseconds_iso_and_invalid(self):
         for value in [1893456000,'1893456000',1893456000000,'2030-01-01T00:00:00Z']:
             self.assertEqual(timestamp(value),1893456000)
