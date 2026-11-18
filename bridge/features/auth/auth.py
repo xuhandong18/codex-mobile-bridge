@@ -78,7 +78,7 @@ class LoginRejected(PermissionError):
 class Auth:
     COOKIE = "codex_mobile_session"
     MAX_FAILURES = 5
-    REMEMBER_HOURS = 7 * 24
+    LEGACY_REMEMBER_HOURS = 7 * 24
 
     @staticmethod
     def mobile_client(user_agent):
@@ -217,7 +217,7 @@ class Auth:
                 raise PermissionError('此 IP 已被访问规则禁止')
             now = time.time()
             trusted = self.mobile_client(user_agent)
-            hours = 0 if trusted else self.REMEMBER_HOURS if remember is True else self.hours
+            hours = 0 if trusted or remember is True else self.hours
             self.sessions = {k: v for k, v in self.sessions.items() if self.valid(v)}
             token = secrets.token_urlsafe(32)
             session = {"csrf": secrets.token_urlsafe(32), "expires": now + hours * 3600 if hours else 0,
@@ -240,14 +240,16 @@ class Auth:
                 if client:
                     now = time.time()
                     upgrade = self.mobile_client(user_agent) and not session.get('trustedDevice')
-                    # Migrate previously issued seven-day cookies while they are valid.
+                    # Upgrade only valid remembered sessions; expired or revoked
+                    # credentials must never regain access during migration.
                     remembered = session.get('remembered', session.get('persistent', True) and
-                                             session['expires'] - session['created'] == self.REMEMBER_HOURS * 3600)
-                    changed = upgrade or session['ip'] != client['ip'] or now - session['lastSeen'] >= 60
+                                             session['expires'] - session['created'] == self.LEGACY_REMEMBER_HOURS * 3600)
+                    remember_upgrade = remembered and session['expires'] != 0
+                    changed = upgrade or remember_upgrade or session['ip'] != client['ip'] or now - session['lastSeen'] >= 60
                     if upgrade:
                         session.update(expires=0, persistent=True, trustedDevice=True, remembered=False)
-                    elif remembered and changed:
-                        session.update(expires=now + self.REMEMBER_HOURS * 3600, remembered=True)
+                    elif remember_upgrade:
+                        session.update(expires=0, persistent=True, remembered=True)
                     session.update(client, userAgent=user_agent[:512], lastSeen=now if changed else session['lastSeen'])
                     if changed:
                         self.persist()

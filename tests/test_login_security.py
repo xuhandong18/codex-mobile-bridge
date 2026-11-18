@@ -80,7 +80,7 @@ class LoginSecurityTests(unittest.TestCase):
             self.auth.manage({'action': 'revoke', 'id': self.auth.key(token)})
             self.assertIsNone(Auth(CONFIG, self.directory).get(token))
 
-    def test_remembered_browser_renews_on_use_and_expires_after_inactivity(self):
+    def test_remembered_browser_survives_inactivity_and_gateway_restart(self):
         with patch('bridge.features.auth.auth.time.time', return_value=1000):
             token, _ = self.auth.login('tester', 'correct-password', IP, remember=True)
         client = {'ip': IP, 'peer': IP, 'source': 'direct'}
@@ -88,8 +88,51 @@ class LoginSecurityTests(unittest.TestCase):
             self.auth.get(token, client, 'Safari')
         with patch('bridge.features.auth.auth.time.time', return_value=1000 + 8 * 86400):
             self.assertIsNotNone(Auth(CONFIG, self.directory).get(token))
-        with patch('bridge.features.auth.auth.time.time', return_value=1000 + 13 * 86400):
+        with patch('bridge.features.auth.auth.time.time', return_value=1000 + 365 * 86400):
+            restored = Auth(CONFIG, self.directory)
+            self.assertIsNotNone(restored.get(token, client, 'Safari'))
+            self.assertEqual(restored.get(token)['expires'], 0)
+            restored.logout(token)
             self.assertIsNone(Auth(CONFIG, self.directory).get(token))
+
+    def test_valid_legacy_remembered_sessions_upgrade_without_reviving_expired_ones(self):
+        client = {'ip': IP, 'peer': IP, 'source': 'direct'}
+        with patch('bridge.features.auth.auth.time.time', return_value=1000):
+            tokens = []
+            for legacy in (True, False):
+                token, row = self.auth.login('tester', 'correct-password', IP, remember=True)
+                row['expires'] = 1000 + 7 * 86400
+                if legacy:
+                    row.pop('remembered')
+                tokens.append(token)
+            expired, row = self.auth.login('tester', 'correct-password', IP, remember=True)
+            row['expires'] = 999
+            ordinary, _ = self.auth.login('tester', 'correct-password', IP, remember=False)
+            self.auth.persist()
+            restored = Auth(CONFIG, self.directory)
+            for token in tokens:
+                upgraded = restored.get(token, client, 'Safari')
+                self.assertEqual(upgraded['expires'], 0)
+                self.assertTrue(upgraded['persistent'])
+                self.assertTrue(upgraded['remembered'])
+                self.assertFalse(upgraded['trustedDevice'])
+            self.assertIsNone(restored.get(expired, client, 'Safari'))
+        with patch('bridge.features.auth.auth.time.time', return_value=1000 + 365 * 86400):
+            final = Auth(CONFIG, self.directory)
+            for token in tokens:
+                self.assertIsNotNone(final.get(token))
+            self.assertIsNone(final.get(ordinary))
+
+    def test_remembered_login_still_respects_revocation_password_change_and_ip_rules(self):
+        token, _ = self.auth.login('tester', 'correct-password', IP, remember=True)
+        changed = {**CONFIG, 'hash': 'ff' * 32}
+        self.assertIsNone(Auth(changed, self.directory).get(token))
+        token, _ = self.auth.login('tester', 'correct-password', IP, remember=True)
+        self.auth.manage({'action': 'revoke', 'id': self.auth.key(token)})
+        self.assertIsNone(Auth(CONFIG, self.directory).get(token))
+        token, _ = self.auth.login('tester', 'correct-password', IP, remember=True)
+        self.auth.manage({'action': 'save', 'policy': {'blocklist': [IP]}})
+        self.assertIsNone(Auth(CONFIG, self.directory).get(token))
 
     def test_existing_valid_mobile_session_upgrades_but_expired_one_does_not(self):
         with patch('bridge.features.auth.auth.time.time', return_value=1000):
@@ -103,15 +146,15 @@ class LoginSecurityTests(unittest.TestCase):
         with patch('bridge.features.auth.auth.time.time', return_value=3000 + 13 * 3600):
             self.assertIsNone(self.auth.get(expired, client, 'BridgeMobile/0.1-iOS'))
 
-    def test_remember_cookie_lasts_seven_days_and_unchecked_is_session_cookie(self):
+    def test_remember_cookie_persists_and_unchecked_is_session_cookie(self):
         with patch('bridge.features.auth.auth.time.time', return_value=1000):
             token, row = self.auth.login('tester', 'correct-password', IP, remember=True)
-            self.assertEqual(row['expires'], 1000+7*86400)
-            self.assertEqual(self.auth.cookie_age(token), 7*86400)
+            self.assertEqual(row['expires'], 0)
+            self.assertEqual(self.auth.cookie_age(token), 400*86400)
             temporary, _ = self.auth.login('tester', 'correct-password', IP, remember=False)
             self.assertIsNone(self.auth.cookie_age(temporary))
         with patch('bridge.features.auth.auth.time.time', return_value=1000+7*86400):
-            self.assertIsNone(Auth(CONFIG, self.directory).get(token))
+            self.assertIsNotNone(Auth(CONFIG, self.directory).get(token))
         self.assertNotIn('correct-password', (self.directory/'auth-sessions.json').read_text())
         with self.assertRaises(ValueError):
             self.auth.login('tester', 'correct-password', IP, remember='yes')
@@ -240,7 +283,7 @@ class LoginHttpTests(unittest.TestCase):
             self.assertTrue(auth['authenticated'])
             self.assertEqual('Max-Age=' in refreshed['Set-Cookie'], remember)
             if remember:
-                self.assertIn('Max-Age=604800', headers['Set-Cookie'])
+                self.assertIn('Max-Age=34560000', headers['Set-Cookie'])
 
     def test_legacy_cookie_migrates_only_if_owned_by_this_gateway(self):
         token, _ = self.server.auth.new_session('127.0.0.1')
@@ -292,16 +335,17 @@ class LoginHttpTests(unittest.TestCase):
         self.server.auth.manage({'action': 'revoke', 'id': row['id']})
         self.assertFalse(self.request('/api/auth', headers={**headers, 'Cookie': cookie})[2]['authenticated'])
 
-    def test_remembered_http_cookie_and_server_deadline_renew_together(self):
+    def test_remembered_http_cookie_refreshes_without_server_expiry(self):
         start = time.time()
         _, response, _ = self.request('/api/login', {'username': 'tester', 'password': 'correct-password', 'remember': True})
         cookie = response['Set-Cookie'].split(';')[0]
-        with patch('bridge.features.auth.auth.time.time', return_value=start + 6 * 86400):
+        with patch('bridge.features.auth.auth.time.time', return_value=start + 365 * 86400):
             _, response, value = self.request('/api/auth', headers={'Cookie': cookie})
             self.assertTrue(value['authenticated'])
-            self.assertIn('Max-Age=604800', response['Set-Cookie'])
-        with patch('bridge.features.auth.auth.time.time', return_value=start + 8 * 86400):
+            self.assertIn('Max-Age=34560000', response['Set-Cookie'])
+        with patch('bridge.features.auth.auth.time.time', return_value=start + 366 * 86400):
             self.assertTrue(self.request('/api/auth', headers={'Cookie': cookie})[2]['authenticated'])
+        self.assertEqual(self.server.auth.manage({})['sessions'][0]['expires'], 0)
 
     def test_forwarded_ip_is_counted_but_direct_header_spoof_is_ignored(self):
         headers = {'Host': 'entry.example', 'Origin': 'https://entry.example', 'X-Forwarded-For': '192.0.2.99, '+IP}

@@ -142,7 +142,7 @@ View remaining percentages, reset times and available usage resets. In v2.0.0, r
 
 ### Login validity and device access
 
-- Web sign-in defaults to **Remember me (7 days)**. It keeps a login cookie, not the plaintext password, and renews during authenticated use; inactivity beyond the expiry requires sign-in. Uncheck it to use the normal validity with a browser-session cookie.
+- Web sign-in defaults to **Remember me (no automatic expiry)**. It keeps a login cookie, not the plaintext password, and stays signed in after closing and reopening the same address, even after more than seven inactive days. Uncheck it to use the normal validity with a browser-session cookie. Logout, account or password changes, device revocation and clearing browser data require signing in again. Browsers may limit cookie retention; authenticated use refreshes the cookie. Localhost and LAN IP addresses keep separate login cookies.
 - Five consecutive password failures automatically block the source IP. The page shows remaining attempts; counts and blocks survive restarts. Successful authentication resets the count. Unblock and reset attempts only under **Login and devices → Automatically blocked IPs** in the desktop app.
 - **Notifications → Login security notifications** is enabled by default and uses enabled PushPlus, Bark and ntfy channels. Disabling alerts does not disable blocking.
 - Set standard login validity under **Login and devices → Login validity (hours)** to an integer from 0 to 87600, then restart the gateway. The default is 12 hours; 0 sets no server expiry. A finite deadline starts at login and does not slide with activity.
