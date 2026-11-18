@@ -295,6 +295,14 @@ class AppHosts:
         """Read desktop sidebar preferences without changing the desktop's state."""
         state = self.state()
         atoms = state.get('electron-persisted-atom-state', {})
+        owner = state.get('electron-renderer-content-owner')
+        if isinstance(owner, str) and owner:
+            # New desktops migrate these atoms into the selected content owner.
+            # Missing/empty owner data must not revive another account's legacy
+            # preferences; never enumerate other owner buckets as a fallback.
+            atoms = state.get('electron-owner-atoms:' + owner, {})
+        if not isinstance(atoms, dict):
+            atoms = {}
         scopes = atoms.get('sidebar-custom-sections-v3', {})
         # Sections belong to an account. Never combine different accounts.
         try:

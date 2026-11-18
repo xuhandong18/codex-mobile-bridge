@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -30,6 +31,61 @@ class SidebarSyncTests(unittest.TestCase):
             'b': {'sections': [{'id': 'b', 'name': 'Private B'}]}}}})
         self.assertEqual(hosts.sidebar()['sections'], [])
         self.assertFalse(hosts.sidebar()['sectionsAvailable'])
+
+    def test_owner_scoped_sections_keep_membership_order_and_collapse(self):
+        state = {'electron-renderer-content-owner': 'active-owner',
+                 'electron-owner-atoms:active-owner': {
+                     'sidebar-custom-sections-v3': {'account': {
+                         'sections': [{'id': 'a', 'name': 'Alpha', 'itemKeys': ['codex:project:p'],
+                                       'hostSectionIds': {'local': 'native-a'}},
+                                      {'id': 'b', 'name': 'Beta', 'itemKeys': []}],
+                         'sectionOrder': ['custom:b', 'custom:a'], 'collapsedSectionIds': ['a']}},
+                     'sidebar-collapsed-sections-v1': {'threads': True}},
+                 'electron-owner-atoms:other-owner': {
+                     'sidebar-custom-sections-v3': {'account': {
+                         'sections': [{'id': 'private', 'name': 'Other account'}]}}}}
+        result = self.hosts(state).sidebar()
+        self.assertTrue(result['sectionsAvailable'])
+        self.assertEqual([s['id'] for s in result['sections']], ['b', 'a'])
+        self.assertEqual(result['sections'][1]['itemKeys'], ['codex:project:p'])
+        self.assertEqual(result['sections'][1]['hostSectionIds'], {'local': 'native-a'})
+        self.assertTrue(result['sections'][1]['collapsed'])
+        self.assertEqual(result['collapsedSections'], {'threads': True})
+        state['electron-owner-atoms:active-owner']['sidebar-custom-sections-v3']['account']['sections'][0]['name'] = 'Renamed'
+        self.assertEqual(self.hosts(state).sidebar()['sections'][1]['name'], 'Renamed')
+
+    def test_selected_owner_never_falls_back_to_legacy_or_other_owner(self):
+        stale = {'sidebar-custom-sections-v3': {
+            'account': {'sections': [{'id': 'private', 'name': 'Stale account'}]}}}
+        for current in (None, {}, [], 'invalid'):
+            with self.subTest(current=current):
+                state = {'electron-renderer-content-owner': 'active-owner',
+                         'electron-persisted-atom-state': stale,
+                         'electron-owner-atoms:other-owner': stale}
+                if current is not None:
+                    state['electron-owner-atoms:active-owner'] = current
+                result = self.hosts(state).sidebar()
+                self.assertEqual(result['sections'], [])
+                self.assertFalse(result['sectionsAvailable'])
+
+    def test_owner_buckets_without_selected_owner_are_not_guessed(self):
+        result = self.hosts({'electron-owner-atoms:other-owner': {
+            'sidebar-custom-sections-v3': {'account': {
+                'sections': [{'id': 'private', 'name': 'Other account'}]}}}}).sidebar()
+        self.assertEqual(result['sections'], [])
+        self.assertFalse(result['sectionsAvailable'])
+
+    def test_owner_scoped_sections_still_require_current_account(self):
+        scopes = {account: {'sections': [{'id': account, 'name': account}]}
+                  for account in ('active', 'other')}
+        hosts = self.hosts({'electron-renderer-content-owner': 'owner',
+                            'electron-owner-atoms:owner': {'sidebar-custom-sections-v3': scopes}})
+        for account in ('active', 'unmatched'):
+            with self.subTest(account=account):
+                with patch.object(Path, 'read_text', return_value=json.dumps({'tokens': {'account_id': account}})):
+                    result = hosts.sidebar()
+                    self.assertEqual([s['id'] for s in result['sections']], ['active'] if account == 'active' else [])
+                    self.assertEqual(result['sectionsAvailable'], account == 'active')
 
     def test_native_project_membership_wins_over_cwd_and_legacy_assignment(self):
         hosts = self.hosts({'local-projects': {
